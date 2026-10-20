@@ -59,6 +59,9 @@ class StartRun(BaseModel):
     coordinator: str | None = None  # a machine from the Machines list to coordinate the run (it must be one of the machines invited and answer); "" (the default): this computer
     reviewed_only: bool = False  # train only on the examples marked Good (the validation text is cut from those too); 400 when the sets hold none
     overlap: bool = False  # every member (this one and the invited) overlaps its communication with its compute: it trains on while the exchange runs
+    teacher: str | None = Field(None, max_length=200)  # an Ollama model that polishes the weights and judges the win-rate; needed by polish_every and target_win_rate
+    polish_every: int | None = Field(None, ge=0, le=100_000)  # rounds between teacher polishes (below rounds); None or 0: no polish
+    target_win_rate: float | None = Field(None, gt=0, le=1)  # stop once the best weights win this share of the teacher's head-to-head against the starting weights
 
 
 class Sample(BaseModel):
@@ -279,6 +282,20 @@ def defaults() -> Defaults:
                     outer_momentum=DEFAULTS.outer_momentum, delta_dtype=DEFAULTS.delta_dtype)
 
 
+class ChatSet(BaseModel):
+    """One set that holds conversations, which a run's teacher may take its prompts from."""
+
+    id: str
+    name: str
+    count: int
+
+
+@router.get("/chat_sets")
+def chat_sets(services: Services) -> list[ChatSet]:
+    """The sets that hold conversations: the form's prompt sources for a run with a teacher (they are never trained on)."""
+    return [ChatSet.model_validate(row) for row in services.conversation_sets()]
+
+
 def _jobs(services):
     runner = getattr(services, "runner", None)
     if runner is not None:
@@ -432,6 +449,36 @@ def _answering(peers, own):
     return joining, left_out
 
 
+def _teaches(body):
+    """Whether the start asks for a teacher polish or a win-rate target."""
+    return bool(body.polish_every) or body.target_win_rate is not None
+
+
+def _teacher_options(body, services, dataset_ids):
+    """(Settings fields, job params) for the teacher options of a start: nothing when none is set. 400 with a sentence when a teacher is
+    named without a use for it, or a polish or win-rate target is set without a teacher or without conversations in the chosen sets (the
+    coordinator takes its prompts from them, so the run would end at its start). The job then carries the conversations with the text."""
+    teacher = (body.teacher or "").strip()
+    if not _teaches(body):
+        if teacher:
+            raise HTTPException(400, "A teacher does nothing on its own: set how often it polishes, a win-rate target, or both, or leave the teacher out.")
+        return {}, {}
+    if not teacher:
+        raise HTTPException(400, "Teacher polish and the win-rate target need a teacher: choose one of the models Ollama has.")
+    polish, versus = bool(body.polish_every), body.target_win_rate is not None
+    need = studio_diloco.prompts_needed(polish, versus)
+    if not services.has_conversations(dataset_ids, body.reviewed_only, need):
+        have = "none of them is marked Good" if body.reviewed_only else "it holds none"
+        if services.has_conversations(dataset_ids, body.reviewed_only):
+            why = (f"The win-rate target compares on at least {studio_diloco.MIN_EVAL_PROMPTS} held-out prompts" +
+                   (f", and polishing needs {studio_diloco.MIN_EVAL_PROMPTS} more of its own" if polish else "")) if versus else "Polishing needs a prompt"
+            raise HTTPException(400, f"{why}, so the chosen data needs at least {need} different questions asked in its conversations (a question asked twice "
+                                     "counts once). Add conversations, or turn the teacher off" + ("" if not (polish and versus) else ", or use only one of the two") + ".")
+        raise HTTPException(400, f"The teacher answers conversations from the chosen data, and {have}. Choose data with conversations in it, or leave the teacher out.")
+    fields = {"teacher": teacher, "polish_every": body.polish_every or 0, **({"target_win_rate": body.target_win_rate} if body.target_win_rate is not None else {})}
+    return fields, {**fields, "conversations": True}
+
+
 def _check_coordinator(address, chosen, peers, own):
     """The machine chosen to coordinate a run must be one the run invites that answers on this app version; anything else is a 400 (not
     chosen) or 409 (not usable) with the reason, so a run never starts on a coordinator it cannot hand the run to. "" is this computer."""
@@ -463,14 +510,16 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     if version is None:
         raise HTTPException(409, "Save a design in the Network designer first.")
     known = {s["id"] for s in plan.sets_of(services.data("text"))}
-    unknown = [d for d in dataset_ids if d not in known]
-    if unknown or not dataset_ids:
+    chats = {s["id"] for s in services.conversation_sets()} if _teaches(body) else set()  # only the teacher's prompts come from these
+    unknown = [d for d in dataset_ids if d not in known and d not in chats]
+    if unknown or not dataset_ids or not any(d in known for d in dataset_ids):
         raise HTTPException(400, f"No text set {', '.join(unknown)}." if unknown else "Choose some text first.")
     if body.reviewed_only and not services.has_reviewed_text(dataset_ids):
         raise HTTPException(400, "No example in the chosen text is marked Good (and free to train on), so there is nothing to train on. Review some first, or turn off reviewed examples only.")
     shape = {k: getattr(body, k) for k in ("min_members", "max_members") if getattr(body, k) is not None}
+    teaching, teaching_params = _teacher_options(body, services, dataset_ids)
     settings = studio_diloco.Settings(rounds=body.rounds, inner_steps=body.inner_steps, outer_lr=body.outer_lr,
-                                      outer_momentum=body.outer_momentum, **shape)  # ValueError -> 400
+                                      outer_momentum=body.outer_momentum, **shape, **teaching)  # ValueError -> 400
     own = studio_cluster.own_info(busy=services.queue().job is not None, version=app_version())
     listed = studio_cluster.configured_nodes({"studioConfig": {"nodes": services.setting("nodes", [])}})
     for address in body.machines:
@@ -479,6 +528,9 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     chosen = listed if body.all_machines else [a for a in listed if a in body.machines]
     peers = studio_cluster.survey({"studioConfig": {"nodes": chosen}}, own)[1:]
     _check_coordinator(body.coordinator, chosen, peers, own)
+    if teaching and body.coordinator:  # after the coordinator's own checks, so an offline or unknown one is told so
+        raise HTTPException(400, "The teacher runs only on the computer that starts the run, so another computer cannot coordinate a run with a teacher. "
+                                 "Leave the coordinator as this computer, or leave the teacher out.")
     left_out = []
     if body.all_machines:
         peers, left_out = _answering(peers, own)
@@ -493,7 +545,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
         "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
         "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")},
-        "delta_dtype": settings.delta_dtype, "settings": asdict(settings), **shape, **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": {"overlap": True}} if body.overlap else {}), "machines": machines, "owner": own.hostname,
+        "delta_dtype": settings.delta_dtype, "settings": asdict(settings), **shape, **teaching_params, **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": {"overlap": True}} if body.overlap else {}), "machines": machines, "owner": own.hostname,
         **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
         **({"left_out": left_out} if body.all_machines else {})})
     runs.open_run(job)

@@ -50,9 +50,11 @@ FORMAT = 1
 TERM_HEADER = "X-Run-Term"  # every answer on /collective/{run} carries the coordinator's term here and in its JSON body
 TERM_STALE = "Stale term"  # the start of the 409 message for a term that is not the coordinator's
 LONG_POLL = 30.  # seconds a GET /rounds/{r} may wait for a change
+RELOCATE_SECONDS = 12.  # about two failover polls (studio_remote.POLL_EVERY): the wait for the claim that says where a run went
 STATE_PREFIXES = ("theta::", "momentum::")
 DELTA_DTYPES = ("int8", "float16", "float32")
 GONE_RUN = "No distributed run"  # the start of the 404 detail of a run the coordinator's app does not hold (routers.collective.coordinator)
+FINISHED = "The run is finished."  # the 409 detail of a join to a run that has ended
 STATE_FILE = "diloco.json"  # the entry of a GET /state archive that holds diloco.json's bytes
 SCALE_SUFFIX = "::scale"  # an int8 array's float32 scale sits beside it in the archive under this suffix
 RUN_ID = r"^[A-Za-z0-9_.-]{1,64}$"
@@ -73,6 +75,7 @@ EVENTS_KEPT = 200  # the coordinator's event log is bounded
 TIMELINES_KEPT = 8  # rounds whose timeline stays in memory (every finished round's also goes to metrics.jsonl)
 SAMPLES_KEPT = 240  # progress samples kept per member for the open round
 EVAL_PROMPTS = 12  # prompts of the head-to-head against the starting weights (target_win_rate)
+MIN_EVAL_PROMPTS = 4  # fewest held-out prompts a win-rate stop may rest on: with 3 or fewer one prompt moves the rate by a third or more
 PROMPTS_PER_POLISH = 500  # the teacher is given this many training prompts per polish, a new window each time
 LESSON_ITEMS_SHOWN = 50  # how many of a lesson's answers lesson_list shows (the rest are counted)
 
@@ -510,11 +513,14 @@ class Coordinator:
 
     # -- building and resuming
     @classmethod
-    def build(cls, run, directory, config, examples, settings, clock=time.monotonic, shard_dir=None, later=(), start_from=None):
+    def build(cls, run, directory, config, examples, settings, clock=time.monotonic, shard_dir=None, later=(), start_from=None, conversations=None):
         """Tokenize `examples` once the way studio_model.train does, cut the windows, start theta from the config's seeded
         initialization, and continue from diloco.json if the folder has one. `later` are the example lists of the data sources
         the next_dataset pivot moves on to, in order: cut with the first source's tokenizer, never part of the validation. `start_from`, the
-        path of a checkpoint (best.npz or last.npz of an earlier run), is where theta starts when the folder holds no run yet (a restart)."""
+        path of a checkpoint (best.npz or last.npz of an earlier run), is where theta starts when the folder holds no run yet (a restart).
+        `conversations`, when given (a list, possibly empty), are the teacher's: the polish and the head-to-head take their prompts from them, split
+        by the run's seed into polish prompts and held-out ones, and they are never trained on, tokenized or part of the digest or the split. When
+        None the prompts come from the conversations among `examples` (the training split, the validation split)."""
         import studio_model as sm
         from studio_core import fingerprint
         from studio_planning import merge_duplicate_lineage
@@ -551,6 +557,13 @@ class Coordinator:
         model = sm.ScratchTransformer(cfg, tokenizer.vocab_size)
         theta = {name: value.astype(np.float32) for name, value in model.state_arrays().items()}
         state = cls._read_state(directory, cfg, settings, digest)
+        polish_prompts = eval_prompts = None
+        files = [name for name, on in (("prompts.jsonl", settings.polish_every), ("eval_prompts.jsonl", settings.target_win_rate is not None)) if on]
+        # A resume never splits again: it keeps the prompts it wrote (chats deleted or re-marked since must not stop it or change what it is
+        # compared on). A prompt file that went missing turns that option off for the rest of the run.
+        lost = [name for name in files if conversations is not None and state and not (directory / name).is_file()]
+        if conversations is not None and files and not state:
+            polish_prompts, eval_prompts = split_prompts(conversations, settings, cfg["seed"])
         if state:
             theta = state["theta"]
         elif start_from:
@@ -570,10 +583,20 @@ class Coordinator:
             if held.is_file():
                 saved = json.loads(held.read_text(encoding="utf-8"))
                 coordinator.paused, coordinator.rules = bool(saved.get("paused")), drules.State.from_json(saved.get("rules"))
-        if settings.polish_every:  # after _start_files, which clears a new run's prompts
-            coordinator._write_prompts(training)
-        if settings.target_win_rate is not None:
-            coordinator._write_eval_prompts(validation, training)
+        if "prompts.jsonl" in lost:
+            coordinator.polish_on = False
+            coordinator._event("polish_off", "", coordinator.next_round,
+                               "The teacher polish ends here: this run's polish prompts are gone from its folder, and splitting the chats again could "
+                               "overlap the prompts it is compared on, so the run goes on without it.")
+        elif settings.polish_every:  # after _start_files, which clears a new run's prompts
+            coordinator._write_prompts(training, polish_prompts)
+        if "eval_prompts.jsonl" in lost:
+            coordinator.versus_on = False
+            coordinator._event("win_rate_off", "", coordinator.next_round,
+                               "The win-rate stop rule ends here: this run's held-out prompts are gone from its folder, and splitting the chats again "
+                               "could overlap the polish prompts, so the run goes on without it.")
+        elif settings.target_win_rate is not None:
+            coordinator._write_eval_prompts(validation, training, eval_prompts)
             if start_from and not state:
                 shutil.copyfile(start_from, directory / "start.npz")  # a restart compares with the weights it started from
         if settings.polish_every or settings.target_win_rate is not None:
@@ -698,13 +721,14 @@ class Coordinator:
         self.shard_count += count
 
     # -- prompts and lessons (teacher polish)
-    def _write_prompts(self, training):
-        """prompts.jsonl: the conversations of the training split the teacher is asked to answer (never a validation one), once per run."""
+    def _write_prompts(self, training, prompts=None):
+        """prompts.jsonl: the prompts the teacher is asked to answer, once per run: `prompts` (the polish share of the teacher's own
+        conversations), else the conversations of the training split (never a validation one)."""
         path = self.directory / "prompts.jsonl"
         if path.is_file():
             return
         from studio_rlhf import prompts_from
-        prompts = prompts_from(training)
+        prompts = prompts_from(training) if prompts is None else prompts
         if not prompts:
             raise ValueError("polish_every is set, but the training text has no conversations for the teacher to answer: "
                              "use a chat dataset, or turn polish_every off.")
@@ -714,7 +738,7 @@ class Coordinator:
                 stream.write(json.dumps(prompt, ensure_ascii=False) + "\n")
         temporary.replace(path)
 
-    def _write_eval_prompts(self, validation, training):
+    def _write_eval_prompts(self, validation, training, held_out=None):
         """eval_prompts.jsonl: EVAL_PROMPTS conversations for the head-to-head against the starting weights, from the validation split
         (topped up from the END of the training split when it has fewer: the teacher's polish windows start at its front), once per run.
         Each line says where its prompt came from. The prompts the polish turned into lessons are left out when the comparison runs."""
@@ -722,9 +746,12 @@ class Coordinator:
         if path.is_file():
             return
         from studio_rlhf import prompts_from
-        prompts = [{**p, "from": "validation"} for p in prompts_from(validation)[:EVAL_PROMPTS]]
-        spare = EVAL_PROMPTS - len(prompts)
-        prompts += [{**p, "from": "training"} for p in (prompts_from(training)[::-1][:spare] if spare > 0 else [])]
+        if held_out is not None:  # the teacher's own conversations: none of these is a polish prompt or a training example
+            prompts = [{**p, "from": "held_out"} for p in held_out]
+        else:
+            prompts = [{**p, "from": "validation"} for p in prompts_from(validation)[:EVAL_PROMPTS]]
+            spare = EVAL_PROMPTS - len(prompts)
+            prompts += [{**p, "from": "training"} for p in (prompts_from(training)[::-1][:spare] if spare > 0 else [])]
         if not prompts:
             raise ValueError("target_win_rate is set, but the text has no conversations for the teacher to compare the weights on: "
                              "use a chat dataset, or leave target_win_rate unset.")
@@ -938,7 +965,7 @@ class Coordinator:
             self._touch(node)
             self._advance()
             if self.finished:
-                raise Stale("The run is finished.")
+                raise Stale(FINISHED)
             if node in self.banned:
                 raise Stale(f"{node} was stopped by the run's owner.")
             self.gone.pop(node, None)
@@ -1343,6 +1370,9 @@ class Coordinator:
         with self.cond:
             self._touch(node)
             self._advance()
+            if self.superseded:  # the route admitted the term before this coordinator stepped down and released its theta (below, an empty one fails the shape check as a 400)
+                raise StaleTerm(f"{TERM_STALE} {self.term if term is None else term}: the run is at term {self.superseded}, so this node no longer coordinates it.",
+                                self.superseded)
             current = self.current
             try:
                 self._admit(current, number, node, generation, epoch, term)
@@ -1710,7 +1740,8 @@ class Coordinator:
         """The held phase is now the head-to-head (lock held): the phase and the journal say so, with where the prompts came from."""
         self.judging = True
         sources = [p.get("from") for p in job["prompts"]]
-        said = f"{sources.count('validation')} from the validation split, {sources.count('training')} from the training split"
+        said = ", ".join(f"{sources.count(kind)} {label}" for kind, label in (("validation", "from the validation split"), ("training", "from the training split"),
+                                                                              ("held_out", "held-out conversations")) if kind in sources)
         logging.getLogger(__name__).info("head-to-head of round %d: %d prompts (%s)", job["round"], len(sources), said)
         self._event("judging", "", number, f"Round {number}: the teacher ({self.settings.teacher}) is comparing round {job['round']}'s weights with "
                                            f"the starting weights on {len(sources)} prompts ({said}). No round opens until it is done "
@@ -1960,6 +1991,46 @@ IDLE_RELEASE = 3600.  # seconds untouched after which a coordinator is forgotten
 _LOCK = threading.Lock()
 
 
+def prompt_key(prompt):
+    """What makes two prompts the same question."""
+    return json.dumps(prompt["messages"], sort_keys=True)
+
+
+def unique_prompts(conversations):
+    """The prompts the conversations make (those ending in an assistant turn), the same question counted once: what a teacher can be asked."""
+    from studio_rlhf import prompts_from
+    unique = {}
+    for prompt in prompts_from(conversations):
+        unique.setdefault(prompt_key(prompt), prompt)
+    return list(unique.values())
+
+
+def prompts_needed(polish, versus):
+    """How many different prompts the teacher's rules need: one to polish on; MIN_EVAL_PROMPTS held out for the win-rate stop, and with
+    both on that many again for the polish (the head-to-head never takes more than half)."""
+    return (2 * MIN_EVAL_PROMPTS if polish else MIN_EVAL_PROMPTS) if versus else 1
+
+
+def split_prompts(conversations, settings, seed):
+    """(polish prompts, head-to-head prompts) from the teacher's conversations: the different prompts they make, shuffled by the run's
+    seed, then dealt so the two never share one. With both rules on the head-to-head gets up to EVAL_PROMPTS of them but never more than
+    half; with one on, that rule gets them all (the head-to-head up to EVAL_PROMPTS). ValueError, in a sentence, when there are fewer
+    than the rules need (prompts_needed)."""
+    prompts = unique_prompts(conversations)
+    random.Random(seed).shuffle(prompts)
+    polish, versus = bool(settings.polish_every), settings.target_win_rate is not None
+    need = prompts_needed(polish, versus)
+    if len(prompts) < need:
+        what = (f"the win-rate target compares on at least {MIN_EVAL_PROMPTS} held-out prompts" + (f" and the polish needs {MIN_EVAL_PROMPTS} more" if polish else "")
+                if versus else "the polish needs a prompt")
+        raise ValueError(f"The chosen data makes {len(prompts)} different prompt{'' if len(prompts) == 1 else 's'}, but {what}: "
+                         f"add conversations (at least {need} different questions), or turn the teacher off.")
+    if polish and versus:
+        held = min(EVAL_PROMPTS, len(prompts) // 2)
+        return prompts[held:], prompts[:held]
+    return (prompts, []) if polish else ([], prompts[:EVAL_PROMPTS])
+
+
 def teacher_settings(settings, root=None):
     """The Ollama teacher a run polishes with: the workspace's RLHF settings (address, rubric, judge model) with the run's own teacher model."""
     from studio_rlhf import SETTINGS_DEFAULTS, load_settings
@@ -2038,6 +2109,7 @@ def prepare(job, services, directory, port, client_for=None):
         policy, examples = studio_stages.Policy.for_job(p, services)
     else:
         examples = p["examples"] if "examples" in p else services.examples(p)
+    conversations = services.conversations(p) if p.get("conversations") else None  # the teacher's prompts: kept apart from what the members train on
     if not examples and p.get("reviewed_only"):
         raise ValueError("Reviewed examples only is on, but no example in the chosen text is marked Good and free to train on.")
     try:
@@ -2049,7 +2121,7 @@ def prepare(job, services, directory, port, client_for=None):
                 except RuntimeError as exc:
                     raise ValueError(f"The run {'polishes' if settings.polish_every else 'judges'} with the teacher {settings.teacher}, but it cannot be used: {exc}") from None
         coordinator = Coordinator.build(job.id, directory, config, examples, settings, later=p.get("later_examples") or (),
-                                       start_from=p.get("restart_from"))
+                                       start_from=p.get("restart_from"), conversations=conversations)
     except ValueError as exc:
         if p.get("resuming"):
             raise ValueError(f"Ended: this machine restarted at round {p['resuming']['round']}, and the run could not be resumed: {exc}") from None
@@ -2084,6 +2156,7 @@ class Member:
         self.prefetch, self.prefetched, self.shard_locks, self.replica_lock = None, False, {}, threading.Lock()
         self.replica_epoch, self.replica_guard = 0, threading.Lock()  # a write to replica_dir is void once the epoch it began under is over
         self.clock, self.emit, self.wait, self.patience, self.sleep = clock, emit or (lambda event: None), wait, patience, sleep
+        self.relocate = RELOCATE_SECONDS  # how long a coordinator that no longer has the run is given to be replaced before the member leaves
         self.base = f"/collective/{run}"
         self.train, self.val, self.sampler = Windows(), Windows(), random.Random(0)
         self.started, self.finished, self.fenced = False, False, False
@@ -2315,7 +2388,10 @@ class Member:
             except PeerError as exc:
                 self._refused(exc)
                 if exc.status == 404 and exc.detail.startswith(GONE_RUN):
-                    found = self._relocated()  # a coordinator that stepped down is gone from its node, and the run is coordinated elsewhere now
+                    # a coordinator that stepped down is gone from its node, and the run is coordinated elsewhere now; the claim that says where
+                    # may still be on its way to this node's store, so it is waited for, but only a moment (`relocate`, a failover poll or two, and
+                    # never past this call's own deadline): a coordinator whose app restarted never names a successor
+                    found = self._relocated_within(min(end, self.clock() + self.relocate)) if self.locate is not None else None
                     if found is not None:
                         raise Rebound(found) from None
                     raise PeerError(f"The coordinator no longer has run {self.run} (its app restarted), so this member left. "
@@ -2342,10 +2418,10 @@ class Member:
             return None
         return found
 
-    def _relocated_within(self):
-        """Like _relocated, but waits up to `patience` for the claim of the coordinator in charge to reach this node's store: a member told
-        of a higher term has seen it before the claim that carries it."""
-        end = self.clock() + self.patience
+    def _relocated_within(self, end):
+        """Like _relocated, but waits until `end` (a time on this member's clock) for the claim of the coordinator in charge to reach this
+        node's store: a member told of a higher term has seen it before the claim that carries it. A claim that names the coordinator
+        this member already talks to (the same node and term) is no move, so a member left behind by a restart waits out `end` and goes."""
         while True:
             found = self._relocated()
             if found is not None or self.clock() >= end or self.stop.is_set():
@@ -2372,7 +2448,14 @@ class Member:
         self.fenced = self.finished = self.started = self.moved = False
         self.entered = self.anchor = None
         self.ended.clear()
-        self.join()
+        from studio_peer import PeerError
+        try:
+            self.join()
+        except PeerError as exc:
+            if exc.status != 409 or FINISHED not in exc.detail:
+                raise
+            self.finished = True  # the run ended on the coordinator in charge while this member was still leaving the old one: nothing is left to do
+            return
         self._enter(self.info["round"])
 
     def join(self):
@@ -2606,6 +2689,8 @@ class Member:
                 self.join()
             except Rebound as bound:  # the coordinator it was told to join is gone and another is in charge
                 self._bound(bound.found)
+            if self.finished:  # the coordinator in charge had already finished the run: there is nothing to train (and no round info to read)
+                return None
             if self.progress:
                 self.reporter = threading.Thread(target=self._report_loop, name=f"diloco-progress-{self.node}", daemon=True)
                 self.reporter.start()
@@ -2641,7 +2726,7 @@ class Member:
                     studio_model.train(cfg, [], directory if not attempt else Path(f"{directory}_{attempt}"), emit=watch,
                                        stop=Halt(self.stop, self.ended), pause=self.pause, distributed=self, telemetry_every=0, offload_optimizer=offload)
                     if (self.superseded or self.moved) and not self.finished and not self.stop.is_set():
-                        found = self._relocated_within()
+                        found = self._relocated_within(self.clock() + self.patience)
                 except Rebound as bound:
                     found = bound.found
                 if found is None:

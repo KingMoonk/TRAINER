@@ -477,9 +477,17 @@ class Services:
         """True when a run that trains on reviewed examples only would have text to train on in these sets."""
         raise NotImplementedError
 
+    def has_conversations(self, dataset_ids, reviewed_only=False, at_least=1):
+        """True when these sets hold `at_least` different prompts a run's teacher can answer (only conversations marked Good with `reviewed_only`)."""
+        raise NotImplementedError
+
     def text_sets(self):
         """[{id, name, count}] of the sets that hold plain text, the Pretraining page's tiles. Unlike data("text") it reads no rows."""
         return list(self.data("text").sets or [])
+
+    def conversation_sets(self):
+        """[{id, name, count}] of the sets that hold conversations: the places a cluster run's teacher can take its prompts from."""
+        return list(self.data("conversations").sets or [])
 
     def data_page(self, kind, query="", cursor=None, limit=200, review_only=False):
         """(rows, next cursor) of one page of the kind's rows whose text holds `query`, read from storage so every row can be
@@ -784,6 +792,7 @@ class FakeServices(Services):
         self.probe_path = None  # what viewer_probe_step returns
         self.heldout_docs: list = []  # the held-back text viewer_summarize reads
         self.reviewed_text = True  # whether the text sets hold an example marked Good
+        self.conversations_in_text = 40  # how many conversations a cluster run's teacher can answer are in the data
 
     def viewer_status(self):
         return {"available": True, "running": self._viewer_running, "connected": self._viewer_running}
@@ -848,6 +857,12 @@ class FakeServices(Services):
 
     def has_reviewed_text(self, dataset_ids):
         return self.reviewed_text
+
+    def has_conversations(self, dataset_ids, reviewed_only=False, at_least=1):
+        return self.conversations_in_text >= at_least
+
+    def conversations(self, params):
+        return [{"user": f"Question {n}?", "assistant": f"Answer {n}."} for n in range(int(self.conversations_in_text))]
 
     def versions(self):
         return list(self._versions)
@@ -2176,6 +2191,27 @@ class WorkspaceServices(Services):
         good_only = bool(params.get("reviewed_only"))  # after the split: the held-back text is the same for every run, reviewed or not
         return [e for e in rows if e["text"] not in held and (not good_only or e.get("quality") == "Good")]
 
+    def conversations(self, params):
+        """The conversations of params["datasets"] (default: every set) that can make a teacher's prompt: a run with a teacher takes its
+        polish and head-to-head prompts from them, and never trains on them. Drafts are left out, and with params["reviewed_only"] so is
+        everything not marked Good. A set may hold only conversations."""
+        return list(self._conversation_rows(params.get("datasets"), bool(params.get("reviewed_only"))))
+
+    def _conversation_rows(self, dataset_ids, good_only):
+        """The conversations of these sets a teacher can answer: not drafts, ending in an assistant turn (what studio_rlhf.prompts_from
+        keeps), and only the ones marked Good when `good_only`."""
+        import studio_data_kinds
+        from studio_core import messages_of
+        ids = dataset_ids or [d["id"] for d in self.workspace.state["datasets"]]
+        return (e for i in ids for e in self.workspace.iter_kind(i, "conversations")
+                if not studio_data_kinds.is_draft(e) and (not good_only or e.get("quality") == "Good")
+                and (messages_of(e) or [{}])[-1].get("role") == "assistant")
+
+    def has_conversations(self, dataset_ids, reviewed_only=False, at_least=1):
+        import studio_diloco
+        # Prompts, not rows: two chats that ask the same question make one prompt (the coordinator's split dedupes the same way).
+        return len(studio_diloco.unique_prompts(self._conversation_rows(list(dataset_ids), reviewed_only))) >= at_least
+
     def has_reviewed_text(self, dataset_ids):
         """True when a reviewed_only run on these sets has text to train on: the rows examples() would give it, so a Good example held
         back for scoring does not count."""
@@ -2934,14 +2970,35 @@ class WorkspaceServices(Services):
     def text_sets(self):
         """The text sets from the counts storage keeps exact (Workspace.kind_stats), not from the summary: answering needs no scan
         of the rows, so it takes milliseconds on a workspace of a million of them."""
+        return self._sets_holding("text")
+
+    CHAT_COUNT_CAP = 1000  # the count of a set's prompts stops here (the form shows "1000+"): reading a huge set to the end buys nothing
+
+    def conversation_sets(self):
+        """[{id, name, count}] of the sets with prompts a run's teacher can answer: count is the different prompts (what has_conversations
+        counts), at most CHAT_COUNT_CAP; a set with none is not listed."""
+        import studio_diloco
+        from studio_rlhf import prompts_from
+        out = []
+        for dataset in list(self.workspace.state["datasets"]):
+            keys = set()
+            for row in self._conversation_rows([dataset["id"]], False):
+                keys.update(studio_diloco.prompt_key(p) for p in prompts_from([row]))
+                if len(keys) >= self.CHAT_COUNT_CAP:
+                    break
+            if keys:
+                out.append({"id": dataset["id"], "name": dataset["name"], "count": len(keys)})
+        return out
+
+    def _sets_holding(self, kind):
         import studio_data_kinds as dk
         out = []
         for dataset in list(self.workspace.state["datasets"]):
             if dataset.get("storage") == "sqlite":
                 stats = self.workspace.kind_stats(dataset["id"])
-                count = stats.get("text", (0,))[0] if stats is not None else sum(dk.classify(e) == "text" for e in self.workspace.iter_examples(dataset["id"]))
+                count = stats.get(kind, (0,))[0] if stats is not None else sum(dk.classify(e) == kind for e in self.workspace.iter_examples(dataset["id"]))
             else:
-                count = sum(dk.classify(e) == "text" for e in self.workspace.iter_examples(dataset["id"]))
+                count = sum(dk.classify(e) == kind for e in self.workspace.iter_examples(dataset["id"]))
             if count:
                 out.append({"id": dataset["id"], "name": dataset["name"], "count": count})
         return out

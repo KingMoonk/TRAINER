@@ -9,7 +9,7 @@ import { member as build, round, run } from "./test-data";
 // the shared member, with the numbers these tests were written around
 const member = (over: Partial<Parameters<typeof build>[1]> = {}) => build("gpu-box", { rounds_done: 2, steps: 200, tokens_per_second: 1234.4, last_delta_bytes: 4_000_000, last_delta_dtype: "float16", ...over });
 
-const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], machines: [], minMachines: "", maxMachines: "", overlap: false, reviewedOnly: false, coordinator: "", ...over });
+const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], chats: [], machines: [], minMachines: "", maxMachines: "", overlap: false, reviewedOnly: false, coordinator: "", teacher: "", polishEvery: "", targetWinRate: "", ...over });
 
 describe("the form", () => {
   test("starts from the defaults, the newest design and the text sets that are on", () => {
@@ -23,6 +23,34 @@ describe("the form", () => {
     });
     expect(startBody(form({ version: "3" }))?.version).toBe(3);
   });
+
+  test("sends the teacher only with a use for it, the win-rate as a share", () => {
+    expect(startBody(form())).not.toHaveProperty("teacher"); // no teacher, nothing sent
+    expect(startBody(form({ teacher: "judge:1b", polishEvery: "3" }))).toMatchObject({ teacher: "judge:1b", polish_every: 3 });
+    expect(startBody(form({ teacher: "judge:1b", polishEvery: "3" }))).not.toHaveProperty("target_win_rate");
+    expect(startBody(form({ teacher: "judge:1b", targetWinRate: "60" }))).toMatchObject({ teacher: "judge:1b", target_win_rate: 0.6 });
+    expect(startBody(form({ teacher: "judge:1b", targetWinRate: "60" }))).not.toHaveProperty("polish_every");
+    expect(startBody(form({ teacher: "judge:1b", polishEvery: "9", targetWinRate: "100" }))).toMatchObject({ polish_every: 9, target_win_rate: 1 });
+  });
+
+  test("the ticked conversation sets go with the teacher only", () => {
+    expect(startBody(form({ chats: ["c"] }))?.dataset_ids).toEqual(["a"]);
+    expect(startBody(form({ chats: ["c", "a"], teacher: "t", polishEvery: "2" }))?.dataset_ids).toEqual(["a", "c"]);
+  });
+
+  test.each([
+    ["a teacher with neither a polish nor a target", { teacher: "t" }],
+    ["a teacher with a coordinator that is another computer", { teacher: "t", polishEvery: "2", machines: ["gpu-box"], coordinator: "gpu-box" }],
+    ["a polish with no teacher", { polishEvery: "2" }],
+    ["a win-rate target with no teacher", { targetWinRate: "50" }],
+    ["a polish every 0 rounds", { teacher: "t", polishEvery: "0" }],
+    ["a polish every part of a round", { teacher: "t", polishEvery: "1.5" }],
+    ["a polish as often as there are rounds", { teacher: "t", polishEvery: "10" }],
+    ["a win-rate of zero", { teacher: "t", targetWinRate: "0" }],
+    ["a win-rate under 1", { teacher: "t", targetWinRate: "0.5" }],
+    ["a win-rate above 100", { teacher: "t", targetWinRate: "101" }],
+    ["a win-rate that is a word", { teacher: "t", targetWinRate: "most" }],
+  ] as [string, Partial<Form>][])("is not complete with %s", (_, over) => expect(startBody(form(over))).toBeNull());
 
   test.each([
     ["no text ticked", { datasets: [] }],

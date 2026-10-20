@@ -198,13 +198,17 @@ class CompiledModel:
         return torch.as_tensor(np.asarray(ids), dtype=torch.long, device=self.device)
 
     @slow("run a model forward")
-    def forward(self, ids, training=False, tape=False, hooks=None, patches=None, attention_summary=None, trace=False, cache=None):
+    def forward(self, ids, training=False, tape=False, hooks=None, patches=None, attention_summary=None, trace=False, cache=None, last_only=False):
         """Logits [B, T, V]. tape=True also returns the Tape backward() needs.
 
         hooks: True, or a set of hook names ("block0.attn.pattern", "logits") to record on the tape.
         cache: {"n": 0} makes this a KV-cached pass (see can_cache): it appends to the cache and continues at index cache["n"].
         patches: {hook name: function(value) -> value} to intervene on a hook that feeds the computation.
+        last_only: unobserved inference returns [B, 1, V], projecting only the final hidden position. The transformer
+        still processes every input position, including all keys/values needed by a subsequent cached decode.
         """
+        if last_only and (training or tape or hooks or patches or attention_summary is not None or trace):
+            raise ValueError("Last-position logits require unobserved inference without training or a tape.")
         ids = self._ids(ids)
         if ids.shape[1] + (cache["n"] if cache else 0) > self.dims.n_ctx:
             raise ValueError("Sequence exceeds the context length.")
@@ -229,7 +233,7 @@ class CompiledModel:
                     layer.params[name] = value
                 weights = {full: layer.params[name] for full, (layer, name) in self._slots.items()}   # what a recompute puts back
                 with self._autocast():
-                    result = self._run(ids, ctx, trace, attention_summary is not None, weights)
+                    result = self._run(ids, ctx, trace, attention_summary is not None, weights, last_only)
         finally:
             for full, (layer, name) in self._slots.items():
                 layer.params[name] = self.p[full]
@@ -247,7 +251,7 @@ class CompiledModel:
         """True when every mixer and the position module support a KV cache; otherwise generation re-runs the whole window."""
         return all(block.mixer is None or block.mixer.cacheable for block in self.stack) and (self.position is None or self.position.cacheable)
 
-    def _run(self, ids, ctx, trace, summary, weights):
+    def _run(self, ids, ctx, trace, summary, weights, last_only=False):
         values, backward_values = {}, {}
         # Recomputing a block while backward runs is only sound when the pass has no side effects to repeat.
         recompute = self.checkpointing and ctx.training and not (trace or summary or ctx.capture is not None or ctx.patches or ctx.cache is not None)
@@ -326,6 +330,8 @@ class CompiledModel:
         if self.final is not None:
             x = run(self.final, x)
         x = ctx.emit("final", x)
+        if last_only:
+            x = x[:, -1:]
         logits = ctx.emit("logits", run(self.head, x))
         if logits.dtype in (torch.bfloat16, torch.float16):
             logits = logits.float()   # losses and softmax run in float32
