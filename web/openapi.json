@@ -1849,6 +1849,10 @@
             "title": "Inner Steps",
             "type": "integer"
           },
+          "max_steps": {
+            "title": "Max Steps",
+            "type": "integer"
+          },
           "outer_lr": {
             "title": "Outer Lr",
             "type": "number"
@@ -1872,7 +1876,8 @@
           "remote_inner_steps",
           "outer_lr",
           "outer_momentum",
-          "delta_dtype"
+          "delta_dtype",
+          "max_steps"
         ],
         "title": "Defaults",
         "type": "object"
