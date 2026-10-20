@@ -224,7 +224,7 @@ class Timing(unittest.TestCase):
 class Schedule(unittest.TestCase):
     def test_the_rate_follows_the_position_in_the_round_not_the_step_count(self):
         member = studio_diloco.Member.__new__(studio_diloco.Member)
-        member.info, member.round, member.first_step = {"inner_steps": 100}, 3, 40
+        member.info, member.round, member.first_step = {"inner_steps": 100, "rounds": 10}, 3, 40
         member.entered = studio_diloco.Entered(3, {}, 0, 0, 1., [], steps=200)
         self.assertEqual(member.rate_step(40), 300)
         self.assertEqual(member.rate_step(140), 350.)  # half way through its 200 steps: half way through the round's 100 positions

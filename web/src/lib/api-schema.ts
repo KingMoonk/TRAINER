@@ -1851,6 +1851,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/distributed/runs/{run_id}/extend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Extend Run
+         * @description Make a run going on longer: `rounds` is the new total (more than it has), `inner_steps` the new H for the rounds still to come
+         *     (the outer learning rate and momentum stay as they are). Every member takes the change from its next rounds without leaving, and
+         *     the learning rate carries on from where it is. 409 when the run is over or not going, 422 for numbers that change nothing or shorten
+         *     the run (Stop ends it sooner). A run another computer coordinates is extended by asking that computer.
+         */
+        post: operations["extend_run_distributed_runs__run_id__extend_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/distributed/runs/{run_id}/lessons": {
         parameters: {
             query?: never;
@@ -4506,6 +4529,16 @@ export interface components {
             /** Number */
             number: number;
         };
+        /**
+         * ExtendRun
+         * @description What the live run page sends to make a run longer. At least one of the two.
+         */
+        ExtendRun: {
+            /** Inner Steps */
+            inner_steps?: number | null;
+            /** Rounds */
+            rounds?: number | null;
+        };
         /** FieldsModel */
         FieldsModel: {
             /** Fields */
@@ -4877,6 +4910,10 @@ export interface components {
             inner_steps: number;
             /** Node */
             node: string;
+            /** Plan */
+            plan?: {
+                [key: string]: unknown;
+            }[] | null;
             /** Round */
             round: number;
             /** Rounds */
@@ -7048,6 +7085,10 @@ export interface components {
              * @default false
              */
             paused: boolean;
+            /** Plan */
+            plan?: {
+                [key: string]: unknown;
+            }[] | null;
             /**
              * Polishing
              * @default false
@@ -7062,6 +7103,8 @@ export interface components {
             replica: boolean;
             /** Round */
             round: number;
+            /** Rounds */
+            rounds?: number | null;
             /** Shards */
             shards?: number[] | null;
             /** State */
@@ -7294,7 +7337,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "joined" | "left" | "late" | "dropped" | "stale" | "outer_step" | "checkpoint" | "finished" | "pivot" | "paused" | "resumed" | "took_over" | "stepped_down" | "polish" | "polish_off" | "lessons" | "win_rate" | "win_rate_off" | "judging" | "lesson_dropped" | "lesson_kept";
+            kind: "joined" | "left" | "late" | "dropped" | "stale" | "outer_step" | "checkpoint" | "finished" | "pivot" | "paused" | "resumed" | "took_over" | "stepped_down" | "extended" | "polish" | "polish_off" | "lessons" | "win_rate" | "win_rate_off" | "judging" | "lesson_dropped" | "lesson_kept";
             /** Node */
             node: string;
             /** Round */
@@ -11610,6 +11653,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    extend_run_distributed_runs__run_id__extend_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtendRun"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

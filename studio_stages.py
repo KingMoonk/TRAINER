@@ -122,7 +122,7 @@ class Policy:
     # -- measuring
     def _losses(self, c, ids):
         """The loss of the coordinator's current weights on the held-out slice of each of `ids`."""
-        step = c.next_round * c.settings.inner_steps
+        step = c.steps_through(c.next_round)
         path = c.directory / "stage_probe.npz"
         c._write_npz(path, c._checkpoint_arrays(step))
         try:
