@@ -175,7 +175,9 @@ class PeerClient:
                 raise PeerError(f"{self.address} answered a range from {start}, not 0")
             job.total = total
             job.size.set()  # the other parts can begin now
-            sink.put(0, _read_exact(response, min(end + 1, total), job))
+            part = _read_exact(response, min(end + 1, total), job)
+            sink.put(0, part)
+            return len(part)
         try:
             self._call("GET", path, params, None, None, timeout, read, None, {"Range": f"bytes=0-{self.part - 1}"}, PART_RETRIES)
         finally:
@@ -190,7 +192,9 @@ class PeerClient:
             first, last, total = _content_range(response)
             if (first, last, total) != (start, end, job.total):
                 raise PeerError(f"{self.address} answered bytes {first}-{last}/{total} for {start}-{end}/{job.total}: the body changed")
-            sink.put(start, _read_exact(response, end - start + 1, job))
+            part = _read_exact(response, end - start + 1, job)
+            sink.put(start, part)
+            return len(part)
         self._send("GET", path, params, None, None, timeout, read, None, {"Range": f"bytes={start}-{end}"}, PART_RETRIES)
 
     def _post_parts(self, path, data, params, timeout):
@@ -276,7 +280,7 @@ class PeerClient:
                         raise PeerError(f"{self.address} answered {status} to {method} /{path.lstrip('/')} with a web page, not the API",
                                         status=status, detail=detail)
                     result = read(response) if read else _slurp(response, cancel)
-                seen.update(status=status, response=None if read else result, response_bytes=None if read else len(result))
+                seen.update(status=status, response=None if read else result, response_bytes=len(result) if not read else result if isinstance(result, int) else None)
                 note()
                 return result
             except urllib.error.HTTPError as exc:  # the peer answered: never retried
@@ -317,7 +321,7 @@ class _Memory:
 
     def whole(self, response, job):
         self.body = _slurp(response, job.check)
-        return self.body
+        return len(self.body)
 
     def result(self):
         return self.body if self.body is not None else b"".join(self.parts[offset] for offset in sorted(self.parts))
@@ -349,7 +353,7 @@ class _File:
             job.check()
             chunk = response.read(BLOCK)
             if not chunk:
-                return None
+                return offset
             self.put(offset, chunk)
             offset += len(chunk)
 
