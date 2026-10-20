@@ -1,5 +1,7 @@
 import copy
+import json
 import math
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -112,6 +114,52 @@ class PretrainingRouterTests(ApiCase):
         self.save_versions(tokenizer_changes=True)
         plan = self.plan(mode="catch_up")
         self.assertEqual((plan["mode"], plan["continue_blocked"]), ("from_scratch", "word_list_changed"))
+
+    def trained_run(self, version, run, diloco=None):
+        """Give `version` a best checkpoint in a temporary run folder holding `run` as its run.json (and `diloco` as diloco.json)."""
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(folder, ignore_errors=True))
+        (folder / "run.json").write_text(json.dumps(run))
+        if diloco:
+            (folder / "diloco.json").write_text(json.dumps(diloco))
+        version.best_checkpoint = str(folder / "best.npz")
+        return version
+
+    def test_the_plan_lists_each_trained_run_to_continue_from_with_what_it_did(self):
+        v1, v2 = self.save_versions()
+        self.trained_run(v1, {"status": "completed", "step": 1200, "steps": 1500, "createdAt": "2026-10-01T10:00:00",
+                              "finishedAt": "2026-10-01T11:30:00", "parameters": 812_000, "best_loss": 2.25, "loss": 2.5,
+                              "trained_tokens": 4_900_000, "device_name": "NVIDIA RTX 4090"})
+        bigger = default_spec()
+        bigger["dims"] = {**bigger["dims"], "d_model": bigger["dims"]["d_model"] * 2}
+        v3 = self.services.save_version(bigger, "third")
+        self.trained_run(v3, {"status": "stopped", "step": 40, "steps": 50, "duration_seconds": 0, "parameters": 2_000_000,
+                              "best_val_loss": 1.75, "best_loss": None, "loss": None},
+                         {"settings": {"rounds": 5, "inner_steps": 10}})
+        plan = self.plan(version=2)
+        self.assertEqual(([s["version"] for s in plan["sources"]], plan["continue_from"], plan["can_continue"]), ([3, 1], 1, True))
+        first = plan["sources"][1]
+        self.assertEqual({k: first[k] for k in ("status", "steps", "steps_planned", "seconds", "params", "best_val_loss", "train_loss",
+                                                 "tokens", "device", "rounds", "same_design", "parent")},
+                         {"status": "completed", "steps": 1200, "steps_planned": 1500, "seconds": 5400.0, "params": 812_000,
+                          "best_val_loss": 2.25, "train_loss": 2.5, "tokens": 4_900_000, "device": "NVIDIA RTX 4090", "rounds": None,
+                          "same_design": True, "parent": True})
+        third = plan["sources"][0]
+        self.assertEqual((third["seconds"], third["best_val_loss"], third["train_loss"], third["rounds"], third["inner_steps"],
+                          third["same_design"], third["parent"]), (None, 1.75, None, 5, 10, False, False))
+        self.assertEqual(plan["job"]["label"], "Version 2 catch-up")
+
+        chosen = self.plan(version=2, from_version=3)
+        self.assertEqual((chosen["continue_from"], chosen["job"]["label"], chosen["job"]["params"]["init_from"],
+                          chosen["job"]["params"]["previous_best"]),
+                         (3, "Version 2 catch-up from version 3", v3.best_checkpoint, v1.best_checkpoint))
+        self.call("POST", "/pretraining/plan", json={"dataset_ids": ["Your files"], "version": 2, "from_version": 2}, expect=400)
+
+    def test_a_run_with_no_run_file_is_still_listed(self):
+        v1, _ = self.save_versions()
+        v1.best_checkpoint = str(Path(tempfile.mkdtemp()) / "best.npz")
+        source = self.plan()["sources"][0]
+        self.assertEqual((source["version"], source["status"], source["steps"], source["best_val_loss"]), (1, "", None, None))
 
     def test_too_little_text_says_so_and_a_missing_choice_blocks_adding(self):
         self.save_versions()

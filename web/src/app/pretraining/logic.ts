@@ -27,6 +27,7 @@ export function planBody(c: {
   hours?: Hours;
   steps?: number | null; // a step count chosen from the suggestion, instead of the length
   stopWhenFlat?: StopWhenFlat;
+  fromVersion?: number | null; // the earlier version a catch-up starts from (one of the plan's sources); null: the server's default
 }) {
   return {
     version: c.version,
@@ -39,6 +40,7 @@ export function planBody(c: {
     hours: HOURS[c.hours ?? DEFAULT_HOURS],
     steps: c.steps ?? null,
     plateau: STOP_WHEN_FLAT[c.stopWhenFlat ?? "Auto"],
+    from_version: c.fromVersion ?? null,
   };
 }
 
