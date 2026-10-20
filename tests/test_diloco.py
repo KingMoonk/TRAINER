@@ -475,13 +475,36 @@ class LiveView(Directory):
         self.assertFalse(answers[1])  # nothing taken; the next report says it all again
 
 
+class Slice:
+    """Windows low..high-1 of a store: what a member holds of one shard."""
+
+    def __init__(self, windows, low, high):
+        self.windows, self.low, self.high = windows, low, high
+
+    def __len__(self):
+        return self.high - self.low
+
+    def __getitem__(self, index):
+        return self.windows[self.low + index]
+
+    def describe(self):
+        return self.windows.describe()
+
+    @property
+    def nbytes(self):
+        return 0
+
+
 class Hooked:
     """studio_model.train's `distributed=` hook with no network: the member's data, per-round sampler and schedule, and the weights
     never replaced. What DiLoCo with one member, outer lr 1 and no momentum must equal."""
 
-    def __init__(self, coordinator, inner, rounds):
-        self.tokenizer, self.train, self.val, self.sampler = coordinator.tokenizer, coordinator.train, Windows(), random.Random()
+    def __init__(self, coordinator, inner, rounds, lag=0):
+        self.lag = lag  # an overlapped member trains a round on the shards of the round before (its assignment arrives after its steps)
+        self.tokenizer, self.train, self.val, self.sampler = coordinator.tokenizer, Windows(), Windows(), random.Random()
         self.seed, self.inner, self.total_steps = coordinator.cfg["seed"], inner, inner * rounds
+        self.coordinator, self.whole = coordinator, coordinator.train
+        self.pool(0)
 
     def rate_step(self, number):
         return number
@@ -492,6 +515,19 @@ class Hooked:
     def sync(self, step, trained_tokens, model):
         self.model = model
         self.sampler.seed(studio_diloco.sampler_seed(self.seed, 0, step // self.inner))
+        self.pool(step // self.inner)
+
+    def pool(self, number):
+        # the windows the member draws from: the shards it fetched, in its round's order, until they cover the round's draws
+        coordinator, need = self.coordinator, self.inner * support.CONFIG["batch_size"]
+        parts, have = [], 0
+        for shard in studio_diloco.round_order(self.seed, 0, max(0, number - self.lag), range(coordinator.shard_count)):
+            low, high = int(coordinator.bounds[shard]), int(coordinator.bounds[shard + 1])
+            parts.append(Slice(self.whole, low, high))
+            have += high - low
+            if have >= need:
+                break
+        self.train.set(parts)
 
 
 class Equivalence(Directory):

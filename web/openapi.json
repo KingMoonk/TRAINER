@@ -14319,6 +14319,77 @@
         ]
       }
     },
+    "/collective/{run}/shards/{shard}/hash": {
+      "get": {
+        "description": "The sha256 of one shard's .npz body, so a member that holds it from an earlier run skips the download.",
+        "operationId": "shard_hash_collective__run__shards__shard__hash_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "shard",
+            "required": true,
+            "schema": {
+              "title": "Shard",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "the run id: the pretrain_distributed job's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "description": "the run id: the pretrain_distributed job's id",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "title": "Run",
+              "type": "string"
+            }
+          },
+          {
+            "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+            "in": "query",
+            "name": "term",
+            "required": true,
+            "schema": {
+              "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+              "minimum": 0,
+              "title": "Term",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Shard Hash Collective  Run  Shards  Shard  Hash Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Shard Hash",
+        "tags": [
+          "collective"
+        ]
+      }
+    },
     "/collective/{run}/state": {
       "get": {
         "description": "A replica's copy of what goes with theta of the latest round: the outer momentum (fp32) and diloco.json, in one .npz.\n409 when `round` is not the latest, 404 before any round has closed.",
