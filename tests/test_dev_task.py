@@ -279,6 +279,31 @@ class SourceWatchTest(unittest.TestCase):
         self.assertEqual(step(False, True, False, False), "stop")  # uvicorn reloads itself, so an ended API is real
         self.assertEqual(step(True, True, True, False), "keep")
 
+    def test_a_run_this_computer_coordinates_defers_the_restart(self):
+        def probe(base):
+            self.assertEqual(base, f"http://127.0.0.1:{tasks.API_PORT}")
+            return "distributed run Version 3 is running (round 4)"
+
+        reason = tasks.busy_reason(probe, workers=lambda: False)
+        self.assertEqual(reason, "distributed run Version 3 is running (round 4)")
+        self.assertEqual(tasks.dev_step(True, True, True, True, bool(reason)), "defer")
+
+    def test_the_answers_of_the_api_decide_through_live_reason(self):
+        from studio_api import live
+        answers = {"/queue": {"job": None}, "/distributed/runs": [{"id": "run1", "label": "Run", "state": "running", "round": 2, "age_s": 0}]}
+        probe = lambda base: live.probe(base, get=lambda url: answers[url.removeprefix(base)])  # noqa: E731
+        self.assertEqual(tasks.busy_reason(probe, workers=lambda: False), "distributed run Run is running (round 2)")
+        answers["/distributed/runs"] = [{"id": "run1", "state": "running", "age_s": 30}]  # another node's run, replicated here
+        self.assertIsNone(tasks.busy_reason(probe, workers=lambda: False))
+
+    def test_a_worker_counts_when_the_api_does_not_answer_or_says_idle(self):
+        def down(base):
+            raise ConnectionRefusedError
+
+        self.assertEqual(tasks.busy_reason(down, workers=lambda: True), "a training job is running")
+        self.assertIsNone(tasks.busy_reason(down, workers=lambda: False))
+        self.assertEqual(tasks.busy_reason(lambda base: None, workers=lambda: True), "a training job is running")
+
 
 class NodeDeviceTest(unittest.TestCase):
     def test_it_waits_until_the_api_answers(self):

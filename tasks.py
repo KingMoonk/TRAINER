@@ -380,6 +380,18 @@ def training_busy(folder=None, alive=None, command_line=None):
     return False
 
 
+def busy_reason(probe=None, workers=training_busy):
+    """Why restarting the API now would end a run, or None: the question --reload asks (studio_api.live), put to the API on
+    127.0.0.1, so a run this computer coordinates counts as well as a queue job. A queue worker process alive counts even when the
+    API does not answer, or says idle while the worker is still winding down."""
+    from studio_api import live
+    try:
+        reason = (probe or live.probe)(f"http://127.0.0.1:{API_PORT}")
+    except (OSError, ValueError):
+        reason = None
+    return reason or ("a training job is running" if workers() else None)
+
+
 def dev_step(api_alive, web_alive, changed, watching, busy=False):
     """What the dev loop does next: "stop" (the web server ended, or the API did and nothing watches), "restart" (sources changed
     and the API is ours to restart), "defer" (they changed but a training job runs under the API: wait for it to end),
@@ -418,14 +430,15 @@ def dev():
         while True:
             pending = pending or bool(watcher and watcher.poll())
             api_up = procs[0].poll() is None
-            step = dev_step(api_up, procs[1].poll() is None, pending, watcher is not None, bool(pending and api_up and training_busy()))
+            busy = busy_reason() if pending and api_up else None
+            step = dev_step(api_up, procs[1].poll() is None, pending, watcher is not None, bool(busy))
             if step == "stop":
                 code = next(p.returncode for p in procs if p.returncode is not None) or 1  # one stopped by itself: say so
                 print(f"+ a dev process exited with {code}; stopping the other", flush=True)
                 break
             if step == "defer" and not deferred:
                 deferred = True
-                print("+ a .py file changed, but a training job is running: the API restarts when it ends (Ctrl+C stops everything)", flush=True)
+                print(f"+ a .py file changed, but {busy}: the API restarts when it ends (Ctrl+C stops everything)", flush=True)
             if step == "restart":
                 print("+ a .py file changed; restarting the API", flush=True)
                 stop(procs[0])

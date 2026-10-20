@@ -174,5 +174,46 @@ class MemberOfAVanishedCoordinator(unittest.TestCase):
             member._call(lambda: client.get_json("/x"))
 
 
+class MemberBehindServe(unittest.TestCase):
+    """The coordinator reached through `tailscale serve`: while its app restarts, serve answers 502 with an empty body."""
+
+    def member(self, *answers):
+        clock, calls = Clock(), []
+
+        def call():
+            calls.append(clock())
+            answer = answers[min(len(calls), len(answers)) - 1]
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        return studio_diloco.Member(object(), "run1", "b", 0, "shards", threading.Event(), clock=clock, patience=10., sleep=clock.advance), call, calls
+
+    def test_an_empty_502_is_waited_out_until_the_coordinator_is_back(self):
+        down = PeerError("box.ts.net answered 502 to GET /x: ", status=502, detail="")
+        member, call, calls = self.member(down, down, {"state": "open"})
+        self.assertEqual(member._call(call), {"state": "open"})
+        self.assertEqual(len(calls), 3)
+        self.assertFalse(member.stop.is_set())
+
+    def test_an_empty_502_for_longer_than_patience_leaves_like_a_silent_coordinator(self):
+        member, call, _ = self.member(PeerError("box.ts.net answered 503 to GET /x: ", status=503, detail=" "))
+        with self.assertRaisesRegex(PeerError, "coordinator of run run1 did not answer for 10 seconds"):
+            member._call(call)
+
+    def test_a_502_from_the_app_itself_still_fails_at_once(self):
+        detail = "Upstream shard store failed."
+        member, call, calls = self.member(PeerError(f"box.ts.net answered 502 to GET /x: {detail}", status=502, detail=detail), {"state": "open"})
+        with self.assertRaises(PeerError) as raised:
+            member._call(call)
+        self.assertEqual((raised.exception.status, raised.exception.detail, len(calls)), (502, detail, 1))
+
+    def test_an_empty_502_counts_as_unreached_and_other_answers_do_not(self):
+        self.assertTrue(sc.gateway_down(PeerError("", status=504, detail="")))
+        self.assertFalse(sc.gateway_down(PeerError("", status=502, detail="bad")))
+        self.assertFalse(sc.gateway_down(PeerError("", status=500, detail="")))
+        self.assertFalse(sc.gateway_down(PeerError("refused")))
+
+
 if __name__ == "__main__":
     unittest.main()
