@@ -95,7 +95,26 @@ class Verdict(unittest.TestCase):
     def test_not_helping_when_communication_eats_the_gain(self):
         found = health.summarize(rounds(3, {"a": 4., "b": 4.}, {"a": 9., "b": 9.}))  # 4 s of compute in 10 s: 800 tokens/s against 1000
         self.assertEqual(found["verdict"]["state"], health.NOT_HELPING)
-        self.assertIn("communication takes 60% of each round", found["verdict"]["text"])
+        self.assertEqual(found["verdict"]["text"], "Not helping: 0.80× a alone; moving the model between machines takes 60% of each "
+                                                   "round (6 s of 10 s). Raise H or speed up the link.")
+
+    def test_a_mostly_transfer_round_is_blamed_on_the_link_not_the_slower_machine(self):
+        # live run: BEAST computes ~19 s and waits ~35 s for the Mac, which computes ~25 s and waits nothing; ~1.7M tokens each per round.
+        # The Mac's 6 s of extra compute does not explain BEAST's 35 s wait; the ~27 s of transfer does.
+        rows = rounds(4, {"beast": 19., "mac": 25.}, {"beast": 17., "mac": 52.}, seconds=52.,
+                      tokens_per_s={"beast": 1.7e6 / 19., "mac": 1.7e6 / 25.})
+        found = health.summarize(rows)
+        self.assertEqual((found["verdict"]["state"], found["straggler"], found["wait_node"]), (health.NOT_HELPING, "mac", "beast"))
+        self.assertAlmostEqual(found["speedup"], 0.73, places=2)
+        self.assertEqual(found["verdict"]["text"], "Not helping: 0.73× beast alone; moving the model between machines takes 52% of each "
+                                                   "round (27 s of 52 s). Raise H or speed up the link.")
+        self.assertNotIn("waits", found["verdict"]["text"])
+
+    def test_the_straggler_is_still_blamed_when_its_extra_compute_explains_the_wait(self):
+        rows = rounds(4, {"beast": 5., "mac": 20.}, {"beast": 5., "mac": 20.}, seconds=21.,
+                      tokens_per_s={"beast": 1000., "mac": 1000.})
+        found = health.summarize(rows)  # beast's change is in 15 s before the Mac's, which is its 15 s of extra compute
+        self.assertEqual(found["verdict"]["text"], "Not helping: beast waits 71% of each round for mac.")
 
     def test_diverging_when_the_outer_loss_rises_three_rounds_running(self):
         found = health.summarize(rounds(5, {"a": 8., "b": 8.}, {"a": 9., "b": 9.}, losses=[2., 1.9, 2., 2.2, 2.6]))
