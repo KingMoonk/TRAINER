@@ -18,7 +18,7 @@ function server(initial: Run[]) {
     return { body: state.runs.find((r) => r.id === id) };
   };
   mockApi({
-    "GET /distributed/defaults": { body: { rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" } },
+    "GET /distributed/defaults": { body: { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" } },
     "GET /pretraining/text_sets": { body: [] },
     "GET /versions": { body: [] },
     "GET /cluster/nodes": { body: NODES },

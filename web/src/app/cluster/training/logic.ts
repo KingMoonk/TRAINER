@@ -64,6 +64,11 @@ export function initialForm(defaults: Defaults | undefined, sets: TextSet[] | un
   };
 }
 
+/** The steps per round the form starts from: the larger one when a machine other than this computer is chosen. */
+export function defaultInnerSteps(defaults: Defaults, machines: string[]): string {
+  return String(machines.length > 0 ? defaults.remote_inner_steps : defaults.inner_steps);
+}
+
 /** A whole number of at least one, or null. */
 function whole(text: string): number | null {
   const n = Number(text);

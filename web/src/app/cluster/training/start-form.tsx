@@ -19,7 +19,7 @@ import { JOIN } from "@/lib/copy/join";
 import { fill } from "@/lib/members";
 import { deviceText } from "../machines/logic";
 import { TRAINING as T } from "@/lib/copy/training";
-import { DELTA_DTYPES, deltaDtypeOf, initialForm, otherMachines, startBody, teacherProblem, toggled, type Defaults, type Form, type Run, type TextSet } from "./logic";
+import { DELTA_DTYPES, defaultInnerSteps, deltaDtypeOf, initialForm, otherMachines, startBody, teacherProblem, toggled, type Defaults, type Form, type Run, type TextSet } from "./logic";
 import { allReady, readiness, waitForAll } from "./readiness";
 import { Limits } from "./limits";
 import { Roster } from "./roster";
@@ -53,8 +53,9 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
     setFailure("");
     onStarted(run);
   }, setFailure);
+  const [stepsTyped, setStepsTyped] = useState(false); // once the person types H, choosing machines no longer changes it
   const set = (patch: Partial<Form>) => {
-    setForm((f) => ({ ...f, ...patch }));
+    setForm((f) => ({ ...f, ...patch, ...(patch.machines && !stepsTyped && !("innerSteps" in patch) ? { innerSteps: defaultInnerSteps(defaults, patch.machines) } : {}) }));
     setFailure("");
   };
   const body = startBody(form);
@@ -151,10 +152,13 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
         <p className="text-xs text-muted-foreground">{T.settingsLead}</p>
         <div className="flex flex-wrap gap-x-6 gap-y-3">
           <Setting id="training-rounds" label={T.rounds} help={T.roundsHelp} value={form.rounds} onChange={(rounds) => set({ rounds })} step="1" />
-          <Setting id="training-steps" label={T.innerSteps} help={T.innerStepsHelp} value={form.innerSteps} onChange={(innerSteps) => set({ innerSteps })} step="1" />
+          <Setting id="training-steps" label={T.innerSteps} help={T.innerStepsHelp} value={form.innerSteps} onChange={(innerSteps) => { setStepsTyped(true); set({ innerSteps }); }} step="1" />
           <Setting id="training-lr" label={T.outerLr} help={T.outerLrHelp} value={form.outerLr} onChange={(outerLr) => set({ outerLr })} step="0.1" />
           <Setting id="training-momentum" label={T.outerMomentum} help={T.outerMomentumHelp} value={form.outerMomentum} onChange={(outerMomentum) => set({ outerMomentum })} step="0.1" />
         </div>
+        {form.machines.length > 0 && form.innerSteps === String(defaults.remote_inner_steps) && (
+          <p className="max-w-prose text-xs text-muted-foreground">{fill(T.innerStepsWhy, { steps: form.innerSteps })}</p>
+        )}
         <label className="flex items-center gap-2 text-sm font-medium">
           <input type="checkbox" checked={form.overlap} onChange={(e) => set({ overlap: e.target.checked })} />
           <span>{T.overlap}</span>

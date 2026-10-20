@@ -1857,6 +1857,10 @@
             "title": "Outer Momentum",
             "type": "number"
           },
+          "remote_inner_steps": {
+            "title": "Remote Inner Steps",
+            "type": "integer"
+          },
           "rounds": {
             "title": "Rounds",
             "type": "integer"
@@ -1865,6 +1869,7 @@
         "required": [
           "rounds",
           "inner_steps",
+          "remote_inner_steps",
           "outer_lr",
           "outer_momentum",
           "delta_dtype"

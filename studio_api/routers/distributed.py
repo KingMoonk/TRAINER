@@ -37,6 +37,7 @@ DEFAULTS = studio_diloco.Settings()
 class Defaults(BaseModel):
     rounds: int
     inner_steps: int
+    remote_inner_steps: int  # the steps per round the form starts from when a member is on another machine
     outer_lr: float
     outer_momentum: float
     delta_dtype: str
@@ -296,7 +297,8 @@ class Run(BaseModel):
 @router.get("/defaults")
 def defaults() -> Defaults:
     """The DiLoCo settings the form starts from."""
-    return Defaults(rounds=DEFAULTS.rounds, inner_steps=DEFAULTS.inner_steps, outer_lr=DEFAULTS.outer_lr,
+    return Defaults(rounds=DEFAULTS.rounds, inner_steps=studio_diloco.default_inner_steps(False),
+                    remote_inner_steps=studio_diloco.default_inner_steps(True), outer_lr=DEFAULTS.outer_lr,
                     outer_momentum=DEFAULTS.outer_momentum, delta_dtype=DEFAULTS.delta_dtype)
 
 

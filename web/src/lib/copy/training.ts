@@ -30,6 +30,7 @@ export const TRAINING = {
   roundsHelp: "How many times the machines average what they learned.",
   innerSteps: "Steps per round",
   innerStepsHelp: "Steps each machine trains on its own between averages.",
+  innerStepsWhy: "H {steps}: moving the model is a fixed cost per round, so a longer round hides it.",
   outerLr: "Outer learning rate",
   outerLrHelp: "How far the averaged change moves the shared weights.",
   outerMomentum: "Outer momentum",

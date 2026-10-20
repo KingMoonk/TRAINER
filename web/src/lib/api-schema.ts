@@ -4255,6 +4255,8 @@ export interface components {
             outer_lr: number;
             /** Outer Momentum */
             outer_momentum: number;
+            /** Remote Inner Steps */
+            remote_inner_steps: number;
             /** Rounds */
             rounds: number;
         };
