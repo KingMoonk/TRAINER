@@ -28,7 +28,6 @@ export type CompareRun = {
   mode?: string | null;
   names?: string[];
   question?: string;
-  guess?: string;
   results?: RunResults;
   finished?: number | string | null;
 };
@@ -90,22 +89,9 @@ export function deltaCell(s: VariantStats | undefined): string {
   return `${s.delta >= 0 ? "+" : "-"}${Math.abs(s.delta).toFixed(3)} · ${note}`;
 }
 
-/** better | about the same | worse, or null when no verdict is possible (a difference counts only beyond the spread). */
-export function variantOutcome(row: VariantStats | undefined): string | null {
-  if (!row || row.delta == null || row.inside_spread == null) return null;
-  return row.inside_spread ? "about the same" : row.delta < 0 ? "better" : "worse";
-}
-
-/** What happened to the guessed variant next to the guess. */
-export function guessLine(guess: string, name: string, row: VariantStats | undefined): string {
-  const outcome = variantOutcome(row);
-  if (outcome === null) return `You guessed ${guess.toLowerCase()}. No verdict on ${name}: ${row ? "it needs at least two seeds to have a spread." : "it has no result yet."}`;
-  return `You guessed ${guess.toLowerCase()}; ${name} came out ${outcome}${outcome === "about the same" ? " (inside the spread)." : " (beyond the spread)."}`;
-}
-
 /** Why the runs cannot be queued yet, in words; "" when they can. */
-export function queueBlock(variants: number, guess: string): string {
-  return variants === 0 ? COMPARE.needVariant : guess === "" ? COMPARE.needGuess : "";
+export function queueBlock(variants: number): string {
+  return variants === 0 ? COMPARE.needVariant : "";
 }
 
 const million = (n: number) => `${(n / 1e6).toFixed(2)}M`;

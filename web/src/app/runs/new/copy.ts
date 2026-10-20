@@ -89,8 +89,6 @@ export const NEW_RUN = {
 
   quickDataset: "Tiny dataset",
   quickMinutes: "Time each",
-  quickGuess: "Your guess first",
-  quickGuessTip: "Will your idea's error end lower, about the same, or higher than the current design's? The result shows next to your guess.",
   quickNeedsDraft: "Needs a change staged in the Network designer.",
   quickDesigner: "Network designer",
 
@@ -107,7 +105,6 @@ export const NEW_RUN = {
   couldNotStart: "Could not start the run: {why}",
   pinFailed: "Added to the queue, but could not pin it to {node}: {why}",
   needText: "Tick at least one text set.",
-  needGuess: "Pick your guess first.",
   needWorker: "Pick at least one machine.",
   needSettings: "Fill in the outer loop settings: whole numbers for H and R, η_outer above 0, μ from 0 up to 1.",
 } as const;

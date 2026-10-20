@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { ApiError } from "./api-core";
-import { emit, mockApi } from "@/test/network";
+import { mockApi } from "@/test/network";
 import { BUILDER } from "./copy/builder";
 import {
   paramBars,
@@ -18,7 +18,6 @@ import {
   detailOf,
   type Draft,
   fitsText,
-  guessOf,
   hasField,
   isVersion,
   jobFor,
@@ -49,7 +48,6 @@ import {
 
 const choices = (over: Record<string, unknown> = {}) => ({ L: 2, H: 4, W: 64, V: 100, ...over }) as unknown as Choices;
 const ver = (number: number, over: Record<string, unknown> = {}) => ({ number, name: `version ${number}`, spec: {}, ...over }) as unknown as Version;
-const signal = () => new AbortController().signal;
 
 describe("detailOf", () => {
   test("is the server's detail sentence for an ApiError", () => {
@@ -126,18 +124,6 @@ describe("changeText", () => {
   test("says what the Tk page says when there are none", () => {
     expect(changeText([], null)).toBe("first design");
     expect(changeText([], 3)).toBe("no change");
-  });
-});
-
-describe("guessOf", () => {
-  test("keeps the picked questions and drops the unpicked", () => {
-    expect(guessOf({ error: "lower", step: "", memory: "same" })).toEqual({ error: "lower", memory: "same" });
-  });
-
-  test("skipping is the empty guess", () => {
-    expect(guessOf(undefined)).toEqual({});
-    expect(guessOf({})).toEqual({});
-    expect(guessOf({ error: "" })).toEqual({});
   });
 });
 
@@ -458,7 +444,6 @@ describe("design (the stateless /design calls)", () => {
     ["computeLines", () => design.computeLines(spec, 100, "cached" as never), "POST", "/design/compute-lines", { spec, v: 100, preview: "cached" }],
     ["expectations", () => design.expectations(cur, cur, spec, null), "POST", "/design/expectations", { cur, draft: cur, base: spec, draft_spec: null }],
     ["changes", () => design.changes(spec, { n_layer: 3 }, cur, cur), "POST", "/design/changes", { base: spec, draft_spec: { n_layer: 3 }, cur, draft: cur }],
-    ["questions", () => design.questions(spec, { n_layer: 3 }), "POST", "/design/questions", { old_spec: spec, new_spec: { n_layer: 3 } }],
     [
       "splitPlan",
       () => design.splitPlan(spec, cur, cur, cur, 4, ["text-a"]),
@@ -479,35 +464,6 @@ describe("design (the stateless /design calls)", () => {
     const error = await design.write(spec, cur, null).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ApiError);
     expect(detailOf(error)).toBe("Heads must divide the width.");
-  });
-
-  describe("guessCheck", () => {
-    const check = { verdict: "right" };
-    const job = (over: object = {}) => ({ id: "gc-1", kind: "guess", status: "done", created_at: 0, progress: "", error: "", ...over });
-
-    test("posts the two versions and returns the job's result", async () => {
-      const calls = mockApi({ "POST /design/guess-check": { body: job({ result: check }) } });
-      await expect(design.guessCheck(1, 2, signal())).resolves.toEqual(check);
-      expect(calls[0].body).toEqual({ old_version: 1, new_version: 2 });
-    });
-
-    test("a job with no result is null", async () => {
-      mockApi({ "POST /design/guess-check": { body: job({ result: null }) } });
-      await expect(design.guessCheck(1, 2, signal())).resolves.toBeNull();
-      mockApi({ "POST /design/guess-check": { body: job() } });
-      await expect(design.guessCheck(1, 2, signal())).resolves.toBeNull();
-    });
-
-    test("follows a running job to the result its /events message brings", async () => {
-      const calls = mockApi({
-        "POST /design/guess-check": { body: job({ status: "running" }) },
-        "GET /jobs/gc-1": { body: job({ status: "running" }) },
-      });
-      const waiting = design.guessCheck(1, 2, signal());
-      await vi.waitFor(() => expect(calls.some((c) => c.path === "/jobs/gc-1")).toBe(true));
-      emit("job", job({ result: check }));
-      await expect(waiting).resolves.toEqual(check);
-    });
   });
 });
 
@@ -541,17 +497,16 @@ describe("queueJobs, pretraining and versions", () => {
       expect(calls[0].body).toEqual({ spec: { n_layer: 2 }, change: "wider" });
     });
 
-    test("carries the guess when one was made", async () => {
+    test("carries the starting question when there was one", async () => {
       const calls = mockApi({ "POST /versions": { body: {} } });
-      await versions.save({}, "wider", { error: "lower" });
-      expect(calls[0].body).toEqual({ spec: {}, change: "wider", prediction: { error: "lower" } });
+      await versions.save({}, "wider", "Is width better?");
+      expect(calls[0].body).toEqual({ spec: {}, change: "wider", prediction: { question: "Is width better?" } });
     });
 
-    test("leaves the guess out when it was skipped or empty", async () => {
+    test("leaves the question out when there was none", async () => {
       const calls = mockApi({ "POST /versions": { body: {} } });
-      await versions.save({}, "x", {});
       await versions.save({}, "x", undefined);
-      expect(calls.map((c) => Object.keys(c.body as object))).toEqual([["spec", "change"], ["spec", "change"]]);
+      expect(calls.map((c) => Object.keys(c.body as object))).toEqual([["spec", "change"]]);
     });
   });
 

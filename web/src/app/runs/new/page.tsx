@@ -28,7 +28,6 @@ import { Coordinator, FIELD, Hint, OuterLoop, Workers, selectedText } from "./fi
 import { fill, NEW_RUN as T } from "./copy";
 import { busyPeers, ctaLabel, defaultSftVersion, localForced, nameList, peersOf, pinnedJob, runHref, shapeOf, workersOf, type Node, type Stage } from "./logic";
 
-type Guess = (typeof QUICKTEST.guesses)[number];
 
 const SLOW_MS = 6_000;
 const NO_NODES: Node[] = [];
@@ -99,7 +98,6 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
   const [mode, setMode] = useState<"catch_up" | "from_scratch">("from_scratch");
   const [dataset, setDataset] = useState<"stories" | "slice" | "problems">("stories");
   const [minutes, setMinutes] = useState<"1" | "3" | "10">("3");
-  const [guess, setGuess] = useState<Guess | "">("");
   const [failure, setFailure] = useState("");
   const [confirming, setConfirming] = useState(false);
   const rows = jobRows(useCluster().data, undefined);
@@ -146,7 +144,7 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
                 api.POST("/post-training/rounds", { body: { round: 1, version: sftVersion, lora: null, lora_rank: 8, teacher: "version", teacher_version: null, leash: "Medium" } }),
               )
             ).id
-          : (await unwrap(api.POST("/quicktest/run", { body: { dataset, minutes: Number(minutes) as 1 | 3 | 10, shrink: false, guess: guess as Guess } }))).job_id;
+          : (await unwrap(api.POST("/quicktest/run", { body: { dataset, minutes: Number(minutes) as 1 | 3 | 10, shrink: false } }))).job_id;
       if (pin) {
         try {
           await unwrap(api.POST("/queue/jobs/{job_id}/pin", { params: { path: { job_id: id } }, body: { pinned: pin } }));
@@ -185,7 +183,6 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
     if (several && !defaults.data) return defaults.isError ? T.settingsDown : T.loadingSettings;
     if (several) return startBody({ ...form, machines: peers }) ? "" : T.needSettings;
     if (stage === "pretrain") return plan.data && !plan.data.can_add ? plan.data.reason : plan.data?.job ? "" : T.loading;
-    if (stage === "ablation") return guess ? "" : T.needGuess;
     return sftVersion === null ? T.noVersions : "";
   })();
 
@@ -263,14 +260,6 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
         <fieldset className="flex flex-col gap-4">
           <Pick label={QUICKTEST.tinyDataset} value={dataset} onChange={(v) => setDataset(v as typeof dataset)} options={QUICKTEST.datasets} />
           <Pick label={QUICKTEST.timeEach} value={minutes} onChange={(v) => setMinutes(v as typeof minutes)} options={QUICKTEST.minutes} />
-          <div className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium"><Hint tip={T.quickGuessTip}>{T.quickGuess}</Hint></span>
-            <ToggleGroup type="single" variant="outline" value={guess} onValueChange={(v) => setGuess(v as Guess | "")} aria-label={T.quickGuess} className="justify-start">
-              {QUICKTEST.guesses.map((g) => (
-                <ToggleGroupItem key={g} value={g}>{g}</ToggleGroupItem>
-              ))}
-            </ToggleGroup>
-          </div>
           <p className="text-sm text-muted-foreground">
             {T.quickNeedsDraft} <Link href="/builder" className="text-highlight hover:underline">{T.quickDesigner}</Link>
           </p>

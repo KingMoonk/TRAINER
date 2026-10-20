@@ -6,12 +6,10 @@ import {
   curveSeries,
   deltaCell,
   finalCell,
-  guessLine,
   letter,
   matchingText,
   queueBlock,
   variantName,
-  variantOutcome,
   type CurvePoint,
   type VariantStats,
 } from "./logic";
@@ -113,37 +111,10 @@ describe("deltaCell", () => {
   });
 });
 
-describe("variantOutcome", () => {
-  it("is null without a row, a difference or a spread verdict", () => {
-    expect(variantOutcome(undefined)).toBeNull();
-    expect(variantOutcome(stats({ delta: null }))).toBeNull();
-    expect(variantOutcome(stats({ inside_spread: null }))).toBeNull();
-  });
-  it("calls a difference inside the spread about the same", () => expect(variantOutcome(stats({ delta: -1, inside_spread: true }))).toBe("about the same"));
-  it("calls lower error better and higher worse, once beyond the spread", () => {
-    expect(variantOutcome(stats({ delta: -0.2, inside_spread: false }))).toBe("better");
-    expect(variantOutcome(stats({ delta: 0.2, inside_spread: false }))).toBe("worse");
-    expect(variantOutcome(stats({ delta: 0, inside_spread: false }))).toBe("worse");
-  });
-});
-
-describe("guessLine", () => {
-  it("compares the guess with the outcome", () => {
-    expect(guessLine("Better", "Wide", stats({ delta: -0.2, inside_spread: false }))).toBe("You guessed better; Wide came out better (beyond the spread).");
-    expect(guessLine("Same", "Wide", stats({ delta: 0.01, inside_spread: true }))).toBe("You guessed same; Wide came out about the same (inside the spread).");
-  });
-  it("explains why there is no verdict", () => {
-    expect(guessLine("Worse", "Wide", stats({ inside_spread: null }))).toBe("You guessed worse. No verdict on Wide: it needs at least two seeds to have a spread.");
-    expect(guessLine("Worse", "Wide", undefined)).toBe("You guessed worse. No verdict on Wide: it has no result yet.");
-  });
-});
-
 describe("queueBlock", () => {
-  it("asks for a variant first, then a guess, else nothing", () => {
-    expect(queueBlock(0, "")).toBe(COMPARE.needVariant);
-    expect(queueBlock(0, "Better")).toBe(COMPARE.needVariant);
-    expect(queueBlock(2, "")).toBe(COMPARE.needGuess);
-    expect(queueBlock(2, "Better")).toBe("");
+  it("asks for a variant first, else nothing", () => {
+    expect(queueBlock(0)).toBe(COMPARE.needVariant);
+    expect(queueBlock(2)).toBe("");
   });
 });
 

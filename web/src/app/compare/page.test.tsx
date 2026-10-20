@@ -64,7 +64,6 @@ const RUN = {
   mode: "params",
   names: ["Base", "d_model 64 to 96"],
   question: "Does width help?",
-  guess: "Better",
   finished: 1700000000,
   results: {
     variants: [stats(0, 1.8, null, null, [1.78, 1.82, 1.8]), stats(1, 1.6, -0.2, false, [1.58, 1.62, 1.6])],
@@ -108,7 +107,7 @@ async function addVersionOne(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("Compare runs page", () => {
-  test("two runs of a comparison draw on one chart, with the table and the guess's outcome", async () => {
+  test("two runs of a comparison draw on one chart, with the table", async () => {
     base(() => [RUN]);
     renderPage(<ComparePage />);
     expect(await screen.findByRole("heading", { level: 1, name: "Compare runs" })).toBeVisible();
@@ -118,7 +117,6 @@ describe("Compare runs page", () => {
     expect(screen.getAllByText("B · d_model 64 to 96").length).toBeGreaterThan(0);
     expect(screen.getByRole("cell", { name: /1\.800 · spread 0\.040/ })).toBeVisible();
     expect(screen.getByRole("cell", { name: "-0.200 · beyond the spread" })).toBeVisible();
-    expect(screen.getByText("You guessed better; B came out better (beyond the spread).")).toBeVisible();
     expect(screen.getAllByText("Does width help?").length).toBeGreaterThan(0);
   });
 
@@ -148,7 +146,7 @@ describe("Compare runs page", () => {
     expect(await screen.findByText(/No comparison has finished yet\./)).toBeVisible();
   });
 
-  test("a comparison is planned, needs a guess, and queues with the chosen seeds and mode", async () => {
+  test("a comparison is planned and queues with the chosen seeds and mode", async () => {
     const calls = base(() => [], {
       "POST /benchmark/compare-plan": ({ body }) => {
         const { seeds, retune_lr } = body as { seeds: number; retune_lr: boolean };
@@ -177,10 +175,7 @@ describe("Compare runs page", () => {
     expect(await screen.findByText("dims.d_model: 64 → 96")).toBeVisible();
     expect(screen.getByText("width re-solved · 0.10M · within 1.0%")).toBeVisible();
     await waitFor(() => expect(queue()).toHaveTextContent("Queue 6 runs + 3 short sweeps"));
-    expect(queue()).toBeDisabled(); // no guess yet
-    expect(screen.getByText("Pick your guess first.")).toBeVisible();
 
-    await user.click(screen.getByRole("radio", { name: "Better" }));
     await user.click(screen.getByRole("radio", { name: "Compute" }));
     await user.click(screen.getByRole("radio", { name: "5" }));
     await user.type(screen.getByLabelText("Question"), "Does width help?");
@@ -188,7 +183,7 @@ describe("Compare runs page", () => {
     await user.click(queue());
     expect(await screen.findByText("Queued: Compare runs: 6 runs + 3 short sweeps. Starts now.", { selector: "p[role=status]" })).toBeVisible();
     expect(bodies(calls, "/benchmark/compare-queue")).toEqual([
-      { base: null, variants: [1], mode: "compute", seeds: 5, retune_lr: true, question: "Does width help?", guess: "Better" },
+      { base: null, variants: [1], mode: "compute", seeds: 5, retune_lr: true, question: "Does width help?" },
     ]);
     expect(bodies(calls, "/benchmark/compare-plan").at(-1)).toMatchObject({ mode: "compute", seeds: 5, variants: [1] });
   });
@@ -204,7 +199,6 @@ describe("Compare runs page", () => {
     const user = userEvent.setup();
     renderPage(<ComparePage />);
     await addVersionOne(user);
-    await user.click(screen.getByRole("radio", { name: "Better" }));
     await user.click(await screen.findByRole("button", { name: /^Queue 2 runs/ }));
     // The page listens for the queued job's events once the queue call has answered.
     await screen.findByText(/^Queued: /, { selector: "p[role=status]" });
@@ -213,10 +207,10 @@ describe("Compare runs page", () => {
     await waitFor(() => expect(lines()).toBe(2));
     expect(screen.getAllByText("A · Base").length).toBeGreaterThan(0);
 
-    // The run ends: the finished comparison is read again and carries its own guess.
+    // The run ends: the finished comparison is read again and replaces the streaming curves.
     finished = true;
     emit("train", { job: "q1", type: "compare_done" });
-    expect(await screen.findByText("You guessed better; B came out better (beyond the spread).")).toBeVisible();
+    expect(await screen.findByRole("cell", { name: "-0.200 · beyond the spread" })).toBeVisible();
   });
 
   test("a queue refusal is shown in the page", async () => {
@@ -227,7 +221,6 @@ describe("Compare runs page", () => {
     const user = userEvent.setup();
     renderPage(<ComparePage />);
     await addVersionOne(user);
-    await user.click(screen.getByRole("radio", { name: "Better" }));
     await user.click(await screen.findByRole("button", { name: /^Queue 2 runs/ }));
     expect(await screen.findByText(/Your data has no plain text yet\./, { selector: "p[role=status]" })).toBeVisible();
   });
