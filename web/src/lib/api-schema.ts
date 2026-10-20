@@ -146,6 +146,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/busy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Busy
+         * @description Everything busy now, oldest first. Empty when idle.
+         */
+        get: operations["busy_busy_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chat/corrections": {
         parameters: {
             query?: never;
@@ -3568,6 +3588,31 @@ export interface components {
             name: string;
             /** Weights */
             weights?: string | null;
+        };
+        /** BusyItem */
+        BusyItem: {
+            /**
+             * Done
+             * @description steps finished
+             */
+            done: number;
+            /** Id */
+            id: string;
+            /**
+             * Label
+             * @description what is happening, as a sentence fragment for the person
+             */
+            label: string;
+            /**
+             * Total
+             * @description steps in all; null when the work has no measurable steps (an indeterminate bar)
+             */
+            total: number | null;
+        };
+        /** BusyList */
+        BusyList: {
+            /** Items */
+            items: components["schemas"]["BusyItem"][];
         };
         /** Changes */
         Changes: {
@@ -8812,6 +8857,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    busy_busy_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BusyList"];
                 };
             };
         };

@@ -26,7 +26,7 @@ NONE = {"available": False, "kind": "", "name": "", "reason": "no GPU", "memory_
 class FakeModel:
     """Stands in for LocalModel: knows its device, records every move, and notes the device each reply starts and ends on."""
 
-    def __init__(self, path, device, log):
+    def __init__(self, path, device, log, data=None):
         self.device, self.log = device, log
         self.model = SimpleNamespace(p={"w": torch.zeros(256)})
         self.log.append(("load", device))
@@ -57,12 +57,13 @@ class ChatDevice(unittest.TestCase):
         self.addCleanup(self.svc.close)
         self.log, self.made = [], {}
 
-    def fake(self, path, device):
-        self.made[Path(path).name] = model = FakeModel(path, device, self.log)
+    def fake(self, path, device, data=None):
+        self.made[Path(path).name] = model = FakeModel(path, device, self.log, data)
         return model
 
     def chat(self, name="m.npz"):
-        with mock.patch("studio_model.LocalModel", side_effect=self.fake), mock.patch.object(self.svc, "_checkpoint", side_effect=lambda v: v):
+        with mock.patch("studio_model.LocalModel", side_effect=self.fake), mock.patch("studio_model.load_checkpoint", return_value={}), \
+                mock.patch.object(self.svc, "_checkpoint", side_effect=lambda v: v):
             return self.svc.chat(name, [], None, None)
 
     def devices(self):
@@ -87,6 +88,20 @@ class ChatDevice(unittest.TestCase):
             self.assertEqual(self.devices(), ["cpu"])
             self.svc.chat_job_ended(Job("pretrain"))
         self.assertEqual(self.devices(), ["cpu", "cuda"])
+
+    def test_loading_a_model_is_busy_work_with_real_steps_and_a_reply_from_a_loaded_model_is_not(self):
+        seen = []
+        self.svc.watch(lambda kind, payload: seen.append(payload["items"]) if kind == "busy" else None)
+        with mock.patch("studio_backend.gpu_status", return_value=NONE):
+            self.chat()
+            loading = [[(i["label"], i["done"], i["total"]) for i in items] for items in seen]
+            self.assertEqual(loading[0], [("Loading the model for chat", 0, 2)])
+            self.assertIn([("Loading the model for chat", 2, 2)], loading)
+            self.assertEqual(seen[-1], [])  # done: the card goes away
+            self.assertEqual(self.svc.busy.items(), [])
+            seen.clear()
+            self.chat()
+        self.assertEqual(seen, [])  # the model was already loaded
 
     def test_on_mps_the_device_is_cpu_throughout(self):
         with mock.patch("studio_backend.gpu_status", return_value=MPS):

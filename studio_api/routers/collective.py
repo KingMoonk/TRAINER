@@ -7,6 +7,8 @@ answer carries the coordinator's term, in the X-Run-Term header and in its JSON 
 coordinator's tells it a later coordinator exists: it steps down (Coordinator.step_down) and refuses the call. Node-to-node authentication is the app's (studio_api.auth), not this router's.
 """
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
@@ -17,6 +19,8 @@ from pydantic import BaseModel
 import studio_diloco
 
 router = APIRouter(prefix="/collective/{run}", tags=["collective"])
+# A long poll holds its thread for up to 30 s per member: its own pool keeps them from filling the threads every other plain `def` route shares.
+LONG_POLLS = ThreadPoolExecutor(max_workers=64, thread_name_prefix="api-long-poll")
 Run = Path(pattern=studio_diloco.RUN_ID, description="the run id: the pretrain_distributed job's id")
 Term = Query(description="the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join", ge=0)
 BINARY = {200: {"content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}}
@@ -211,9 +215,9 @@ def progress(found: "studio_diloco.Coordinator" = Depends(member_call), body: Pr
 
 
 @router.get("/rounds/{round}", response_model=RoundView)
-def round_state(round: int, node: str = "", wait: float = 0., found: "studio_diloco.Coordinator" = Depends(member_call)):
+async def round_state(round: int, node: str = "", wait: float = 0., found: "studio_diloco.Coordinator" = Depends(member_call)):
     """Where a round stands for a member. With `wait` it long-polls (at most 30 s) until that changes."""
-    return found.round_view(round, node, wait)
+    return await asyncio.get_running_loop().run_in_executor(LONG_POLLS, found.round_view, round, node, wait)
 
 
 @router.post("/leave", status_code=204)

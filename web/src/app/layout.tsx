@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { BusyIndicator } from "@/components/busy-indicator";
 import { InlineScript } from "@/components/inline-script";
 import { InviteBanner } from "@/components/invite-banner";
 import { MemberToasts } from "@/components/member-toasts";
@@ -38,7 +39,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 {children}
               </div>
               <TrafficConsole />
-              <Toaster />
+              <BusyIndicator />
+              <Toaster offset={{ bottom: "var(--busy-offset, 24px)" }} mobileOffset={{ bottom: "var(--busy-offset, 16px)" }} />
             </TrafficProvider>
           </ShellEvents>
         </Providers>
