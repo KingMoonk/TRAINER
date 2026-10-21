@@ -140,6 +140,23 @@ class Extending(unittest.TestCase):
         self.assertEqual((saved["settings"]["rounds"], saved["plan"]), (8, c.plan))
         self.assertEqual(support.read_json(self.dir / "run.json")["rounds"], 8)
 
+    def test_an_extension_before_the_first_round_closes_survives_a_restart(self):
+        c = self.coordinator()
+        c.extend(rounds=8, inner_steps=4)
+        self.assertFalse((self.dir / "diloco.json").is_file())
+        again = self.coordinator()  # the app restarted: the folder holds no round yet, and the run is asked for with its first numbers
+        self.assertEqual((again.settings.rounds, again.settings.inner_steps), (8, 4))
+        self.assertEqual(again.plan, c.plan)
+        self.assertEqual((again.info()["rounds"], again.info()["total_steps"]), (8, studio_diloco.plan_total(c.plan)))
+        self.assertEqual(support.read_json(self.dir / "run.json")["rounds"], 8)
+        self.play(again, 8)
+        self.assertEqual((again.finished, len(again.history)), (True, 8))
+
+    def test_an_extension_file_of_another_run_in_the_folder_is_not_applied(self):
+        self.coordinator().extend(rounds=8)
+        other = self.coordinator(rounds=5)
+        self.assertEqual((other.settings.rounds, other.plan[0]["rounds"]), (5, 5))
+
     def test_a_coordinator_made_from_a_replica_keeps_the_extended_settings(self):
         c = self.coordinator()
         self.play(c, 2)
@@ -161,6 +178,42 @@ class Extending(unittest.TestCase):
         taken.join("a")
         self.assertEqual(taken.round_view(taken.next_round, "a")["rounds"], 8)
         self.assertEqual(studio_diloco.plan_h(taken.plan, 7), 4)
+
+
+class ReplicaCarriesThePlan(unittest.TestCase):
+    def test_a_replica_one_round_behind_hands_its_successor_the_extended_plan(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            c = support.build(root / "run", clock=Clock(), inner_steps=3, rounds=4)
+            c.join("a")
+            view = c.round_view(0, "a")
+            c.submit(0, "a", view["generation"], 0, 10, view["steps"], support.constant_delta(c, .01), 1.)
+            replica, shards = root / "replica", root / "shards"
+            replica.mkdir()
+            member = studio_diloco.Member(None, "run1", "n", 0, root / "member", threading.Event(), replica_dir=replica)
+            member.holding = (c.next_round, 0)  # it replicated the round that is open now, before the extension
+            for name, data in (("theta.npz", studio_diloco.encode_arrays(c.theta)), ("momentum.npz", studio_diloco.encode_arrays(c.momentum)),
+                               ("diloco.json", (root / "run" / "diloco.json").read_bytes()), ("info.json", json.dumps(c.info()).encode()),
+                               ("validation.npz", c.validation_bytes())):
+                (replica / name).write_bytes(data)
+            for shard in range(c.shard_count):
+                studio_diloco.install_shard(shards, shard, c.shard_bytes(shard), c.tokenizer.vocab_size)
+            c.extend(rounds=8, inner_steps=4)
+            member._replica_plan(c.round_view(c.next_round, "a"))  # the next view the member gets says so
+            taken = studio_diloco.Coordinator.from_replica("run1", root / "taken", replica, shards, 2, clock=Clock())
+            self.assertEqual((taken.settings.rounds, taken.settings.inner_steps), (8, 4))
+            self.assertEqual(taken.plan, c.plan)
+            self.assertEqual(taken.info()["total_steps"], c.info()["total_steps"])
+
+    def test_a_view_without_a_change_leaves_the_replica_alone(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            replica = Path(tmp) / "replica"
+            replica.mkdir()
+            member = studio_diloco.Member(None, "run1", "n", 0, Path(tmp) / "member", threading.Event(), replica_dir=replica)
+            record = {"settings": {"rounds": 4, "inner_steps": 3}, "plan": PLAN}
+            (replica / "diloco.json").write_text(json.dumps(record), encoding="utf-8")
+            member._replica_plan({"plan": [*PLAN, {"round": 3, "q": .75, "h": 5, "rounds": 8}]})  # holding no round: nothing is kept
+            self.assertEqual(json.loads((replica / "diloco.json").read_text(encoding="utf-8")), record)
 
 
 class Member(unittest.TestCase):
