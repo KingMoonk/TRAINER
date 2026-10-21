@@ -111,6 +111,21 @@ export function useStopRun() {
   });
 }
 
+/** Add rounds to a run that is going, and/or give it another number of steps a round; the answer is the run, so its round count and journal change at once. */
+export function useExtendRun(id: string, onDone: () => void) {
+  const write = useRunWrite();
+  return useMutation({
+    mutationFn: (body: { rounds?: number; inner_steps?: number }) =>
+      unwrap(api.POST("/distributed/runs/{run_id}/extend", { params: { path: { run_id: id } }, body })),
+    onSuccess: (run) => {
+      write(run);
+      toast.success(T.extended);
+      onDone();
+    },
+    onError: (error) => toast.error(T.couldNotExtend.replace("{why}", problem(error))),
+  });
+}
+
 /** Pause or resume a run; the answer is the run, so its buttons and phase change at once. */
 export function useHoldRun(verb: "pause" | "resume") {
   const write = useRunWrite();

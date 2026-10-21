@@ -72,6 +72,7 @@ class JoinInfo(Versioned):
     inner_steps: int
     rounds: int
     total_steps: int
+    plan: list[dict[str, Any]] | None = None  # the run's changes of length and H (studio_diloco.plan_h); none from an older coordinator
     delta_dtype: str
     shard_count: int
     seed: int
@@ -94,6 +95,8 @@ class RoundView(Versioned):
     replica: bool = False  # this member is one of the run's replicas: it also takes GET /state each round and GET /validation once
     lr_scale: float = 1.  # the factor the run's pivots (halve_lr) put on the learning rate from this round on
     steps: int = 0  # the inner steps dealt to this member for the round (0: the run's H, as an older coordinator says)
+    rounds: int | None = None  # the run's rounds as it stands (the owner can extend it); the plan below says how the rounds are laid out
+    plan: list[dict[str, Any]] | None = None  # the run's changes of length and H (studio_diloco.plan_h); a member takes them from every round it opens
     paused: bool = False  # the owner paused the run: a pending round stays pending until it is resumed
     polishing: bool = False  # the teacher is polishing the weights: a pending round stays pending until it is done
 

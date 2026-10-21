@@ -22,6 +22,20 @@ export function dilocoShape(run: Run): string {
   return fill(T.shapeDiloco, { count: run.members.length, coordinator: run.owner, steps: run.inner_steps, lr: run.outer_lr, momentum: run.outer_momentum });
 }
 
+/**
+ * The body of POST /distributed/runs/{id}/extend for what the form holds: `add` more rounds on top of the run's, and `steps` (empty keeps
+ * H). Null when it holds nothing the API would accept (not whole numbers, nothing to change).
+ */
+export function extendRequest(run: Pick<Run, "rounds" | "inner_steps">, add: string, steps: string): { rounds?: number; inner_steps?: number } | null {
+  const more = add.trim() === "" ? 0 : Number(add);
+  const h = steps.trim() === "" ? run.inner_steps : Number(steps);
+  if (!Number.isInteger(more) || more < 0 || !Number.isInteger(h) || h < 1 || h > 1_000_000 || run.rounds + more > 100_000) return null;
+  const body: { rounds?: number; inner_steps?: number } = {};
+  if (more > 0) body.rounds = run.rounds + more;
+  if (h !== run.inner_steps) body.inner_steps = h;
+  return body.rounds === undefined && body.inner_steps === undefined ? null : body;
+}
+
 /** 0 to 100 for the bar, 0 when the total is not known. */
 export function percentOf(done: number, all: number): number {
   return all > 0 ? Math.max(0, Math.min(100, (done / all) * 100)) : 0;

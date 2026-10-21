@@ -2649,6 +2649,39 @@
         "title": "ExportRow",
         "type": "object"
       },
+      "ExtendRun": {
+        "description": "What the live run page sends to make a run longer. At least one of the two.",
+        "properties": {
+          "inner_steps": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inner Steps"
+          },
+          "rounds": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rounds"
+          }
+        },
+        "title": "ExtendRun",
+        "type": "object"
+      },
       "FieldsModel": {
         "properties": {
           "fields": {
@@ -3481,6 +3514,21 @@
           "node": {
             "title": "Node",
             "type": "string"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan"
           },
           "round": {
             "title": "Round",
@@ -8968,6 +9016,21 @@
             "title": "Paused",
             "type": "boolean"
           },
+          "plan": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan"
+          },
           "polishing": {
             "default": false,
             "title": "Polishing",
@@ -8992,6 +9055,17 @@
           "round": {
             "title": "Round",
             "type": "integer"
+          },
+          "rounds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rounds"
           },
           "shards": {
             "anyOf": [
@@ -9577,6 +9651,7 @@
               "resumed",
               "took_over",
               "stepped_down",
+              "extended",
               "polish",
               "polish_off",
               "lessons",
@@ -17462,6 +17537,59 @@
           }
         },
         "summary": "Get Run",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/extend": {
+      "post": {
+        "description": "Make a run going on longer: `rounds` is the new total (more than it has), `inner_steps` the new H for the rounds still to come\n(the outer learning rate and momentum stay as they are). Every member takes the change from its next rounds without leaving, and\nthe learning rate carries on from where it is. 409 when the run is over or not going, 422 for numbers that change nothing or shorten\nthe run (Stop ends it sooner). A run another computer coordinates is extended by asking that computer.",
+        "operationId": "extend_run_distributed_runs__run_id__extend_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtendRun"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Extend Run",
         "tags": [
           "distributed"
         ]

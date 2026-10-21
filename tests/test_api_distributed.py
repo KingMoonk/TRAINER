@@ -18,6 +18,7 @@ import studio_diloco
 import studio_distributed as runs
 from studio_api import app as api_app
 from studio_api.app import create_app
+from studio_api.routers import distributed as router
 from studio_api.routers import distributed as distributed_routes
 from studio_api.hosts import ANY
 from studio_ia.services import FakeServices, Job
@@ -679,6 +680,70 @@ class Routes(unittest.TestCase):
         over = self.client.post(f"/distributed/runs/{run_id}/pause")
         self.assertEqual((over.status_code, over.json()["detail"]), (409, "The run is over; there is nothing to pause."))
         self.assertEqual(self.client.post(f"/distributed/runs/{run_id}/resume").status_code, 409)
+
+    def test_a_run_going_is_extended_and_says_so(self):
+        run_id = self.start(rounds=2000).json()["id"]
+        self.wait_state(run_id, "running")
+        answer = self.client.post(f"/distributed/runs/{run_id}/extend", json={"rounds": 3000})
+        self.assertEqual(answer.status_code, 200, answer.text)
+        body = answer.json()
+        self.assertEqual(body["rounds"], 3000)
+        self.assertIn("extended", [e["kind"] for e in body["events"]])
+        self.assertEqual(self.client.get(f"/distributed/runs/{run_id}").json()["rounds"], 3000)
+        both = self.client.post(f"/distributed/runs/{run_id}/extend", json={"rounds": 3500, "inner_steps": 4})
+        self.assertEqual((both.status_code, both.json()["rounds"]), (200, 3500))
+        self.client.post(f"/distributed/runs/{run_id}/stop")
+
+    def test_extending_is_refused_with_a_sentence_when_it_cannot_work(self):
+        self.assertEqual(self.client.post("/distributed/runs/nope/extend", json={"rounds": 9}).status_code, 404)
+        self.services.pause()
+        queued = self.start().json()["id"]
+        self.assertEqual(self.client.post(f"/distributed/runs/{queued}/extend", json={"rounds": 9}).json()["detail"], "The run is not going.")
+        self.client.post(f"/distributed/runs/{queued}/stop")
+        run_id = self.start(rounds=2000).json()["id"]
+        self.services.resume()
+        self.wait_state(run_id, "running")
+        url = f"/distributed/runs/{run_id}/extend"
+        self.assertEqual(self.client.post(url, json={}).status_code, 422)
+        self.assertEqual(self.client.post(url, json={"rounds": 0}).status_code, 422)
+        shorter = self.client.post(url, json={"rounds": 5})
+        self.assertEqual((shorter.status_code, "can only add rounds" in shorter.json()["detail"]), (422, True))
+        same = self.client.post(url, json={"rounds": 2000})
+        self.assertEqual((same.status_code, "Nothing changes" in same.json()["detail"]), (422, True))
+        self.client.post(f"/distributed/runs/{run_id}/stop")
+        self.assertEqual(self.client.post(url, json={"rounds": 3000}).status_code, 409)
+
+    def test_a_run_another_computer_coordinates_is_extended_by_asking_that_computer(self):
+        run_id = self.start(rounds=2000).json()["id"]
+        self.wait_state(run_id, "running")
+        asked = []
+
+        class Owner:
+            def __init__(self, answer):
+                self.answer = answer
+
+            def post_json(self, path, body=None):
+                asked.append((path, body))
+                return self.answer
+
+        class Cluster:
+            answer = None
+
+            def address_of(self, node):
+                return "box"
+
+            def client_for(self, address, **options):
+                return Owner(self.answer)
+
+        cluster = Cluster()
+        cluster.answer = self.client.get(f"/distributed/runs/{run_id}").json()
+        with mock.patch.object(router, "_remote", return_value={"id": run_id, "origin": "box"}), mock.patch.object(router, "_cluster", return_value=cluster):
+            answer = self.client.post(f"/distributed/runs/{run_id}/extend", json={"rounds": 3000, "inner_steps": 4})
+        self.assertEqual(answer.status_code, 200, answer.text)
+        self.assertEqual(answer.json()["coordinator"], "box")
+        self.assertEqual(asked, [(f"distributed/runs/{run_id}/extend", {"rounds": 3000, "inner_steps": 4})])
+        self.assertEqual(self.client.get(f"/distributed/runs/{run_id}").json()["rounds"], 2000)  # this computer changed nothing
+        self.client.post(f"/distributed/runs/{run_id}/stop")
 
     def test_a_finished_run_is_restarted_as_a_new_run_from_its_best_weights(self):
         first = self.wait_state(self.start(outer_lr=.5).json()["id"], "finished")

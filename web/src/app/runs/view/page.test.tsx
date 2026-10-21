@@ -94,6 +94,58 @@ describe("Run view: a DiLoCo run", () => {
     await waitFor(() => expect(calls(all, "POST", "/distributed/runs/r1/stop")).toHaveLength(1));
   });
 
+  test("Add rounds… sends the new total and H, then the page shows the longer run and the journal line", async () => {
+    const longer = { ...diloco(), rounds: 50, inner_steps: 200, events: [event(3, { kind: "extended", node: "", round: 2, text: "Extended to 50 rounds at round 2." })] };
+    let extended = false;
+    const all = mockApi({
+      "GET /distributed/runs/r1": () => ({ body: extended ? longer : diloco() }),
+      "GET /queue": { body: queue({ job: job("r1", { kind: "pretrain_distributed" }) }) },
+      "GET /cluster/nodes": { body: NODES },
+      "POST /distributed/runs/r1/extend": () => {
+        extended = true;
+        return { body: longer };
+      },
+    });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
+    expect(await screen.findByTestId("run-progress")).toHaveTextContent("Round 3/10");
+    await userEvent.click(screen.getByTestId("extend-run"));
+    const form = await screen.findByRole("dialog", { name: "Add rounds to this run" });
+    expect(within(form).queryByTestId("extend-tuned")).not.toBeInTheDocument();
+    const add = within(form).getByLabelText("Rounds to add");
+    await userEvent.clear(add);
+    await userEvent.type(add, "40");
+    await userEvent.type(within(form).getByLabelText("Steps a round (H)"), "200");
+    expect(within(form).getByTestId("extend-tuned")).toHaveTextContent("tuned for H = 100");
+    await userEvent.click(within(form).getByTestId("extend-confirm"));
+    await waitFor(() => expect(calls(all, "POST", "/distributed/runs/r1/extend")).toHaveLength(1));
+    expect(calls(all, "POST", "/distributed/runs/r1/extend")[0].body).toEqual({ rounds: 50, inner_steps: 200 });
+    await waitFor(() => expect(screen.getByTestId("run-progress")).toHaveTextContent("Round 3/50"));
+    expect(screen.getByTestId("event-3")).toHaveTextContent("Extended to 50 rounds at round 2.");
+  });
+
+  test("Add rounds… refuses numbers the API would refuse", async () => {
+    dilocoServer();
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
+    await userEvent.click(await screen.findByTestId("extend-run"));
+    const form = await screen.findByRole("dialog", { name: "Add rounds to this run" });
+    const add = within(form).getByLabelText("Rounds to add");
+    await userEvent.clear(add);
+    await userEvent.type(add, "0");
+    expect(within(form).getByTestId("extend-confirm")).toBeDisabled();
+    expect(within(form).getByTestId("extend-summary")).toHaveTextContent("Give a whole number of rounds");
+  });
+
+  test("no Add rounds… where the run cannot be stopped from here", async () => {
+    mockApi({
+      "GET /distributed/runs/r1": { body: { ...diloco(), can_stop: false } },
+      "GET /queue": { body: queue({ job: null }) },
+      "GET /cluster/nodes": { body: NODES },
+    });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
+    await screen.findByTestId("run-title");
+    expect(screen.queryByTestId("extend-run")).not.toBeInTheDocument();
+  });
+
   test("Keep running in the dialog stops nothing", async () => {
     const all = dilocoServer();
     renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });

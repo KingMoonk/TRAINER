@@ -167,7 +167,7 @@ class RunEvent(BaseModel):
     seq: int
     t: float  # seconds since the coordinator started, on its own clock (compare with Run.now_s)
     kind: Literal["joined", "left", "late", "dropped", "stale", "outer_step", "checkpoint", "finished", "pivot", "paused", "resumed", "took_over",
-                  "stepped_down", "polish", "polish_off", "lessons", "win_rate", "win_rate_off", "judging", "lesson_dropped", "lesson_kept"]
+                  "stepped_down", "extended", "polish", "polish_off", "lessons", "win_rate", "win_rate_off", "judging", "lesson_dropped", "lesson_kept"]
     node: str  # "" for the run
     round: int
     text: str
@@ -418,25 +418,25 @@ def get_run(run_id: str, services: Services) -> Run:
     return Run.model_validate(_found(services, run_id))
 
 
-def _ask(services, row, path, read=False):
-    """What the node that owns the run (it is not this one) answers to a command, or to a read when `read`."""
+def _ask(services, row, path, read=False, body=None):
+    """What the node that owns the run (it is not this one) answers to a command (sent with `body`), or to a read when `read`."""
     cluster = _cluster(services)
     address = cluster.address_of(row["origin"]) if cluster is not None else None
     if address is None:
         raise HTTPException(409, f"{row['origin']} coordinates this run and is not one of this computer's listed machines.")
     client = cluster.client_for(address, retries=0, timeout=10.)
     try:
-        return client.get_json(path) if read else client.post_json(path, {})
+        return client.get_json(path) if read else client.post_json(path, body or {})
     except studio_peer.PeerError as exc:
         if exc.status is not None and 400 <= exc.status < 500:  # the owner refused: say what it said (404 no lesson, 409 run over)
             raise HTTPException(exc.status, exc.detail or str(exc)) from None
         raise HTTPException(502, str(exc)) from None  # not reached, or the owner failed
 
 
-def _forward(services, row, path):
+def _forward(services, row, path, body=None):
     """Send a command to the node that owns the run (it is not this one) and return the run as that node answers. The replica is not
     written: the owner writes the outcome and it arrives by sync."""
-    answer = _ask(services, row, path)
+    answer = _ask(services, row, path, body=body)
     return Run.model_validate({**answer, "coordinator": row["origin"], "origin": row["origin"], "age_s": 0., "origin_down": False})
 
 
@@ -662,6 +662,37 @@ def pause_run(run_id: str, services: Services) -> Run:
 def resume_run(run_id: str, services: Services) -> Run:
     """Undo a pause: the next round opens as soon as the members are in. 409 when the run is over or not going."""
     return _hold(services, run_id, "resume")
+
+
+class ExtendRun(BaseModel):
+    """What the live run page sends to make a run longer. At least one of the two."""
+
+    rounds: int | None = Field(None, ge=1, le=100_000)  # the run's new total, at least the rounds it has
+    inner_steps: int | None = Field(None, ge=1, le=1_000_000)  # H for the rounds from the first one that can still change (the answer's events say which)
+
+
+@router.post("/runs/{run_id}/extend")
+def extend_run(run_id: str, body: ExtendRun, services: Services) -> Run:
+    """Make a run going on longer: `rounds` is the new total (more than it has), `inner_steps` the new H for the rounds still to come
+    (the outer learning rate and momentum stay as they are). Every member takes the change from its next rounds without leaving, and
+    the learning rate carries on from where it is. 409 when the run is over or not going, 422 for numbers that change nothing or shorten
+    the run (Stop ends it sooner). A run another computer coordinates is extended by asking that computer."""
+    if body.rounds is None and body.inner_steps is None:
+        raise HTTPException(422, "Give the new rounds, the new steps per round, or both.")
+    remote = _remote(services, run_id)
+    if remote is not None:
+        return _forward(services, remote, f"distributed/runs/{run_id}/extend", body.model_dump(exclude_none=True))
+    run, job = _find(services, run_id)
+    coordinator = studio_diloco.COORDINATORS.get(run.id)
+    if coordinator is None:
+        raise HTTPException(409, "The run is not going.")
+    try:
+        coordinator.extend(body.rounds, body.inner_steps)
+    except studio_diloco.Stale as exc:
+        raise HTTPException(409, str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return Run.model_validate(_read(run, job)[0])
 
 
 def _lessons(services, run_id, verb=None, lesson=None):

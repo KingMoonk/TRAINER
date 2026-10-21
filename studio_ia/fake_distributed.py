@@ -136,7 +136,7 @@ class FakeCoordinator:
         self.timelines.append(self._timeline(number, plan, closes, True, math.inf))
         done = closes + OUTER + CHECK
         row = {
-            "round": number, "step": (number + 1) * self.steps, "generation": 1, "members": list(self.roster), "contributed": counted,
+            "round": number, "step": (self.history[-1]["step"] if self.history else 0) + self.steps, "generation": 1, "members": list(self.roster), "contributed": counted,
             "dropped": dropped, "tokens": sum(node_tokens.values()), "steps": {m: self.steps for m in counted},
             "loss": loss, "val_loss": round(loss + .08, 4), "seconds": done * self.unit,
             "delta_bytes": int(size) * len(counted), "theta_bytes": BYTES * len(self.roster), "delta_dtype": self.dtype,
@@ -310,6 +310,24 @@ class FakeCoordinator:
                 self.begun += self.clock() - self.paused_at  # the schedule carries on from the beat it stopped at
             self.paused, self.paused_at = False, None
             self._event(self._beat(), "resumed", "", self.round, "The run was resumed by you.")
+
+    def extend(self, rounds=None, inner_steps=None):
+        """More rounds, and a new H for the rounds that open from now on (the real coordinator's reach is two rounds on)."""
+        with self.lock:
+            self._catch_up(self._beat())
+            if self.finished:
+                raise Stale("The run is over; it can no longer be extended.")
+            rounds = self.rounds if rounds is None else int(rounds)
+            steps = self.steps if inner_steps is None else int(inner_steps)
+            if rounds < self.rounds:
+                raise ValueError(f"The run has {self.rounds} rounds; extending can only add rounds (Stop ends a run sooner).")
+            if rounds == self.rounds and steps == self.steps:
+                raise ValueError("Nothing changes: give more rounds than the run has.")
+            said = f"Extended to {rounds} rounds at round {self.round}." if rounds != self.rounds else f"Changed the steps a round to {steps} at round {self.round}."
+            self.rounds, self.steps = rounds, steps
+            self.settings["rounds"], self.settings["inner_steps"] = rounds, steps
+            self._event(self._beat(), "extended", "", self.round, said)
+            return {"rounds": rounds, "inner_steps": steps, "from_round": self.round}
 
     def stop(self):
         with self.lock:
