@@ -15,6 +15,7 @@ import { stateLabel } from "@/lib/members";
 import { RemoveMemberButton, SoloControls, StopRunButton } from "./controls";
 import { T, fill } from "./copy";
 import { EventLog } from "./event-log";
+import { ExtendRunButton } from "./extend-run";
 import { ProgressCard, RunHeader } from "./header";
 import { HealthPanel } from "./health-panel";
 import { factAge, memberPhaseText, roundNumber } from "./live";
@@ -50,6 +51,7 @@ export function DilocoView({ run }: { run: Run }) {
             {run.can_stop && isActive(run) && (
               <div role="group" aria-label={T.controls} className="flex items-center gap-2">
                 <span className="font-mono text-xs text-warning">{T.coordinatorLabel}</span>
+                <ExtendRunButton run={run} />
                 <StopRunButton pending={stopRun.isPending && stopRun.variables === run.id} onConfirm={() => stopRun.mutate(run.id)} />
               </div>
             )}

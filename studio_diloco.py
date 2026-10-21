@@ -38,12 +38,13 @@ import tempfile
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
 
 import studio_run_health as run_health
+import studio_shards
 from studio_failover import POLL_BACKOFF_MAX, POLL_EVERY
 import studio_diloco_rules as drules
 
@@ -128,6 +129,8 @@ class Entered:
     steps: int = 0  # the inner steps dealt to this member for the round (0: the run's H, as a coordinator that deals none says)
     train_s: float = 0.  # time-boxed round: the seconds to train for (0: train the dealt steps)
     bytes: int = 0  # what the download of theta (or its update) was on the wire
+    rounds: int = 0  # the run's rounds as the coordinator had them when it opened this round (0: an older coordinator, which says none)
+    plan: list | None = None  # the run's plan (plan_h) then, so a member learns of an extension from the rounds it takes
 
 
 class Stale(RuntimeError):
@@ -170,6 +173,14 @@ class Halt:
         self.ended.set()
 
 
+REMOTE_INNER_STEPS = 1500  # H when a member is on another machine: moving the model is a fixed cost per round, so a longer round hides it
+
+
+def default_inner_steps(remote: bool) -> int:
+    """The H a run starts from: the usual one on this computer alone, a larger one when a member is on another machine."""
+    return REMOTE_INNER_STEPS if remote else Settings.inner_steps
+
+
 @dataclass(frozen=True)
 class Settings:
     """A run's DiLoCo parameters (the job's params). outer_lr 1 with momentum 0 makes one member exactly plain training."""
@@ -208,6 +219,10 @@ class Settings:
     def __post_init__(self):
         if self.inner_steps < 1 or self.rounds < 1 or self.shards < 1:
             raise ValueError("inner_steps, rounds and shards must be at least 1.")
+        from studio_model import MAX_STEPS
+        if self.rounds * self.inner_steps > MAX_STEPS:
+            raise ValueError(f"{self.rounds:,} rounds of {self.inner_steps:,} steps is {self.rounds * self.inner_steps:,} steps; a run trains at most {MAX_STEPS:,}. "
+                             "Use fewer rounds or fewer steps per round.")
         if not 1 <= self.min_members <= self.max_members:
             raise ValueError("min_members must be between 1 and max_members.")
         if self.delta_dtype not in DELTA_DTYPES:
@@ -226,6 +241,56 @@ class Settings:
         if "rounds" not in known and steps:
             known["rounds"] = max(1, int(steps) // int(known.get("inner_steps", cls.inner_steps)))
         return cls(**known)
+
+
+# ---- the learning-rate plan -------------------------------------------------------------------------------------------
+# A run's length can grow while it goes (Coordinator.extend), and so can H. The plan is the list of those changes:
+# [{"round": the first round it holds for, "q": the share of the learning-rate schedule done when that round starts, "h": inner steps a
+# round runs, "rounds": the run's rounds when the change was made}]. The first entry is {"round": 0, "q": 0, "h": H, "rounds": rounds}.
+# The schedule of an entry's rounds is laid over its frame: the steps of the rounds before it plus its own H for every round up to
+# its `rounds`. From the entry's round on, the share left (1 - q) is spread over the steps left in the frame, so the rate carries on
+# from where the entry before it had it instead of jumping back up when the run gets longer.
+
+def plan_entry(plan, number):
+    """The index of the plan entry round `number` is under: the last whose round is not after it."""
+    return max(k for k, entry in enumerate(plan) if entry["round"] <= number)
+
+
+def plan_h(plan, number):
+    """The inner steps round `number` runs (H)."""
+    return plan[plan_entry(plan, number)]["h"]
+
+
+def plan_before(plan, number):
+    """The inner steps of rounds 0 .. number-1, together."""
+    ends = [entry["round"] for entry in plan[1:]] + [number]
+    return sum(entry["h"] * max(0, min(number, end) - entry["round"]) for entry, end in zip(plan, ends))
+
+
+def plan_frame(plan, number):
+    """The length the learning-rate schedule has in round `number`, in steps: the frame of its entry."""
+    k = plan_entry(plan, number)
+    return plan_before(plan[:k + 1], plan[k]["rounds"])
+
+
+def plan_rounds(plan):
+    """The rounds the run has as it stands."""
+    return plan[-1]["rounds"]
+
+
+def plan_total(plan):
+    """The inner steps of the whole run as it stands: the frame of its last entry."""
+    return plan_before(plan, plan[-1]["rounds"])
+
+
+def plan_position(plan, number, inside=0.):
+    """Where on its frame round `number` stands after `inside` of its steps (0 .. plan_frame, in steps)."""
+    entry, total = plan[plan_entry(plan, number)], plan_frame(plan, number)
+    start = plan_before(plan, entry["round"])
+    done = plan_before(plan, number) - start + inside
+    if not entry["q"] and not start:
+        return min(done, total)
+    return (entry["q"] + (1 - entry["q"]) * min(1., done / max(1, total - start))) * total
 
 
 # ---- pure rules -------------------------------------------------------------------------------------------------------
@@ -555,6 +620,13 @@ def step_size(delta, momentum, lr, mu):
     return float(np.sqrt(sum(float(((lr * (gradient + mu * momentum[name])) ** 2).sum()) for name, gradient in delta.items())))
 
 
+def tokenized_root(directory):
+    """Where the tokenized text of a run is cached so the next run on the same data and tokenizer finds it: data/shards beside the runs
+    folder (the one Resources > Storage ages out). A run folder anywhere else (a test, a script) keeps it inside itself."""
+    directory = Path(directory)
+    return directory.parent.parent / "data" / "shards" if directory.parent.name == "runs" else directory / "windows"
+
+
 PREPARE_EVERY = 50  # documents tokenized between two progress reports of the build
 
 
@@ -610,6 +682,7 @@ class Coordinator:
         self.prefer = ()  # nodes that are replicas before the others: the node chosen to coordinate (prepare)
         self.lock = threading.RLock()
         self.cond = threading.Condition(self.lock)
+        self.plan = [dict(entry) for entry in (state or {}).get("plan") or [{"round": 0, "q": 0., "h": settings.inner_steps, "rounds": settings.rounds}]]  # see plan_h
         if state:
             self.term = state["term"]
             self.momentum = state["momentum"]
@@ -654,17 +727,26 @@ class Coordinator:
         training, validation, split = sm.partition_examples(examples, cfg["validation"], random.Random(cfg["seed"]), True)
         split_hash = hashlib.sha256(("".join(fingerprint(e) for e in training) + "|" + "".join(fingerprint(e) for e in validation)).encode()).hexdigest()
         say = progress or (lambda *_: None)
-        say("tokenizer", 0, 0)
-        module, module_cfg = module_of("tokenizer", sm.effective_spec(cfg)["tokenizer"])
-        tokenizer = module.fit(module_cfg, training)
+        spec = sm.effective_spec(cfg)["tokenizer"]
+        folder = studio_shards.tokenizer_folder(shard_dir or tokenized_root(directory), split_hash, spec)  # shared by runs: this data under this tokenizer
+        tokenizer = None
+        saved = studio_shards.load_tokenizer(folder)
+        if saved is not None:
+            try:
+                tokenizer = sm.Tokenizer.restore(saved)
+            except (ValueError, KeyError, TypeError):
+                tokenizer = None  # unreadable: fitted again below
+        if tokenizer is None:
+            say("tokenizer", 0, 0)
+            module, module_cfg = module_of("tokenizer", spec)
+            tokenizer = module.fit(module_cfg, training)
+            studio_shards.save_tokenizer(folder, tokenizer.serialize())
         tally = [0, len(training) + len(validation)]  # documents cut so far, of all
-        say("tokenizing", 0, tally[1])
-        if sm.characters_in(training) + sm.characters_in(validation) >= sm.STREAM_CHARS:
-            train, val, _ = sm.shard_windows(_counted(training, tally, say), _counted(validation, tally, say), tokenizer, cfg, split_hash,
-                                             shard_dir or directory / "windows")
-        else:
-            train, val = sm.samples_from(_counted(training, tally, say), tokenizer, cfg), sm.samples_from(_counted(validation, tally, say), tokenizer, cfg)
-        say("tokenizing", tally[1], tally[1])
+        cached = studio_shards.load(folder, sm.shard_key(tokenizer, cfg, split_hash), tokenizer.vocab_size) is not None
+        say("cached" if cached else "tokenizing", tally[1] if cached else 0, tally[1])  # cached: the windows are on disk from an earlier run
+        train, val, _ = sm.shard_windows(_counted(training, tally, say), _counted(validation, tally, say), tokenizer, cfg, split_hash, folder)
+        if not cached:
+            say("tokenizing", tally[1], tally[1])
         if not train:
             raise ValueError("No trainable target tokens were found.")
         if settings.target_win_rate is not None and not val:
@@ -682,13 +764,15 @@ class Coordinator:
             polish_prompts, eval_prompts = split_prompts(conversations, settings, cfg["seed"])
         if state:
             theta = state["theta"]
+            if state["extended"]:  # the run was extended: it goes on with the length and H it had grown to
+                settings = replace(settings, **state["extended"])
         elif start_from:
             theta = cls._weights_of(start_from, theta)
         coordinator = cls(run, directory, cfg, tokenizer, train, val, settings, theta, _evaluator(model, val, cfg["batch_size"]), digest, clock, state)
         coordinator.split_hash, coordinator.split = split_hash, split
         coordinator.model_spec = model.spec
         for number, more in enumerate(later, 1):
-            coordinator.add_source(cls._windows_of(sm, more, tokenizer, cfg, directory / "windows" / f"source{number}"))
+            coordinator.add_source(cls._windows_of(sm, more, tokenizer, cfg, folder))
         coordinator._load_lessons()
         if coordinator.rules.source >= len(coordinator.spans):
             raise ValueError(f"The run had moved on to data source {coordinator.rules.source + 1}, but only {len(coordinator.spans)} "
@@ -768,7 +852,7 @@ class Coordinator:
         model = sm.ScratchTransformer(cfg, vocabulary, probe=True)
         state = {"term": term, "momentum": momentum, "round": int(record["round"]), "generation": int(record["generation"]),
                  "history": record["history"], "step_time": record.get("step_time"), "state_file": None, "rules": record.get("rules"), "paused": record.get("paused"),
-                 "lessons": record.get("lessons")}
+                 "lessons": record.get("lessons"), "plan": record.get("plan")}
         coordinator = cls(run, directory, cfg, Tokenizer.restore(info["tokenizer"]), Windows(parts), val, settings, theta,
                           _evaluator(model, val, cfg["batch_size"]), record["digest"], clock, state, on_step_down)
         coordinator.shard_count, coordinator.parts = count, parts
@@ -1005,7 +1089,8 @@ class Coordinator:
         if not path.is_file():
             return None
         saved = json.loads(path.read_text(encoding="utf-8"))
-        if saved["digest"] != digest or saved["settings"]["inner_steps"] != settings.inner_steps or saved["seed"] != cfg["seed"]:
+        started_with = saved["plan"][0]["h"] if saved.get("plan") else saved["settings"]["inner_steps"]  # an extended run's H has changed since
+        if saved["digest"] != digest or started_with != settings.inner_steps or saved["seed"] != cfg["seed"]:
             raise ValueError("This folder holds a different DiLoCo run (other data, seed or inner steps).")
         with np.load(directory / saved["state_file"], allow_pickle=False) as archive:
             theta = {key[len(STATE_PREFIXES[0]):]: archive[key].copy() for key in archive.files if key.startswith(STATE_PREFIXES[0])}
@@ -1013,7 +1098,8 @@ class Coordinator:
         return {"theta": theta, "momentum": momentum, "state_file": saved["state_file"], "round": saved["round"], "generation": saved["generation"],
                 "history": saved["history"], "step_time": saved.get("step_time"), "term": saved.get("term", 1),
                 "rules": saved.get("rules"), "finished": saved.get("finished", False), "paused": saved.get("paused", False),
-                "lessons": saved.get("lessons", [])}
+                "lessons": saved.get("lessons", []), "plan": saved.get("plan"),
+                "extended": {k: saved["settings"][k] for k in ("rounds", "inner_steps")} if saved.get("plan") else None}
 
     def _start_files(self, model):
         from studio_core import atomic_json, now
@@ -1034,8 +1120,8 @@ class Coordinator:
     def info(self):
         """What a member needs to start: the config and tokenizer, and the run's shape."""
         return {"term": self.term, "generation": self.generation, "round": self.next_round, "config": self.cfg, "tokenizer": self.tokenizer.serialize(),
-                "inner_steps": self.settings.inner_steps, "rounds": self.settings.rounds,
-                "total_steps": self.settings.rounds * self.settings.inner_steps, "delta_dtype": self.settings.delta_dtype,
+                "inner_steps": self.settings.inner_steps, "rounds": self.settings.rounds, "plan": [dict(entry) for entry in self.plan],
+                "total_steps": plan_total(self.plan), "delta_dtype": self.settings.delta_dtype,
                 "shard_count": self.shard_count, "seed": self.cfg["seed"], "vocab_size": self.tokenizer.vocab_size}
 
     # -- terms
@@ -1075,6 +1161,20 @@ class Coordinator:
     def _lease(self, term, epoch):
         """The fence a member's lease is compared by: the coordinator's term first, then the scheduler's lease epoch."""
         return (self.term if term is None else term, epoch)
+
+    def refusal(self, node):
+        """Why `node` cannot be added to the run now, in a sentence, or "" when it can: the owner checks before it invites a machine
+        that asked to join. The member's own join checks the same again."""
+        with self.cond:
+            if self.finished:
+                return FINISHED
+            if node in self.banned:
+                return f"{node} was stopped by the run's owner."
+            if node in self.members or node in self.pending:
+                return f"{node} is already in this run."
+            if len(self.members) - len(self.leaving & set(self.members)) + len(self.pending) >= self.settings.max_members:  # a leaver's seat is free
+                return f"The run already has its {self.settings.max_members} members."
+            return ""
 
     def join(self, node, epoch=0, term=None):
         with self.cond:
@@ -1139,6 +1239,15 @@ class Coordinator:
             self.cond.notify_all()
 
     # -- rounds
+    def steps_through(self, number):
+        """The inner steps of the first `number` rounds."""
+        return plan_before(self.plan, number)
+
+    def _settings_for(self, number):
+        """The settings as round `number` runs them: H as the plan has it for that round (it changes when the run is extended)."""
+        h = plan_h(self.plan, number)
+        return self.settings if h == self.settings.inner_steps else replace(self.settings, inner_steps=h)
+
     def _expected(self, current):
         return set(current.members) - self.leaving
 
@@ -1146,6 +1255,12 @@ class Coordinator:
         """Append to the bounded event log the live view shows, on this coordinator's own clock (seconds since it started)."""
         self.event_seq += 1
         self.events.append({"seq": self.event_seq, "t": self.clock() - self.started, "kind": kind, "node": node, "round": number, "text": text})
+        self._changed()
+
+    def _changed(self):
+        """Tell the watchers (`watch`) that what the live view shows of this run changed. Each must be quick: it runs under the lock."""
+        for watcher in list(WATCHERS):
+            watcher(self)
 
     def _advance(self):
         drules.accrue(self.rules, self.clock(), self._counting())
@@ -1210,19 +1325,20 @@ class Coordinator:
             self.last_members = active
         for node in [node for node in self.step_times if node not in active]:
             del self.step_times[node]  # a member that left is not timed any more: when it returns it is dealt a probe round
-        train = train_seconds(self.settings, active, self.step_times)
-        steps = timed_steps(self.settings, active, self.step_times, train) if train else deal_steps(self.settings, active, self.step_times)
+        settings = self._settings_for(self.next_round)  # H as the plan has it for this round
+        train = train_seconds(settings, active, self.step_times)
+        steps = timed_steps(settings, active, self.step_times, train) if train else deal_steps(settings, active, self.step_times)
         # a member that overlaps runs the previous round's deal (a round's assignment arrives after its steps), so the deadline covers the larger
         runs = {node: max(steps[node], self.last_steps.get(node, steps[node])) for node in active}
         self.last_steps = dict(steps)
         finishes = [(runs[node] * self.step_times[node], node) for node in active if self.step_times.get(node, 0) > 0]
         if train:  # time-boxed: every member trains for `train` seconds, so the deadline follows that, not the steps
-            window = round_seconds(self.settings, max(train, self.last_train), 1)
+            window = round_seconds(settings, max(train, self.last_train), 1)
         elif finishes:  # the slowest predicted finish, so the deadline is consistent with the steps run
             slowest = max(finishes)[1]
-            window = round_seconds(self.settings, self.step_times[slowest], runs[slowest])
+            window = round_seconds(settings, self.step_times[slowest], runs[slowest])
         else:
-            window = round_seconds(self.settings, self.step_time)
+            window = round_seconds(settings, self.step_time)
         self.last_train = train
         first, count = self.spans[min(self.rules.source, len(self.spans) - 1)]
         ids = [*range(first, first + count), *(entry["shard"] for entry in self.live_lessons())]  # the source's shards, then the lessons
@@ -1230,6 +1346,7 @@ class Coordinator:
             ids += self.stages.replay_ids(self, self.next_round)  # a share of the earlier sources, so the new text does not make it forget them
         self.current = Round(self.next_round, self.generation, active, deal_ids(self.cfg["seed"], self.next_round, active, ids),
                              now, now + window, window, steps=steps, train_seconds=train)
+        self._changed()
         return True
 
     def _close(self, current, now):
@@ -1271,7 +1388,7 @@ class Coordinator:
             self.step_times[node] = seconds if before is None else (1 - STEP_TIME_SMOOTHING) * before + STEP_TIME_SMOOTHING * seconds
         tokens = sum(t for t, _, _, _, _ in sent.values())
         losses = [(t, loss) for t, _, _, loss, _ in sent.values() if loss is not None and t > 0]
-        row = {"round": current.number, "step": (current.number + 1) * self.settings.inner_steps, "generation": current.generation,
+        row = {"round": current.number, "step": plan_before(self.plan, current.number + 1), "generation": current.generation,
                "members": list(current.members), "contributed": list(sent), "dropped": dropped, "tokens": tokens, "late": list(late),
                "steps": {node: value[1] for node, value in sent.items()}, "dealt": dict(current.steps),
                "loss": sum(t * loss for t, loss in losses) / sum(t for t, _ in losses) if losses else None,
@@ -1361,7 +1478,7 @@ class Coordinator:
 
     def _write_best(self):
         """best.npz: the best round's weights as a checkpoint, plus the outer momentum it had (so a pivot continues from exactly there)."""
-        arrays = self._checkpoint_arrays((self.rules.best_round + 1) * self.settings.inner_steps)
+        arrays = self._checkpoint_arrays(plan_before(self.plan, self.rules.best_round + 1))
         arrays.update({STATE_PREFIXES[1] + k: v for k, v in self.momentum.items()})
         self._write_npz(self.directory / "best.npz", arrays)
 
@@ -1386,7 +1503,8 @@ class Coordinator:
             return {**base, "state": "open", "generation": current.generation, "rank": rank,
                     "replica": node in replica_nodes(current.members, self.settings.replicas, self.prefer),
                     "deadline_s": max(0., current.deadline - self.clock()), "shards": current.deal[node], "members": len(current.members),
-                    "lr_scale": self.rules.lr_scale, "steps": current.steps[node], "train_s": current.train_seconds}
+                    "lr_scale": self.rules.lr_scale, "steps": current.steps[node], "train_s": current.train_seconds,
+                    "rounds": self.settings.rounds, "plan": [dict(entry) for entry in self.plan]}
         return {**base, "state": "pending"}
 
     def round_view(self, number, node="", wait=0.):
@@ -1472,8 +1590,9 @@ class Coordinator:
         """Take a member's report of where it is in its round (no weights): the latest per member is kept for the live view, and a
         training or uploading report also marks the round's timeline and adds a sample for its charts. Stale (409) for a node that
         is not a member or a lease epoch that is not its own, and for a training or uploading report about a round that is closed
-        or of another generation, as a delta is. Returns False, taking nothing, when a closing round holds the lock for a while: a
-        report is never worth holding a request for."""
+        or of another generation, as a delta is. An overlapping member that already sent the open round trains the next one while
+        the others finish: its reports for that round only freshen its report's time. Returns False, taking nothing, when a closing
+        round holds the lock for a while: a report is never worth holding a request for."""
         if phase not in PHASES:
             raise ValueError(f"phase must be one of {', '.join(PHASES)}.")
         self.beats[node] = self.clock()  # a report refused for a closing round is still a sign of life
@@ -1489,6 +1608,10 @@ class Coordinator:
             now, current = self.clock(), self.current
             report = self.reports.setdefault(node, {"samples": [], "sample_round": None})
             if phase in WORK_PHASES:
+                if (current is not None and current.open and number == current.number + 1 and node in current.contributions
+                        and generation == current.generation and "round" in report):
+                    report["at"] = now  # ahead (overlap): nothing to mark until its round opens
+                    return True
                 if current is None or current.number != number or not current.open:
                     raise Stale(f"Round {number} is closed (the open round is {current.number if current else 'none'}).")
                 if node not in current.members:
@@ -1504,6 +1627,7 @@ class Coordinator:
                 report["samples"].append({"step": int(step), "t": now - current.opened, "loss": loss, "tokens_per_second": tokens_per_second})
                 del report["samples"][:-SAMPLES_KEPT]
             report.update(round=number, phase=phase, step=int(step), loss=loss, tokens_per_second=tokens_per_second, at=now)
+            self._changed()
             return True
         finally:
             self.lock.release()
@@ -1588,6 +1712,7 @@ class Coordinator:
             marks = current.marks.setdefault(node, {})
             marks["delta_received"] = self.clock()
             marks.setdefault("delta_sent", marks["delta_received"])
+            self._changed()
             self._advance()
             self.cond.notify_all()
 
@@ -1682,7 +1807,7 @@ class Coordinator:
             live = bool(report) and report["round"] == self.next_round
             found["progress"] = {
                 "phase": report["phase"] if report else "waiting", "step": report["step"] if live else 0,
-                "steps": current.steps.get(node, self.settings.inner_steps) if current is not None else self.settings.inner_steps,
+                "steps": current.steps.get(node, plan_h(self.plan, self.next_round)) if current is not None else plan_h(self.plan, self.next_round),
                 "loss": report["loss"] if live else None, "tokens_per_second": report["tokens_per_second"] if live else None,
                 "reported_ago": now - report["at"] if report else None,
                 "samples": [dict(s) for s in report["samples"] if report["sample_round"] == self.next_round and s["loss"] is not None] if report else []}
@@ -1726,6 +1851,7 @@ class Coordinator:
                 return
             from studio_core import atomic_json
             self.stopped = self.finished = True
+            self.stopped_at = self.clock()
             self._polish_stop.set()
             self._event("finished", "", self.next_round, reason)
             if self.record:
@@ -1783,6 +1909,58 @@ class Coordinator:
             return
         saved = json.loads(path.read_text(encoding="utf-8"))
         atomic_json(path, {**saved, "paused": self.paused, "rules": self.rules.to_json()})
+
+    def extend(self, rounds=None, inner_steps=None):
+        """Make the run longer while it goes: `rounds` is the new total (at least the rounds it has), `inner_steps` the new H. Both apply to the rounds still to come, from round `first` on: the first round whose
+        assignment no member can have taken yet (a member that overlaps trains round n+1 on the assignment of round n). The learning-rate
+        schedule carries on from where it is: its remaining share is spread over the new remaining steps (see plan_h), so the rate does
+        not jump. Returns {"rounds", "inner_steps", "from_round"}. Stale once the run is over; ValueError, saying why, for numbers that
+        change nothing or shorten the run (Stop ends it sooner)."""
+        with self.cond:
+            self._touch()
+            self._advance()
+            if self.finished:
+                raise Stale("The run is over; it can no longer be extended.")
+            old_rounds, h = self.settings.rounds, self.settings.inner_steps
+            rounds = old_rounds if rounds is None else int(rounds)
+            inner_steps = h if inner_steps is None else int(inner_steps)
+            if rounds < old_rounds:
+                raise ValueError(f"The run has {old_rounds} rounds; extending can only add rounds (Stop ends a run sooner).")
+            if not 1 <= inner_steps <= 1_000_000 or rounds > 100_000:
+                raise ValueError("A run has at most 100000 rounds, and a round has between 1 and 1000000 steps.")
+            first = min(self.next_round + 2, old_rounds)
+            if rounds == old_rounds and (inner_steps == h or first >= old_rounds):
+                raise ValueError("Nothing changes: give more rounds than the run has"
+                                 + ("." if inner_steps == h else ", since no round is left that could run another number of steps."))
+            # where the schedule is at `first`, as a share of its frame; at most where the last old round starts (nothing of the schedule
+            # is left past the end, and a run extended from there has no decay left to spread)
+            share = min(plan_position(self.plan, number) / plan_frame(self.plan, number) for number in (first, old_rounds - 1))
+            self.plan = [entry for entry in self.plan if entry["round"] < first] + [{"round": first, "q": share, "h": inner_steps, "rounds": rounds}]
+            self.settings = replace(self.settings, rounds=rounds, inner_steps=inner_steps)
+            self._state = (None, b"")  # a replica that fetched the state before this change must fetch it again
+            said = f"Extended to {rounds} rounds at round {self.next_round}." if rounds != old_rounds else f"Changed the steps a round to {inner_steps} at round {self.next_round}."
+            if inner_steps != h and rounds != old_rounds:
+                said += f" From round {first} each runs {inner_steps} steps."
+            elif inner_steps != h:
+                said += f" It applies from round {first}."
+            self._event("extended", "", self.next_round, said)
+            self._save_extended()
+            self._remember()
+            self.cond.notify_all()
+            return {"rounds": rounds, "inner_steps": inner_steps, "from_round": first}
+
+    def _save_extended(self):
+        """Write the new length, H and plan to diloco.json (and run.json) without closing a round, so a restart or a successor coordinator
+        keeps them. Before the first round has closed there is no diloco.json: the run is then built again from the start."""
+        from studio_core import atomic_json
+        path = self.directory / "diloco.json"
+        if path.is_file():
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            atomic_json(path, {**saved, "settings": self.settings.__dict__, "plan": self.plan})
+        if self.record:
+            self.record.update({"rounds": self.settings.rounds, "inner_steps": self.settings.inner_steps,
+                                "steps": plan_total(self.plan)})
+            atomic_json(self.directory / "run.json", self.record)
 
     # -- the teacher's polish
     def _start_polish(self, row, current, verdict):
@@ -1915,7 +2093,7 @@ class Coordinator:
         restart_from checkpoint, copied in by build). Called with the lock held, the round folded in and before any rule restores weights."""
         if self.settings.target_win_rate is None or not self.versus_on or (self.directory / "start.npz").is_file():
             return
-        self._write_npz(self.directory / "start.npz", self._checkpoint_arrays(self.next_round * self.settings.inner_steps))
+        self._write_npz(self.directory / "start.npz", self._checkpoint_arrays(plan_before(self.plan, self.next_round)))
         self.rules.start_round = number
 
     def _versus_job(self, stop):
@@ -2098,7 +2276,7 @@ class Coordinator:
     def _write_record(self, row):
         """run.json as it stands after round `row` (a polished round's val_loss is already the polished loss)."""
         from studio_core import atomic_json, now
-        self.record.update({"step": self.next_round * self.settings.inner_steps,
+        self.record.update({"step": plan_before(self.plan, self.next_round),
                             "val_loss": row["val_loss"],
                             "status": "completed" if self.finished else "training",
                             "best_round": self.rules.best_round, "best_val_loss": self.rules.best_loss, "win_rate": self.rules.win_rate})
@@ -2119,12 +2297,12 @@ class Coordinator:
         arrays = {STATE_PREFIXES[0] + k: v for k, v in self.theta.items()}
         arrays.update({STATE_PREFIXES[1] + k: v for k, v in self.momentum.items()})
         self._write_npz(self.directory / self.state_file, arrays)
-        step = self.next_round * self.settings.inner_steps
+        step = plan_before(self.plan, self.next_round)
         self._write_npz(self.directory / "last.npz", self._checkpoint_arrays(step))
         self._keep_checkpoint()
         atomic_json(self.directory / "diloco.json", {
             "format": FORMAT, "run": self.run, "term": self.term, "round": self.next_round, "generation": self.generation, "state_file": self.state_file,
-            "momentum_file": self.state_file, "digest": self.digest, "seed": self.cfg["seed"], "settings": self.settings.__dict__,
+            "momentum_file": self.state_file, "digest": self.digest, "seed": self.cfg["seed"], "settings": self.settings.__dict__, "plan": self.plan,
             "members": members, "shard_deal": deal, "step_time": self.step_time, "history": self.history,
             "finished": self.finished, "split_strategy": self.split["strategy"], "split_hash": self.split_hash,
             "rules": self.rules.to_json(), "layout": [count for _, count in self.spans], "paused": self.paused and not self.finished,
@@ -2193,6 +2371,7 @@ def _evaluator(model, val, size, limit=None):
 # ---- coordinators of this process -------------------------------------------------------------------------------------
 
 COORDINATORS = {}  # run id -> Coordinator: what studio_api.routers.collective serves
+WATCHERS = []  # callables taking a Coordinator whose live view changed (studio_remote.Cluster turns them into `run` events)
 IDLE_RELEASE = 3600.  # seconds untouched after which a coordinator is forgotten when another starts
 
 
@@ -2291,6 +2470,12 @@ def default_versus(settings, new, old, prompts, device, stop):
     return compare_checkpoints(new, old, prompts, teacher.judge_teacher(), device=device, stop=stop)["win_rate"]
 
 
+def watch(watcher):
+    """Call `watcher(coordinator)` whenever a coordinator's live view changes; returns the call that stops it."""
+    WATCHERS.append(watcher)
+    return lambda: watcher in WATCHERS and WATCHERS.remove(watcher)
+
+
 def register(run, coordinator):
     with _LOCK:
         for key, other in list(COORDINATORS.items()):
@@ -2385,6 +2570,7 @@ class Member:
         self.base = f"/collective/{run}"
         self.train, self.val, self.sampler = Windows(), Windows(), random.Random(0)
         self.started, self.finished, self.fenced = False, False, False
+        self.round = 0  # the round in hand; read (round_steps, in a progress report) from the join on, before the first round is entered
         self.warm, self.busy, self.timed = False, 0., 0  # stepped(): the first step is warm-up; the time and count of the timed steps of the round
         self.term, self.superseded = 0, 0  # the coordinator's term (0: not learnt yet); superseded: a higher term seen, so nothing more goes to this coordinator
         self.loss = None
@@ -2403,19 +2589,39 @@ class Member:
 
     # -- the train() hook
     @property
+    def plan(self):
+        """The run's plan (plan_h) as the newest round this member took says it (the join's, before any): a run extended while it goes
+        reaches the member in the rounds it takes."""
+        if self.entered is not None and self.entered.plan:
+            return self.entered.plan
+        return self.info.get("plan") or [{"round": 0, "q": 0., "h": self.info["inner_steps"], "rounds": self.info["rounds"]}]
+
+    @property
+    def rounds(self):
+        """The run's rounds as the coordinator last said."""
+        return plan_rounds(self.plan)
+
+    @property
     def total_steps(self):
-        return self.info["total_steps"]
+        """The length the learning-rate schedule has in the round in hand (the run's, until an extension reaches it)."""
+        return plan_frame(self.plan, self.round)
+
+    @property
+    def run_steps(self):
+        """The inner steps of the whole run as it stands."""
+        return plan_total(self.plan)
 
     @property
     def round_steps(self):
         """The inner steps this member was dealt for the round in hand."""
-        return (self.entered.steps if self.entered is not None else 0) or self.info["inner_steps"]
+        return (self.entered.steps if self.entered is not None else 0) or plan_h(self.plan, self.round)
 
     def rate_step(self, number):
         """The schedule position of step `number`: each round spans H positions of the schedule, and the member's steps (however many it
         was dealt) are spread over them, so every member is at the same point of the schedule when the round ends."""
-        offset, h = number - self.first_step, self.info["inner_steps"]
-        return self.round * h + min(h, offset if self.round_steps == h else offset * h / self.round_steps)
+        plan = self.plan
+        offset, h = number - self.first_step, plan_h(plan, self.round)
+        return plan_position(plan, self.round, min(h, offset if self.round_steps == h else offset * h / self.round_steps))
 
     @property
     def rate_scale(self):
@@ -2442,7 +2648,7 @@ class Member:
         if step <= self.first_step:
             return False
         if self.train_deadline is not None:  # time-boxed: by the clock, within a bound on the steps so the loop never runs out of them
-            return self.clock() >= min(self.train_deadline, self.deadline) or step - self.first_step >= self.info["inner_steps"] * MAX_SHARE
+            return self.clock() >= min(self.train_deadline, self.deadline) or step - self.first_step >= plan_h(self.plan, self.round) * MAX_SHARE
         return step - self.first_step >= self.round_steps or self.clock() >= self.deadline
 
     def sync(self, step, trained_tokens, model):
@@ -2506,7 +2712,7 @@ class Member:
         if self.loss is not None:
             params["loss"] = self.loss
         self.pending = self.spawn(lambda: self._exchange(number, delta, params))
-        if number + 1 >= self.info["rounds"]:  # the last round: nothing to train after it, so wait for the run's end
+        if number + 1 >= self.rounds:  # the last round: nothing to train after it, so wait for the run's end
             self._phase("waiting")
             self.entered = self._join()
             if self.entered is None or self.finished or self.fenced:
@@ -2790,7 +2996,8 @@ class Member:
                         return None
                     raise
                 return Entered(want, theta, view["generation"], view["rank"], view["deadline_s"], shards, want != asked,
-                               float(view.get("lr_scale", 1.)), int(view.get("steps", 0)), float(view.get("train_s", 0.)), len(body))
+                               float(view.get("lr_scale", 1.)), int(view.get("steps", 0)), float(view.get("train_s", 0.)), len(body),
+                               int(view.get("rounds") or 0), view.get("plan"))
         return None
 
     def _download(self, path, params):
@@ -2805,7 +3012,7 @@ class Member:
         the background), so a round's download follows its steps, not the corpus, and the first steps start after the first shard.
         The order and the sizes are data, not what this member holds, so the choice is the same on every run of the deal."""
         cfg = self.info["config"]
-        need = (steps or self.info["inner_steps"]) * int(cfg.get("batch_size", 1)) * int(cfg.get("accumulation", 1))
+        need = (steps or plan_h(self.plan, number)) * int(cfg.get("batch_size", 1)) * int(cfg.get("accumulation", 1))
         order = round_order(self.info["seed"], rank, number, dealt)
         chosen, have = [], 0
         for shard in order:
@@ -3034,9 +3241,9 @@ class Member:
                     self.loss = event.get("loss")
                     self.live = {"loss": self.loss, "tokens_per_second": event.get("tokens_per_second")}
                 if "total" in event:  # the loop bound below is not the run's length: report the run's own
-                    event = {**event, "total": max(self.total_steps, event.get("step") or 0)}
+                    event = {**event, "total": max(self.run_steps, event.get("step") or 0)}
                 emit(event)
-            cfg = {**self.info["config"], "eval_every": 100000, "sample_every": 0, "steps": min(1_000_000, self.info["rounds"] * max(self.info["inner_steps"], int(self.info["inner_steps"] * MAX_SHARE)))}  # the loop bound (train() caps steps at 1,000,000): no member is dealt more than MAX_SHARE of H a round; the schedule length is total_steps
+            cfg = {**self.info["config"], "eval_every": 100000, "sample_every": 0, "steps": 1_000_000}  # the loop bound, as high as train() lets it go: the run's rounds end it (it can be extended while it goes), and the schedule's length is total_steps
             import studio_memory
             offload = studio_memory.offload_wanted(studio_model.validate_config(cfg), self.memory_share or 1.)  # as a job does: CUDA only, and only when the state cannot fit; train() says so
             if self.memory_share or offload:  # an offloading member without a plan still has the whole device to fit

@@ -113,6 +113,7 @@ class PlanRequest(BaseModel):
     hours: float = Field(sizing.DEFAULT_HOURS, gt=0, le=24 * 60)  # the time the person can give; the suggested design and steps fit it
     steps: int | None = Field(None, ge=1, le=10_000_000)  # a step count chosen instead of `passes` (the suggestion's "use these steps")
     plateau: bool | None = None  # end the run when its validation loss goes flat: true always, false never, null for runs over an hour
+    from_version: int | None = None  # the version whose best checkpoint a catch-up starts from (one of the plan's `sources`); null: the default
 
 
 class PlateauRule(BaseModel):
@@ -207,11 +208,35 @@ class NewPretrainJob(BaseModel):
     params: dict
 
 
+class ContinueSource(BaseModel):
+    """A trained version a catch-up may start from, and what its run did (studio_ia.pretraining_plan.run_source). Null: the run did not record it."""
+
+    version: int
+    name: str = ""
+    change: str = ""
+    status: str = ""  # the run's own: completed | stopped | ...
+    finished_at: str | None = None  # ISO time
+    steps: int | None = None  # steps trained
+    steps_planned: int | None = None
+    seconds: float | None = None  # wall time of the run
+    tokens: int | None = None  # word pieces trained on
+    params: int | None = None
+    best_val_loss: float | None = None  # the best loss on the held-back text: the checkpoint's
+    train_loss: float | None = None  # the last training loss
+    device: str | None = None
+    rounds: int | None = None  # set for a run over several machines: rounds of `inner_steps` steps each
+    inner_steps: int | None = None
+    same_design: bool  # every tensor is copied; otherwise only the ones whose shapes match
+    parent: bool  # the version this one was saved from
+
+
 class PretrainPlan(BaseModel):
     version: int | None = None  # null: no design saved yet
     parent: int | None = None
     mode: Literal["catch_up", "from_scratch"]  # the mode a run may use: catch_up only when continuing is valid
     can_continue: bool
+    sources: list[ContinueSource] = []  # what a catch-up may start from, newest first
+    continue_from: int | None = None  # the one a catch-up starts from: `from_version`, else the parent, else the newest
     continue_blocked: Literal["word_list_changed", "no_trained_parent"] | None = None
     estimating: bool  # the size preview is not known yet: POST /pretraining/preview, then ask again
     pieces: int | None = None
@@ -277,9 +302,17 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
     (`estimating` otherwise); it never computes it."""
     v = services.current_version() if body.version is None else _version(services, body.version)
     parent = _parent(services, v)
-    ok = plan.can_continue(v, parent)
-    blocked = None if ok else "word_list_changed" if plan.word_list_changed(v, parent) else "no_trained_parent"
-    mode = plan.forced_mode(v, parent, body.mode)
+    versions = services.versions()
+    sources = plan.continue_sources(v, versions, lambda path: _absolute(services, path))
+    numbers = [s["version"] for s in sources]
+    if body.from_version is not None and body.from_version not in numbers:
+        raise HTTPException(400, f"Version {body.from_version} has no trained weights with this version's word list to start from.")
+    chosen = body.from_version if body.from_version is not None else parent.number if parent and parent.number in numbers else next(iter(numbers), None)
+    source = next((p for p in versions if p.number == chosen), None)
+    ok = source is not None
+    blocked = (None if ok else "word_list_changed" if parent is not None and parent.best_checkpoint and plan.word_list_changed(v, parent)
+               else "no_trained_parent")
+    mode = plan.forced_mode(v, source, body.mode)
     ids = list(dict.fromkeys(body.dataset_ids))
     try:
         known = services.cached_preview(ids, body.preview_rows) if ids else {}
@@ -310,11 +343,12 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
     rule = plan.plateau_rule(steps, steps * measured["seconds_per_step"] / 3600 if steps and measured else None, body.plateau)
     if not reason:
         label, job_params = plan.job_params(v, parent, ids, mode, body.rows, body.hold, steps, pieces,
-                                            plan.user_text(_sets(services), ids), rule)
+                                            plan.user_text(_sets(services), ids), rule, source)
         job = NewPretrainJob(label=label, params=job_params)
     lr = (((v.spec if v else None) or {}).get("train", {}).get("optimizer", {}).get("config", {}) or {}).get("lr")
     return PretrainPlan(
         version=v.number if v else None, parent=parent.number if parent else None, mode=mode, can_continue=ok, continue_blocked=blocked,
+        sources=[ContinueSource.model_validate(s) for s in sources], continue_from=chosen,
         estimating=estimating, pieces=pieces, estimated=bool(preview.get("estimated")), params=params, context=context,
         pieces_per_step=per_step, passes_over_text=max(1, round(pieces / per_step)) if pieces else None, steps=steps,
         minutes=max(1, round(steps * measured["seconds_per_step"] / 60)) if steps and measured else None, lr=lr, sizing=size,

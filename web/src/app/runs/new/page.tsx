@@ -26,7 +26,7 @@ import { planBody } from "../../pretraining/logic";
 import { QUICKTEST } from "../../quick-test/copy";
 import { Coordinator, FIELD, Hint, OuterLoop, Workers, selectedText } from "./fields";
 import { fill, NEW_RUN as T } from "./copy";
-import { busyPeers, ctaLabel, defaultSftVersion, localForced, nameList, peersOf, pinnedJob, runHref, shapeOf, workersOf, type Node, type Stage } from "./logic";
+import { busyPeers, ctaLabel, defaultSftVersion, localForced, nameList, peersOf, pinnedJob, runHref, shapeOf, sourceFacts, workersOf, type Node, type Source, type Stage } from "./logic";
 
 
 const SLOW_MS = 6_000;
@@ -96,6 +96,7 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
     setPicked(machines.data.filter((n) => n.local).map((n) => n.address));
   }
   const [mode, setMode] = useState<"catch_up" | "from_scratch">("from_scratch");
+  const [fromVersion, setFromVersion] = useState<number | null>(null);
   const [dataset, setDataset] = useState<"stories" | "slice" | "problems">("stories");
   const [minutes, setMinutes] = useState<"1" | "3" | "10">("3");
   const [failure, setFailure] = useState("");
@@ -103,6 +104,7 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
   const rows = jobRows(useCluster().data, undefined);
   const change = (patch: Partial<Form>) => {
     setForm((f) => ({ ...f, ...patch }));
+    if (patch.version !== undefined) setFromVersion(null); // another version has its own list of earlier runs
     setFailure("");
   };
 
@@ -118,8 +120,8 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
 
   // The plan is the Pretraining page's: the server turns the choices into the job to queue.
   const plan = useQuery({
-    queryKey: ["pretraining", "plan", "new-run", version, ids, mode],
-    queryFn: ({ signal }) => unwrap(api.POST("/pretraining/plan", { body: planBody({ version, datasetIds: ids, mode, rows: "16", hold: "5%", length: "Medium" }), signal })),
+    queryKey: ["pretraining", "plan", "new-run", version, ids, mode, fromVersion],
+    queryFn: ({ signal }) => unwrap(api.POST("/pretraining/plan", { body: planBody({ version, datasetIds: ids, mode, rows: "16", hold: "5%", length: "Medium", fromVersion }), signal })),
     enabled: single && ids.length > 0,
     placeholderData: keepPreviousData,
   });
@@ -230,6 +232,10 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
           </>
         )}
       </section>
+
+      {single && mode === "catch_up" && (
+        <Sources plan={plan.data} onPick={(n) => { setFromVersion(n); setFailure(""); }} />
+      )}
 
       {stage === "pretrain" && (
         <Slot query={sets} title={T.text} loading={T.loadingText} failed={T.textFailed}>
@@ -348,5 +354,40 @@ export default function NewRunPage() {
         <Fields defaults={defaults} sets={sets} machines={machines} />
       </main>
     </TooltipProvider>
+  );
+}
+
+/** The earlier runs a catch-up may start from, each with what it did, as radio rows; the plan's choice is ticked. */
+function Sources({ plan, onPick }: { plan: { sources?: Source[]; continue_from?: number | null; continue_blocked?: string | null } | undefined; onPick: (version: number) => void }) {
+  if (!plan) return <p className="text-sm text-muted-foreground">{T.sourcesLoading}</p>;
+  const sources = plan.sources ?? [];
+  if (sources.length === 0) return <p className="text-sm text-muted-foreground">{plan.continue_blocked === "word_list_changed" ? T.noSourceWordList : T.noSource}</p>;
+  return (
+    <fieldset className="flex flex-col gap-2">
+      <legend className="mb-2 text-xl font-semibold">
+        <Hint tip={T.sourcesTip}>{T.sources}</Hint>
+      </legend>
+      {sources.map((s) => {
+        const { title, when, facts, design } = sourceFacts(s);
+        const on = plan.continue_from === s.version;
+        return (
+          <label key={s.version} data-testid={`source-${s.version}`} className={cn("flex cursor-pointer gap-3 rounded-lg border p-3", on ? "border-primary bg-accent" : "border-border")}>
+            <input type="radio" name="continue-from" className="mt-1" checked={on} onChange={() => onPick(s.version)} />
+            <span className="flex min-w-0 flex-col gap-1">
+              <span className="text-base font-medium text-foreground">
+                {title}
+                {when && <span className="ml-2 text-sm font-normal text-muted-foreground">{when}</span>}
+              </span>
+              <span className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground tabular-nums">
+                {facts.map((f) => (
+                  <span key={f}>{f}</span>
+                ))}
+              </span>
+              <span className="text-sm text-muted-foreground">{design}</span>
+            </span>
+          </label>
+        );
+      })}
+    </fieldset>
   );
 }

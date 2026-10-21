@@ -1596,6 +1596,166 @@
         "title": "ContinueBody",
         "type": "object"
       },
+      "ContinueSource": {
+        "description": "A trained version a catch-up may start from, and what its run did (studio_ia.pretraining_plan.run_source). Null: the run did not record it.",
+        "properties": {
+          "best_val_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Val Loss"
+          },
+          "change": {
+            "default": "",
+            "title": "Change",
+            "type": "string"
+          },
+          "device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "inner_steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inner Steps"
+          },
+          "name": {
+            "default": "",
+            "title": "Name",
+            "type": "string"
+          },
+          "params": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Params"
+          },
+          "parent": {
+            "title": "Parent",
+            "type": "boolean"
+          },
+          "rounds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rounds"
+          },
+          "same_design": {
+            "title": "Same Design",
+            "type": "boolean"
+          },
+          "seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seconds"
+          },
+          "status": {
+            "default": "",
+            "title": "Status",
+            "type": "string"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
+          },
+          "steps_planned": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps Planned"
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens"
+          },
+          "train_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Train Loss"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "same_design",
+          "parent"
+        ],
+        "title": "ContinueSource",
+        "type": "object"
+      },
       "CorrectionRequest": {
         "properties": {
           "correction": {
@@ -1849,6 +2009,10 @@
             "title": "Inner Steps",
             "type": "integer"
           },
+          "max_steps": {
+            "title": "Max Steps",
+            "type": "integer"
+          },
           "outer_lr": {
             "title": "Outer Lr",
             "type": "number"
@@ -1856,6 +2020,10 @@
           "outer_momentum": {
             "title": "Outer Momentum",
             "type": "number"
+          },
+          "remote_inner_steps": {
+            "title": "Remote Inner Steps",
+            "type": "integer"
           },
           "rounds": {
             "title": "Rounds",
@@ -1865,9 +2033,11 @@
         "required": [
           "rounds",
           "inner_steps",
+          "remote_inner_steps",
           "outer_lr",
           "outer_momentum",
-          "delta_dtype"
+          "delta_dtype",
+          "max_steps"
         ],
         "title": "Defaults",
         "type": "object"
@@ -2477,6 +2647,39 @@
           "name"
         ],
         "title": "ExportRow",
+        "type": "object"
+      },
+      "ExtendRun": {
+        "description": "What the live run page sends to make a run longer. At least one of the two.",
+        "properties": {
+          "inner_steps": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inner Steps"
+          },
+          "rounds": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rounds"
+          }
+        },
+        "title": "ExtendRun",
         "type": "object"
       },
       "FieldsModel": {
@@ -3311,6 +3514,21 @@
           "node": {
             "title": "Node",
             "type": "string"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan"
           },
           "round": {
             "title": "Round",
@@ -5871,6 +6089,17 @@
             "title": "Dataset Ids",
             "type": "array"
           },
+          "from_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Version"
+          },
           "hold": {
             "default": 0.05,
             "exclusiveMaximum": 0.5,
@@ -6183,6 +6412,7 @@
               "teacher",
               "tokenizer",
               "tokenizing",
+              "cached",
               "inviting"
             ],
             "title": "Phase",
@@ -6341,6 +6571,17 @@
             ],
             "title": "Continue Blocked"
           },
+          "continue_from": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Continue From"
+          },
           "enough": {
             "anyOf": [
               {
@@ -6492,6 +6733,14 @@
                 "type": "null"
               }
             ]
+          },
+          "sources": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ContinueSource"
+            },
+            "title": "Sources",
+            "type": "array"
           },
           "steps": {
             "anyOf": [
@@ -8767,6 +9016,21 @@
             "title": "Paused",
             "type": "boolean"
           },
+          "plan": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan"
+          },
           "polishing": {
             "default": false,
             "title": "Polishing",
@@ -8791,6 +9055,17 @@
           "round": {
             "title": "Round",
             "type": "integer"
+          },
+          "rounds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rounds"
           },
           "shards": {
             "anyOf": [
@@ -9046,6 +9321,11 @@
               }
             ],
             "title": "Best Val Loss"
+          },
+          "can_join": {
+            "default": false,
+            "title": "Can Join",
+            "type": "boolean"
           },
           "can_pause": {
             "default": false,
@@ -9371,6 +9651,7 @@
               "resumed",
               "took_over",
               "stepped_down",
+              "extended",
               "polish",
               "polish_off",
               "lessons",
@@ -10722,6 +11003,19 @@
         "title": "StackExchangeUpdate",
         "type": "object"
       },
+      "Stages": {
+        "properties": {
+          "replay": {
+            "default": 0.2,
+            "exclusiveMaximum": 1.0,
+            "minimum": 0.0,
+            "title": "Replay",
+            "type": "number"
+          }
+        },
+        "title": "Stages",
+        "type": "object"
+      },
       "Start": {
         "properties": {
           "note": {
@@ -10849,6 +11143,51 @@
             ],
             "title": "Overlap"
           },
+          "pivots": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "halve_lr",
+                    "next_dataset",
+                    "drop_lessons"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pivots"
+          },
+          "plateau_checks": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plateau Checks"
+          },
+          "plateau_min_improvement": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 1.0,
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plateau Min Improvement"
+          },
           "polish_every": {
             "anyOf": [
               {
@@ -10884,6 +11223,16 @@
             "minimum": 1.0,
             "title": "Rounds",
             "type": "integer"
+          },
+          "stages": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Stages"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "target_win_rate": {
             "anyOf": [
@@ -17193,6 +17542,102 @@
         ]
       }
     },
+    "/distributed/runs/{run_id}/extend": {
+      "post": {
+        "description": "Make a run going on longer: `rounds` is the new total (more than it has), `inner_steps` the new H for the rounds still to come\n(the outer learning rate and momentum stay as they are). Every member takes the change from its next rounds without leaving, and\nthe learning rate carries on from where it is. 409 when the run is over or not going, 422 for numbers that change nothing or shorten\nthe run (Stop ends it sooner). A run another computer coordinates is extended by asking that computer.",
+        "operationId": "extend_run_distributed_runs__run_id__extend_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtendRun"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Extend Run",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/join": {
+      "post": {
+        "description": "Ask the computer that coordinates a running run to add this one: it joins from the round after its invitation. 409 for a run\nthis computer coordinates; the coordinator's own refusals come back as they are.",
+        "operationId": "join_run_distributed_runs__run_id__join_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Join Run",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
     "/distributed/runs/{run_id}/lessons": {
       "get": {
         "description": "What the teacher gave the run, one lesson per polish: the questions, what the model said and the better answers. 409 when the\nrun is not going. A run another computer coordinates is read by asking that computer.",
@@ -17347,6 +17792,58 @@
           }
         },
         "summary": "Keep Run Lesson",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/members/{node}/add": {
+      "post": {
+        "description": "The coordinator's side of a join: add `node`, one of this computer's listed machines, to the running run. The scheduler offers\nit a slot now and invites it, and it trains from the round after; a machine that is busy gets a slot once it is free. 409 when the\nrun is not running here, for a node that is not listed, already in the run, or stopped by the owner, and for a full run.",
+        "operationId": "add_member_distributed_runs__run_id__members__node__add_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node",
+            "required": true,
+            "schema": {
+              "title": "Node",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Member",
         "tags": [
           "distributed"
         ]

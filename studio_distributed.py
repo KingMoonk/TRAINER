@@ -28,6 +28,7 @@ ASK_RETRIES = 2  # timed-out asks sent again; safe, because the member job's id 
 INVITE_WAIT = 5.  # seconds `invite` waits for the answers before it returns; a slow machine's ask goes on in the background
 ACTIVE = ("queued", "starting", "waiting", "running")
 UNPLACED = "It was busy when the run was placed. It joins a later round if it is free by then."
+ASKED = "It asked to join. It joins at the round after it gets a slot, once it is free."
 ENDED = ("finished", "stopped", "failed")
 ENDED_JOB = ("done", "failed", "stopped")  # a queue job's statuses once it is over (studio_queue.Job)
 NOT_RESTARTED = ("resuming", "restart_from", "gang")  # params of one run's own life, not of its setup
@@ -152,6 +153,7 @@ PREPARING = {
     "teacher": "Checking the teacher.",
     "tokenizer": "Learning the tokenizer.",
     "tokenizing": "Tokenizing the text",
+    "cached": "Reading the tokenized text from the cache.",
     "inviting": "Sending the invitations to the other machines.",
 }
 
@@ -464,6 +466,24 @@ def release_member(run, node, client_for=PeerClient):
         pass
 
 
+def choose(job, node, address):
+    """Add a listed machine to a running run's chosen machines, because the person on it asked to join: the scheduler offers it a slot
+    as it does the others (studio_remote.Cluster.offer), and it joins at the round after its invitation. A machine chosen before is
+    chosen again, its last reason cleared. Returns the run."""
+    run = run_of(job)
+    with _LOCK:
+        rows = list(job.params.get("machines") or [])
+        if not any(row.get("address") == address for row in rows):
+            job.params = {**job.params, "machines": [*rows, {"node": node, "address": address}]}
+        machine = next((m for m in run.machines if m.address == address), None)
+        if machine is None:
+            run.machines.append(Machine(node=node, address=address, state="unplaced", reason=ASKED))
+        elif not (machine.peer_job and machine.state == "invited"):
+            machine.state, machine.reason, machine.error = "unplaced", ASKED, ""
+    persist()
+    return run
+
+
 def lapse(run, node, client_for=PeerClient):
     """A member's slot lapsed: take its member job off its machine's queue, and show the machine as unplaced until a slot opens for it."""
     release_member(run, node, client_for)
@@ -549,7 +569,8 @@ def peer_facts(run, cluster):
         mine = next((j for j in jobs if machine.peer_job and j["id"] == machine.peer_job), None)
         other = next((j for j in jobs if j["status"] == "running" and j["id"] != machine.peer_job), None)
         down = cluster.is_down(machine.node)
-        out[machine.node] = {"down": down, "slow": down and cluster.answers_slowly(machine.node), "member_running": bool(mine and mine["status"] == "running"),
+        failed = next((f for f in studio_facts.member_failures(cluster, machine.node) if machine.peer_job and f["id"] == machine.peer_job), None)
+        out[machine.node] = {**({"member_failed": failed["error"]} if failed else {}), "down": down, "slow": down and cluster.answers_slowly(machine.node), "member_running": bool(mine and mine["status"] == "running"),
                              "blocking": {"label": other["label"], "eta_s": other.get("eta_s")} if other else None, "limits": held}
     return out
 
@@ -574,6 +595,11 @@ def limit_reason(node, held):
     if blocked:
         return f"{node}'s queue plan holds it: {blocked}. It continues when that ends."
     return f"The queue on {node} is paused. It continues when someone resumes it there."
+
+
+def member_failed_note(node, error):
+    """Why a machine is not in the run: its member job failed there, with the sentence that machine gave."""
+    return f"The member job on {node} failed: {error.rstrip()}"
 
 
 def busy_reason(blocking):
@@ -645,6 +671,8 @@ def _member(node, machine, known, history, ended, snap=None, peer=None):
         state, note = "invited", "Starting."
     elif peer and peer["down"]:
         state, note = "unreachable", slow_note(node, studio_cluster.POLL_TIMEOUT, "It is asked again shortly.") if peer["slow"] else down_note(node)
+    elif peer and peer.get("member_failed"):
+        state, note = "unreachable", member_failed_note(node, peer["member_failed"])
     elif peer and peer["member_running"]:
         state, note = "joining", f"Starting up on {node}."
     elif peer and peer["blocking"]:

@@ -68,6 +68,8 @@ export const T = {
   stopped: "stopped",
   failed: "failed",
   restart: "Restart",
+  join: "Join",
+  joinTip: "Train in this run from its next round. {coordinator} coordinates it and gives this computer a slot once it is free.",
   finished: "finished",
   noReason: "No reason was given.",
 } as const;

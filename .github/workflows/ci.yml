@@ -1,11 +1,12 @@
 name: CI
 
-# macOS minutes bill at 10x and Windows at 2x on a private repo, so: one run per change, none for docs pushed to main; the macOS and Windows runs are nightly.yml
+# macOS minutes bill at 10x and Windows at 2x on a private repo, so: one run per change, none for docs; the macOS and Windows runs are nightly.yml
 on:
   push:
     branches: [main]
     paths-ignore: ["**.md"]
-  pull_request:  # every PR, docs too: unit, web and secrets are required checks, and a check that never runs never passes
+  # Every PR runs, docs-only ones too: unit, web, secrets and title are required checks, and a skipped run never reports them.
+  pull_request:
 
 permissions:
   contents: read

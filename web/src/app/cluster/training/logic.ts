@@ -1,7 +1,9 @@
 // The Training tab's rules, apart from the page so a test can check them without a browser.
 import type { components } from "@/lib/api-schema";
 import { TRAINING as T } from "@/lib/copy/training";
+import { fill } from "@/lib/members";
 import type { Mark, Series } from "@/components/series-chart";
+import { initialRules, rulesParams, rulesProblem, type RulesForm } from "./rules";
 
 export type Run = components["schemas"]["Run"];
 export type Member = components["schemas"]["Member"];
@@ -33,7 +35,7 @@ export function deltaDtypeOf(text: string | undefined): DeltaDtype {
 }
 
 /** The form as typed: numbers stay text so a half-typed "0." is not rewritten under the cursor. */
-export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; chats: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; timeBox: boolean; deltaDtype: DeltaDtype; reviewedOnly: boolean; coordinator: string; teacher: string; polishEvery: string; targetWinRate: string };
+export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; chats: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; timeBox: boolean; deltaDtype: DeltaDtype; reviewedOnly: boolean; coordinator: string; teacher: string; polishEvery: string; targetWinRate: string; rules: RulesForm; maxSteps: number };
 
 /** A run that is still going: the list is re-read every couple of seconds while one is. */
 export function isActive(run: Run): boolean {
@@ -61,7 +63,14 @@ export function initialForm(defaults: Defaults | undefined, sets: TextSet[] | un
     teacher: "",
     polishEvery: "",
     targetWinRate: "",
+    rules: initialRules(),
+    maxSteps: defaults?.max_steps ?? 0,
   };
+}
+
+/** The steps per round the form starts from: the larger one when a machine other than this computer is chosen. */
+export function defaultInnerSteps(defaults: Defaults, machines: string[]): string {
+  return String(machines.length > 0 ? defaults.remote_inner_steps : defaults.inner_steps);
 }
 
 /** A whole number of at least one, or null. */
@@ -103,6 +112,15 @@ export function teacherProblem(form: Form): string {
   return "";
 }
 
+/** Why rounds × steps per round is more than a run trains, in a sentence, or "" when it is not (or a number is not filled in yet). */
+export function stepsProblem(form: Form): string {
+  const rounds = whole(form.rounds);
+  const steps = whole(form.innerSteps);
+  if (rounds === null || steps === null || form.maxSteps <= 0 || rounds * steps <= form.maxSteps) return "";
+  const n = (value: number) => value.toLocaleString("en-US");
+  return fill(T.tooManySteps, { rounds: n(rounds), steps: n(steps), total: n(rounds * steps), max: n(form.maxSteps) });
+}
+
 /** The teacher's part of the request: nothing while the options are blank. Only called when `teacherProblem` is empty. */
 function teaching(form: Form): Pick<StartRun, "teacher" | "polish_every" | "target_win_rate"> | undefined {
   const polish = whole(form.polishEvery);
@@ -124,7 +142,7 @@ export function startBody(form: Form): StartRun | null {
   const most = limit(form.maxMachines);
   if (least === null || most === null) return null;
   if (least !== undefined && most !== undefined && least > most) return null;
-  if (teacherProblem(form) !== "") return null;
+  if (stepsProblem(form) !== "" || teacherProblem(form) !== "" || rulesProblem(form.rules, form.polishEvery, form.rounds) !== "") return null;
   const teacher = teaching(form);
   return {
     version: form.version === "" ? null : Number(form.version),
@@ -142,6 +160,7 @@ export function startBody(form: Form): StartRun | null {
     delta_dtype: form.deltaDtype,
     reviewed_only: form.reviewedOnly,
     ...teacher,
+    ...rulesParams(form.rules),
   };
 }
 

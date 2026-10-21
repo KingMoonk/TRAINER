@@ -231,6 +231,9 @@ class Runner:
                 job.status, job.error = "stopped", "This machine restarted while it ran the job for another machine, which will place it again."
             elif job.status == "running" and job.kind == "pretrain_distributed":  # its coordinator went with this process
                 import studio_distributed
+                if getattr(studio_distributed.RUNS.get(job.id), "stopped", False):  # the person stopped the run; the app went before its job ended
+                    job.status = "stopped"
+                    continue
                 job.error = studio_distributed.recover(job)
                 job.status = "failed" if job.error else "waiting"  # resumes from its last completed round, or ends saying why
                 if job.error:

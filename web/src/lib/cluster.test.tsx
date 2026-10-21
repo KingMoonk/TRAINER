@@ -151,8 +151,8 @@ describe("an unset version store", () => {
 
   test("stops the 15-second poll, and keeps it for every other state", () => {
     expect(refetchPublished({ state: { error: unset } })).toBe(false);
-    expect(refetchPublished({ state: { error: null } })).toBe(15_000);
-    expect(refetchPublished({ state: { error: new ApiError(500, "/versions/published", "") } })).toBe(15_000);
+    expect(refetchPublished({ state: { error: null } })).toBe(60_000);
+    expect(refetchPublished({ state: { error: new ApiError(500, "/versions/published", "") } })).toBe(60_000);
   });
 });
 

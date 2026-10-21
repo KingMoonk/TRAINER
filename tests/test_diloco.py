@@ -373,6 +373,37 @@ class LiveView(Directory):
         with self.assertRaises(ValueError):
             c.progress(1, "a", generation, 2, "sleeping")
 
+    def test_the_owner_says_why_a_node_cannot_be_added_before_it_invites_it(self):
+        c = self.coordinator(min_members=1, max_members=2)
+        c.join("a")
+        self.assertEqual((c.refusal("a"), c.refusal("b")), ("a is already in this run.", ""))
+        c.join("b")
+        self.assertEqual(c.refusal("c"), "The run already has its 2 members.")
+        c.drop("b")
+        self.assertEqual(c.refusal("b"), "b was stopped by the run's owner.")
+        c.stop()
+        self.assertEqual(c.refusal("c"), studio_diloco.FINISHED)
+
+    def test_an_overlapping_member_that_sent_the_open_round_may_report_the_next_one(self):
+        c = self.coordinator(inner_steps=2, first_round_seconds=100., min_members=2)
+        c.join("a")
+        c.join("b")
+        generation = c.round_view(0, "a")["generation"]
+        self.clock.now = 2.
+        self.assertTrue(c.progress(0, "a", generation, 0, "training", 2, 3.5, 900.))
+        with self.assertRaises(Stale):
+            c.progress(1, "a", generation, 0, "training", 1)  # it has not sent round 0 yet
+        self.send_as(c, "a", 0)
+        self.clock.now = 7.
+        self.assertTrue(c.progress(1, "a", generation, 0, "training", 1, 3.1, 950.))
+        progress = c.snapshot()["nodes"]["a"]["progress"]
+        self.assertEqual((progress["step"], progress["loss"], progress["reported_ago"], [s["step"] for s in progress["samples"]]),
+                         (2, 3.5, 0., [2]))  # still round 0's report, just fresh
+        with self.assertRaises(Stale):
+            c.progress(2, "a", generation, 0, "training", 1)  # two rounds ahead
+        with self.assertRaises(Stale):
+            c.progress(1, "b", generation, 0, "training", 1)  # b has not sent round 0
+
     def send_as(self, c, node, number, epoch=0):
         view = c.round_view(number, node)
         c.submit(number, node, view["generation"], epoch, 10, 2, support.constant_delta(c), 1.)

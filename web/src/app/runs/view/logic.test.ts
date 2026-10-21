@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { round, run } from "@/app/cluster/training/test-data";
-import { clock, dilocoShape, gapNow, gapText, gaps, overfit, overfitBad, percentOf, roundPairs, roundSeries, runViewHref, soloShape, stepSeries, type Curve } from "./logic";
+import { clock, dilocoShape, extendRequest, gapNow, gapText, gaps, overfit, overfitBad, percentOf, roundPairs, roundSeries, runViewHref, soloShape, stepSeries, type Curve } from "./logic";
 
 const curve = (over: Partial<Curve> = {}): Curve => ({ steps: [], smooth: [], heldout: [], ...over });
 /** A training line that keeps falling, one point per 100 steps. */
@@ -91,5 +91,20 @@ describe("small helpers", () => {
   test("clock reads minutes and seconds, and hours past an hour", () => {
     expect(clock(130)).toBe("2:10");
     expect(clock(3725)).toBe("1:02:05");
+  });
+});
+
+describe("extendRequest", () => {
+  const going = { rounds: 10, inner_steps: 100 };
+  test("adds the rounds to the run's own and leaves H out when it is not changed", () => {
+    expect(extendRequest(going, "40", "")).toEqual({ rounds: 50 });
+    expect(extendRequest(going, "40", "100")).toEqual({ rounds: 50 });
+  });
+  test("sends a new H alone or with the rounds", () => {
+    expect(extendRequest(going, "0", "200")).toEqual({ inner_steps: 200 });
+    expect(extendRequest(going, "5", "50")).toEqual({ rounds: 15, inner_steps: 50 });
+  });
+  test("is null for what the API would refuse or what changes nothing", () => {
+    for (const [add, steps] of [["0", ""], ["", ""], ["-1", ""], ["1.5", ""], ["abc", ""], ["5", "0"], ["5", "2.5"], ["100000", ""]]) expect(extendRequest(going, add, steps)).toBeNull();
   });
 });

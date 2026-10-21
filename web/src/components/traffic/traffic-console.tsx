@@ -56,7 +56,7 @@ export function TrafficConsole() {
   const live = t.connection === "live" && !t.paused;
 
   return (
-    <section aria-label={TRAFFIC.title} className="isolate fixed inset-x-0 bottom-0 z-30 flex h-[45dvh] min-h-64 flex-col border-t border-surface-border-strong bg-popover text-sm text-popover-foreground shadow-card md:left-60">
+    <section aria-label={TRAFFIC.title} className="isolate fixed inset-x-0 bottom-0 z-30 flex h-[45dvh] min-h-64 flex-col border-t pb-[var(--busy-bar,0px)] border-surface-border-strong bg-popover text-sm text-popover-foreground shadow-card md:left-60">
       <header className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-surface-border px-3 py-1.5">
         <h2 className="flex items-center gap-2 font-medium">
           <span aria-hidden="true" className={cn("size-2 rounded-full", live ? "bg-success" : t.paused ? "bg-warning" : "bg-muted-foreground")} />

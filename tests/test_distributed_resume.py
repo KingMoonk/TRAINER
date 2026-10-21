@@ -113,6 +113,15 @@ class Resume(unittest.TestCase):
         self.assertFalse(runs.RUNS["run1"].restarted)
         self.assertEqual(runs.view(runs.RUNS["run1"], coordinator, job)["round"], 2)
 
+    def test_a_run_the_person_stopped_is_not_resumed_when_the_app_went_before_its_job_ended(self):
+        self.first_life(rounds_done=1)
+        runs.RUNS["run1"].stopped = True  # stop_run ran; the app went before the queue ended the job (#613)
+        runs.persist()
+        runner = self.restart()
+        (job,) = runner.jobs
+        self.assertEqual(job.status, "stopped")
+        self.assertNotIn("resuming", job.params)
+
     def test_placement_after_a_resume_uses_the_machines_chosen_at_launch_not_the_saved_gang(self):
         self.first_life()
         runner = self.restart()

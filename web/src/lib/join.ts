@@ -6,7 +6,7 @@ import { api, unwrap } from "@/lib/api";
 import type { components } from "@/lib/api-schema";
 import { problem } from "@/lib/cluster";
 import { JOIN } from "@/lib/copy/join";
-import { useEvent } from "@/lib/events";
+import { useLive } from "@/lib/live";
 import { fill } from "@/lib/members";
 
 export type Invite = components["schemas"]["Invite"];
@@ -14,23 +14,17 @@ export type PauseRequest = components["schemas"]["PauseRequest"];
 export type Invites = components["schemas"]["Invites"];
 
 const INVITES = ["distributed", "invites"] as const;
-const BUSY_MS = 2_000;
-const IDLE_MS = 5_000; // a pause request from another computer arrives without an event on this one
 
 /**
  * The runs other computers added this one to, and the pause requests they sent (GET /distributed/invites). Joining needs no accept
- * step, so this is only ever shown. Re-read on every `queue` and `cluster` event, and on a timer: quickly while there is something
- * to watch, slowly otherwise.
+ * step, so this is only ever shown. Re-read on every `queue`, `cluster` and `invites` event (a pause request arrived or was
+ * answered), and on `facts`: the owner's account of the run, which the invite shows, reaches this computer that way.
  */
 export function useInvites() {
-  const client = useQueryClient();
-  const refresh = () => void client.invalidateQueries({ queryKey: INVITES });
-  useEvent("queue", refresh);
-  useEvent("cluster", refresh);
+  useLive(INVITES, ["queue", "cluster", "invites", "facts"]);
   return useQuery({
     queryKey: INVITES,
     queryFn: ({ signal }) => unwrap(api.GET("/distributed/invites", { signal })),
-    refetchInterval: (query) => ((query.state.data?.invites.length ?? 0) + (query.state.data?.pause_requests.length ?? 0) > 0 ? BUSY_MS : IDLE_MS),
     retry: false,
   });
 }

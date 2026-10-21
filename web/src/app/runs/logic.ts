@@ -42,6 +42,8 @@ export type RunRow = {
   state: string;
   /** A failed job still in the queue's failed list: it can be restarted. */
   restartable: boolean;
+  /** A running DiLoCo run another computer coordinates and this one is not in: it may ask to join from the next round. */
+  canJoin: boolean;
 };
 
 export type Inputs = { queue: Queue | undefined; runs: Run[] | undefined; clusterJobs: ClusterJob[] | undefined; nodes: ClusterNode[] | undefined };
@@ -118,7 +120,7 @@ function blank(id: string): RunRow {
   return {
     id, section: "scheduled", name: "", kindText: "", distributed: false, version: null, workers: [], coordinator: "", round: 0, rounds: 0,
     innerSteps: 0, step: 0, total: 0, trainLoss: null, valLoss: null, etaS: null, queueIndex: -1, held: false, note: "", forOwner: "", state: "",
-    restartable: false,
+    restartable: false, canJoin: false,
   };
 }
 
@@ -156,6 +158,7 @@ export function buildRows({ queue, runs, clusterJobs, nodes }: Inputs): RunRow[]
       held: job?.status === "held",
       note: run.note,
       state: run.state,
+      canJoin: run.can_join,
     });
     rows.set(run.id, row);
   }

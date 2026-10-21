@@ -1,18 +1,16 @@
 "use client";
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { isActive, type Run } from "@/app/cluster/training/logic";
+import { useQuery } from "@tanstack/react-query";
+import type { Run } from "@/app/cluster/training/logic";
 import { useMachines } from "@/app/cluster/training/use-training";
 import { thisComputer } from "@/app/runs/logic";
 import type { Job, Queue } from "@/app/queue/logic";
 import { useQueue } from "@/app/queue/use-queue";
 import { api, ApiError, unwrap } from "@/lib/api";
-import { useEvent } from "@/lib/events";
+import { payloadIs, useLive } from "@/lib/live";
 import { inviteFor, useInvites, type Invite } from "@/lib/join";
 import type { Curve } from "./logic";
 
-const ACTIVE_MS = 1_000;
-const CURVE_MS = 3_000;
 const DISTRIBUTED = "pretrain_distributed";
 const MEMBER = "diloco_member";
 
@@ -26,10 +24,8 @@ export type RunView =
 
 /** A run this computer coordinates (GET /distributed/runs/{id}), or null when there is none by that id. */
 function useDilocoRun(id: string) {
-  const client = useQueryClient();
-  const refresh = () => void client.invalidateQueries({ queryKey: ["distributed", "run", id] });
-  useEvent("queue", refresh);
-  useEvent("cluster", refresh);
+  // `run`: the coordinator here changed; `facts`: the cluster's account of a run another computer coordinates changed
+  useLive(["distributed", "run", id], ["queue", "cluster", "facts", "run"], { enabled: id !== "", match: payloadIs("run", id, ["run"]) });
   return useQuery({
     queryKey: ["distributed", "run", id],
     enabled: id !== "",
@@ -41,8 +37,6 @@ function useDilocoRun(id: string) {
         throw error;
       }
     },
-    // The members report to the coordinator without telling this page, so it reads the run every second while the run is going.
-    refetchInterval: (query) => (query.state.data && isActive(query.state.data) ? ACTIVE_MS : false),
     retry: false,
   });
 }
@@ -59,11 +53,12 @@ export function useRunView(id: string): RunView {
   const coordinated = useDilocoRun(invite?.run_id ?? ""); // the owner's account of the run this job is a member of, from the replica
   const solo = run.isSuccess && run.data === null && job !== undefined && job.kind !== DISTRIBUTED && job.kind !== MEMBER;
   const running = queue.data?.job?.id === id;
+  // a `train` event is sent at every step, so the curve is re-read at most once a second
+  useLive(["pretraining", "curve", id], ["train"], { enabled: running, match: payloadIs("job", id, ["train"]), throttleMs: 1_000 });
   const curve = useQuery({
     queryKey: ["pretraining", "curve", id],
     enabled: solo && job !== undefined && job.status !== "waiting" && job.status !== "held",
     queryFn: ({ signal }) => unwrap(api.GET("/pretraining/jobs/{job_id}/curve", { params: { path: { job_id: id } }, signal })),
-    refetchInterval: running ? CURVE_MS : false,
     retry: false,
   });
 

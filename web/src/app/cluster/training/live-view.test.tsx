@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
-import { mockApi } from "@/test/network";
+import { emit, mockApi } from "@/test/network";
 import { renderPage } from "@/test/render";
 import type { Run } from "./logic";
 import TrainingPage from "./page";
@@ -10,7 +10,7 @@ import { event, lane, line, member, round, run } from "./test-data";
 // The Training tab's live view against a mocked API: the topology and its edges, the round banner, the timeline, the charts, the event log, the
 // list of other runs, the folded start form and the polling. The contract tier (src/contract) renders it from recorded --fake responses.
 
-const DEFAULTS = { rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16" };
+const DEFAULTS = { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", max_steps: 1_000_000 };
 const SETS = [{ id: "stories", name: "Stories", count: 1200, on: true, held: false, library: false }];
 const node = (address: string, over: Record<string, unknown> = {}) => ({
   address, local: false, hostname: address, version: "1", device: "cuda", device_name: "RTX 4090", memory_bytes: 0, busy: false, dtypes: [], online: true, error: "", tailnet_name: "", ...over,
@@ -209,12 +209,17 @@ describe("Training tab: more than one run", () => {
   });
 });
 
-describe("Training tab: polling", () => {
-  test("re-reads the runs about every second while one is going", async () => {
+describe("Training tab: live updates", () => {
+  test("re-reads the runs when the coordinator says one changed, without polling", async () => {
     const calls = server([midRound()]);
     renderPage(<TrainingPage />, { route: "/cluster/training" });
     await screen.findByTestId("run-r1");
-    await waitFor(() => expect(calls.runs).toBeGreaterThanOrEqual(3), { timeout: 4000 });
+    await waitFor(() => expect(calls.runs).toBeGreaterThanOrEqual(1));
+    const before = calls.runs;
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(calls.runs).toBe(before);
+    emit("run", { run: "r1" });
+    await waitFor(() => expect(calls.runs).toBeGreaterThan(before));
   });
 
   test("a finished run names the version it saved; a stopped one says nothing", async () => {

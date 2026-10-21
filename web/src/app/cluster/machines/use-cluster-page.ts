@@ -5,17 +5,18 @@ import { toast } from "sonner";
 import { api, unwrap } from "@/lib/api";
 import { problem } from "@/lib/cluster";
 import { CLUSTER as T } from "@/lib/copy/cluster";
+import { useLive } from "@/lib/live";
 import type { QueueRow } from "@/lib/cluster";
 
 export const NODES = ["cluster", "nodes"] as const;
 const ACCESS = ["cluster", "access"] as const;
 
-/** The machines (GET /cluster/nodes, re-read every few seconds while others are listed, since a peer changes without telling this one). */
+/** The machines (GET /cluster/nodes), re-read when one comes online, goes offline or changes (`nodes`), or its facts change. */
 export function useNodes() {
+  useLive(NODES, ["nodes", "facts", "queue"]);
   return useQuery({
     queryKey: NODES,
     queryFn: ({ signal }) => unwrap(api.GET("/cluster/nodes", { signal })),
-    refetchInterval: (query) => ((query.state.data?.length ?? 0) > 1 ? 5_000 : false),
     retry: false,
   });
 }

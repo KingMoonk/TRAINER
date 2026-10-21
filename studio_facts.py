@@ -15,6 +15,7 @@ kind        key       written by          value
 heartbeat   node      every origin        {"beat": n}
 node        node      every origin        the NodeInfo payload, plus {"peers": n answering}
 queue       jobs      every origin        the running and waiting jobs queued here, as GET /queue/jobs lists them
+queue       members   every origin        the `diloco_member` jobs that failed here, {"id", "run", "error"}: the owner's rows show why a member never joined
 queue       limits    every origin        the queue plan and what holds it now: {"plan", "blocked", "paused"} (studio_cluster_queue.limits_of)
 leases      granted   every origin        the leases this node granted, with seconds since the runner was heard
 events      node      every origin        the last EVENTS_KEPT cluster events
@@ -50,6 +51,16 @@ def _queue_rows(runner):
             for j in jobs if j.status in QUEUE_STATES]
 
 
+MEMBER_FAILURES_KEPT = 20
+
+
+def _member_failures(runner):
+    """The last failed `diloco_member` jobs of this node's queue (a failed job leaves `jobs`), so the owner of the run can say why."""
+    with runner.lock:
+        failed = [j for j in runner.jobs if j.kind == "diloco_member" and j.status == "failed"]
+    return [{"id": j.id, "run": j.params.get("run", ""), "error": j.error or "The member job failed."} for j in failed[-MEMBER_FAILURES_KEPT:]]
+
+
 def queue_limits(runner):
     """This node's queue plan and what holds its jobs now, as studio_cluster_queue.limits_of reads a GET /queue."""
     import studio_cluster_queue
@@ -72,6 +83,7 @@ def publish(cluster):
         lambda: replica.put("node", "node", {**dataclasses.asdict(dataclasses.replace(cluster.own(), busy=cluster.busy())),
                                              "dtypes": list(cluster.own().dtypes), "peers": sum(1 for i in cluster._known.values() if i.online)}),
         lambda: replica.put("queue", "jobs", _queue_rows(cluster.runner)),
+        lambda: replica.put("queue", "members", _member_failures(cluster.runner)),
         lambda: replica.put("queue", "limits", queue_limits(cluster.runner)),
         lambda: replica.put("leases", "granted", [{**lease.as_dict(), "silent_s": silent} for lease, silent in cluster.owner.leases.held()]),
         lambda: replica.put("events", "node", [{**{k: v for k, v in e.items() if k != "at"}, "ago": max(0., now - e["at"])}
@@ -205,6 +217,12 @@ def queue_facts(cluster, origin):
     """(jobs, age_s) of the queue entry an origin wrote, or ([], None)."""
     found = cluster.state.get(origin, "queue", "jobs")
     return (list(found["value"]), found["age"]) if found else ([], None)
+
+
+def member_failures(cluster, origin):
+    """The failed member jobs an origin wrote ([{"id", "run", "error"}]), or [] when the replica holds none."""
+    found = cluster.state.get(origin, "queue", "members")
+    return list(found["value"]) if found else []
 
 
 def limits_facts(cluster, origin):
