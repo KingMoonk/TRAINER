@@ -15,6 +15,7 @@ import studio_distributed as runs
 import studio_facts
 import studio_state
 from studio_api.app import create_app
+from studio_api.routers import distributed as distributed_routes
 from studio_api.hosts import ANY
 from studio_peer import PeerError
 from studio_queue import Runner
@@ -218,6 +219,23 @@ class TwoNodes(unittest.TestCase):
         for node in (self.a, self.b):
             rows = node.listed()
             self.assertEqual([(r["id"], r["term"], r["origin"]) for r in rows], [("run1", 3, "B")])
+
+    def test_a_run_a_still_holds_but_handed_to_b_at_a_later_term_is_stopped_by_asking_b(self):
+        self.a.runs.append(a_run())
+        later = a_run()
+        later.term, later.owner = 3, "B"
+        self.b.runs.append(later)
+        self.sync()
+        self.net.calls.clear()
+        reply = self.a.client.post("/distributed/runs/run1/stop")
+        self.assertEqual((reply.status_code, reply.json()["origin"]), (200, "B"), reply.text)
+        self.assertEqual([(a, m, p) for a, m, p, _, _ in self.net.calls], [("B", "POST", "distributed/runs/run1/stop")])
+        self.assertFalse(self.a.runs[0].stopped)  # A's old copy is not the run any more
+
+        self.a.runs.append(a_run("run2"))
+        self.sync()
+        self.assertIsNone(distributed_routes._remote(self.a.services, "run2"))  # only A holds it: A commands it itself
+        self.assertEqual(distributed_routes._remote(self.a.services, "run1")["origin"], "B")
 
     def test_what_a_node_writes_is_small_and_only_under_its_own_origin(self):
         self.a.runs.append(a_run())

@@ -441,11 +441,12 @@ def _forward(services, row, path, body=None):
 
 
 def _remote(services, run_id):
-    """The row of a run another computer coordinates, else None."""
+    """The row of a run another computer coordinates, else None. It is the row the list shows: a run this computer queued and
+    still holds, but handed to another computer at a later term, is that computer's to command."""
     cluster = _cluster(services)
-    if cluster is None or any(run.id == run_id for run, _, _ in cluster.local_runs()):
+    if cluster is None:
         return None
-    row = next((row for row in studio_facts.cluster_runs(cluster, []) if row["id"] == run_id), None)
+    row = next((row for row in studio_facts.cluster_runs(cluster, _live_rows(services)) if row["id"] == run_id), None)
     return row if row is not None and row["origin"] != cluster.hostname else None
 
 
