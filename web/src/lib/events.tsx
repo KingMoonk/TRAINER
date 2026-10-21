@@ -60,6 +60,26 @@ export const RESYNC = "resync";
 const BACKSTOP_MS = 60_000;
 
 /**
+ * The same safety net as `useLiveRefresh`, for code that is not a component (a promise that waits for a job): call `onChange`
+ * for every event on the shell's stream, and with a `resync` event when the stream reconnected after a drop, when the tab
+ * becomes visible again and every `backstopMs` while it is visible, so a lost event is still recovered. Returns the function
+ * that stops it. Needs `ShellEvents` mounted, as the stream is the shell's.
+ */
+export function watchEvents(onChange: (event: ApiEvent) => void, backstopMs = BACKSTOP_MS): () => void {
+  listeners.add(onChange);
+  const recheck = () => {
+    if (!document.hidden) onChange({ kind: RESYNC, payload: {} });
+  };
+  document.addEventListener("visibilitychange", recheck);
+  const backstop = setInterval(recheck, backstopMs);
+  return () => {
+    listeners.delete(onChange);
+    document.removeEventListener("visibilitychange", recheck);
+    clearInterval(backstop);
+  };
+}
+
+/**
  * Call `refetch` when something it reads may have changed: on any event of `kinds` (when `match` is given, only those it accepts),
  * on `resync` (the stream reconnected after a drop), when the tab becomes visible again, and, as a slow safety net for an event
  * that never arrived, every `backstopMs` (`false` for none) while the tab is visible. A burst coalesces: at most one `refetch` is
