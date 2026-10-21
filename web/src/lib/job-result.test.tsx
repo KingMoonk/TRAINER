@@ -1,7 +1,9 @@
+import { render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ApiError } from "./api-core";
+import { ShellEvents } from "./events";
 import { awaitJob, JobCancelledError, JobFailedError, type JobOut } from "./job-result";
-import { emit, json, mockApi, type Handler } from "@/test/network";
+import { dropEvents, emit, json, mockApi, type Handler } from "@/test/network";
 
 const record = (changes: Partial<JobOut> = {}): JobOut => ({
   id: "job-1", kind: "test", status: "queued", created_at: 0, progress: "", error: "", ...changes,
@@ -34,24 +36,10 @@ async function drive<T>(waiting: Promise<T>): Promise<T> {
   return waiting;
 }
 
-/** An EventSource subclass that remembers its instances, so a test can see whether the wait closed its stream. */
-function trackSources() {
-  const original = globalThis.EventSource;
-  const Base = original as unknown as new () => { close(): void };
-  const made: { closed: boolean }[] = [];
-  globalThis.EventSource = class extends Base {
-    closed = false;
-    constructor() {
-      super();
-      made.push(this);
-    }
-    close() {
-      this.closed = true;
-      super.close();
-    }
-  } as unknown as typeof EventSource;
-  return { made, restore: () => (globalThis.EventSource = original) };
-}
+// awaitJob listens on the shell's /events stream, as it does in the app (app/layout.tsx).
+beforeEach(() => {
+  render(<ShellEvents>{null}</ShellEvents>);
+});
 
 const never = new AbortController().signal;
 const fresh = () => new AbortController().signal;
@@ -95,17 +83,17 @@ describe("a job that is already settled", () => {
   });
 });
 
-describe("polling", () => {
+describe("reading the job", () => {
   beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
   afterEach(() => vi.useRealTimers());
 
-  test("polling recovers a completion without an SSE event", async () => {
+  test("the backstop read recovers a completion whose event was lost", async () => {
     const { counts } = server([record({ status: "running" }), record({ status: "done", result: 42 })]);
     await expect(drive(awaitJob<number>(record(), fresh()))).resolves.toBe(42);
     expect(counts.reads).toBe(2);
   });
 
-  test("the first poll happens at once, not after a pause", async () => {
+  test("the first read happens at once, not after a pause", async () => {
     const { counts } = server([record({ status: "done", result: 1 })]);
     await expect(awaitJob<number>(record(), fresh())).resolves.toBe(1);
     expect(counts.reads).toBe(1);
@@ -259,48 +247,46 @@ describe("aborting", () => {
 });
 
 describe("with events", () => {
-  test("the job's /events message ends the wait before the next poll", async () => {
-    const sources = trackSources();
-    try {
-      const { counts } = server([record({ status: "running" })]);
-      const waiting = awaitJob<number>(record(), never, { events: true });
-      await vi.waitFor(() => expect(counts.reads).toBe(1));
-      emit("job", record({ id: "other", status: "done", result: "wrong" })); // another job
-      emit("job", record({ status: "done", result: 7 }));
-      await expect(waiting).resolves.toBe(7);
-      expect(counts.reads).toBe(1);
-      expect(sources.made.map((source) => source.closed)).toEqual([true]);
-    } finally {
-      sources.restore();
-    }
+  test("the job's /events message ends the wait without another read", async () => {
+    const { counts } = server([record({ status: "running" })]);
+    const waiting = awaitJob<number>(record(), never);
+    await vi.waitFor(() => expect(counts.reads).toBe(1));
+    emit("job", record({ id: "other", status: "done", result: "wrong" })); // another job
+    emit("job", record({ status: "done", result: 7 }));
+    await expect(waiting).resolves.toBe(7);
+    expect(counts.reads).toBe(1);
   });
 
-  test("a failure message rejects like a polled one", async () => {
-    const sources = trackSources();
-    try {
-      server([record({ status: "running" })]);
-      const waiting = awaitJob(record(), never, { events: true });
-      const rejected = expect(waiting).rejects.toThrow("Checkpoint missing");
-      await vi.waitFor(() => expect(sources.made).toHaveLength(1));
-      emit("job", record({ status: "failed", error: "Checkpoint missing" }));
-      await rejected;
-      expect(sources.made.map((source) => source.closed)).toEqual([true]);
-    } finally {
-      sources.restore();
-    }
+  test("a progress event does not cause a read, and the next one is still followed", async () => {
+    const { counts } = server([record({ status: "running" })]);
+    const waiting = awaitJob<number>(record(), never);
+    await vi.waitFor(() => expect(counts.reads).toBe(1));
+    emit("job", record({ status: "running", progress: "half" }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(counts.reads).toBe(1);
+    emit("job", record({ status: "done", result: 3 }));
+    await expect(waiting).resolves.toBe(3);
+  });
+
+  test("a failure message rejects like a read one", async () => {
+    server([record({ status: "running" })]);
+    const waiting = awaitJob(record(), never);
+    const rejected = expect(waiting).rejects.toThrow("Checkpoint missing");
+    emit("job", record({ status: "failed", error: "Checkpoint missing" }));
+    await rejected;
   });
 
   test("a cancellation message rejects with JobCancelledError", async () => {
     server([record({ status: "running" })]);
-    const waiting = awaitJob(record(), never, { events: true });
+    const waiting = awaitJob(record(), never);
     const rejected = expect(waiting).rejects.toThrow(JobCancelledError);
-    emit("job", record({ status: "cancelled" })); // the stream is opened synchronously, before the first poll
+    emit("job", record({ status: "cancelled" })); // the listener is added synchronously, before the first read
     await rejected;
   });
 
   test("other event kinds and non-job payloads are ignored", async () => {
     const { counts } = server([record({ status: "running" })]);
-    const waiting = awaitJob<string>(record(), never, { events: true });
+    const waiting = awaitJob<string>(record(), never);
     await vi.waitFor(() => expect(counts.reads).toBe(1));
     emit("status", record({ status: "done", result: "wrong" })); // not a job event
     emit("job", "garbage");
@@ -309,27 +295,44 @@ describe("with events", () => {
     await expect(waiting).resolves.toBe("right");
   });
 
-  test("without the option no stream is opened, and with it the stream is closed when the wait fails", async () => {
-    const sources = trackSources();
-    try {
-      server([record({ status: "done", result: 1 })]);
-      await awaitJob(record(), fresh());
-      expect(sources.made).toHaveLength(0);
-      server([() => ({ status: 404, body: {} })]);
-      await expect(awaitJob(record(), fresh(), { events: true })).rejects.toThrow("404");
-      expect(sources.made.map((source) => source.closed)).toEqual([true]);
-    } finally {
-      sources.restore();
-    }
-  });
-
-  test("an event that arrives while the first poll is in flight is used on the next turn", async () => {
+  test("an event that arrives while the first read is in flight is used on the next turn", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
     server([async () => (await gate, { body: record({ status: "running" }) })]);
-    const waiting = awaitJob<number>(record(), never, { events: true });
+    const waiting = awaitJob<number>(record(), never);
     emit("job", record({ status: "done", result: 9 }));
     release();
     await expect(waiting).resolves.toBe(9);
+  });
+
+  test("the stream coming back after a drop reads the job again", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { counts } = server([record({ status: "running" }), record({ status: "done", result: "after" })]);
+      const waiting = awaitJob<string>(record(), never);
+      await vi.waitFor(() => expect(counts.reads).toBe(1));
+      dropEvents();
+      await vi.advanceTimersByTimeAsync(5_001); // the shell reconnects, which tells every listener to re-read
+      await expect(waiting).resolves.toBe("after");
+      expect(counts.reads).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a quiet stream is not polled on a short interval", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { counts } = server([record({ status: "running" })]);
+      const controller = new AbortController();
+      const waiting = awaitJob(record(), controller.signal).catch(() => {});
+      await vi.waitFor(() => expect(counts.reads).toBe(1));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(counts.reads).toBe(1);
+      controller.abort();
+      await waiting;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

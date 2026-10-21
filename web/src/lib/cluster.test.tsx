@@ -187,8 +187,9 @@ describe("usePull", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "Pull" }));
     await waitFor(() => expect(reads).toBe(1));
     expect(success).not.toHaveBeenCalled();
-    await waitFor(() => expect(success).toHaveBeenCalledWith("Pulled version 4 from studio-b."), { timeout: 3_000 });
-    expect(reads).toBe(2);
+    act(() => emit("job", done)); // the server reports the job finished
+    await waitFor(() => expect(success).toHaveBeenCalledWith("Pulled version 4 from studio-b."));
+    expect(reads).toBe(1);
   });
 
   test("a refusal with a detail sentence shows that sentence", async () => {

@@ -113,7 +113,8 @@ describe("Chat page checks", () => {
     expect(await within(card(1)).findByRole("status", { name: "Asking the multiple-choice questions" })).toBeVisible();
     expect(row).toHaveTextContent("15 of 20");
     finished = true;
-    await waitFor(() => expect(row).toHaveTextContent("16 of 20"), SLOW);
+    emit("job", job("recheck", table(16, false))); // the server reports the check finished
+    await waitFor(() => expect(row).toHaveTextContent("16 of 20"));
     expect(row.isConnected).toBe(true);
     expect(card(1)).toHaveTextContent("come from the ones used for training");
     expect(card(1)).toHaveTextContent("4 (2.5 fit on average)");

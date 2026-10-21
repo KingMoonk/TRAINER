@@ -74,7 +74,7 @@ export const design = {
   /** The lab notebook: one row per version (a job: it reads every version's run files). */
   notebook: async (signal: AbortSignal) => {
     const job = await unwrap(api.POST("/design/notebook", { signal }));
-    return (await awaitJob<Notebook | null>(job, signal, { events: true })) ?? null;
+    return (await awaitJob<Notebook | null>(job, signal)) ?? null;
   },
   /** What the side panel says about a part of the draft; `pieces` and `sentence` are the example sentence cut by its word list. */
   explain: (choices: Choices, part: Part, block: number | null, pieces: string[] | null, sentence: string | null) =>
