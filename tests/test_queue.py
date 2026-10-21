@@ -279,6 +279,38 @@ class QueueTests(unittest.TestCase):
             self.assertTrue(wait(lambda: self.fake.steps > frozen + 3))
             self.fake.gate.set()
 
+    def test_a_job_that_ignores_the_plan_runs_while_the_computer_is_in_use_and_others_wait(self):
+        plan = Plan(hours="any", idle_only=True, idle_after_s=30, pause_on_battery=False)
+        with mock.patch.object(studio_queue, "idle_seconds", lambda: 1.):  # someone is at the keyboard
+            r = self.runner(plan)
+            r.enqueue(self.job("plain"))
+            r.enqueue(self.job("test", "quicktest", ignore_plan=True))
+            r.start()
+            self.assertTrue(wait(lambda: r.state().blocked == "computer in use"))
+            self.assertTrue(wait(lambda: "plain" not in self.fake.ran and [j.status for j in r.jobs] == ["waiting", "waiting"]))
+            r.move_up(r.jobs[1].id)
+            self.assertTrue(wait(lambda: self.fake.ran == ["test"]))
+            self.assertTrue(wait(lambda: r.jobs[0].status == "done"))
+            time.sleep(.05)
+            self.assertNotIn("plain", self.fake.ran)  # the plan still holds a job without the param
+            self.assertEqual(r.state().blocked, "computer in use")
+
+    def test_the_plan_does_not_pause_a_running_job_that_ignores_it(self):
+        plan = Plan(hours="any", idle_only=True, idle_after_s=30, pause_on_battery=False)
+        idle = {"s": 120.}
+        with mock.patch.object(studio_queue, "idle_seconds", lambda: idle["s"]):
+            r = self.runner(plan)
+            r.enqueue(self.job("long", "pretrain", ignore_plan=True))
+            r.start()
+            self.assertTrue(wait(lambda: self.fake.steps > 3))
+            idle["s"] = 1.
+            self.assertTrue(wait(lambda: r.state().blocked == "computer in use"))
+            time.sleep(.05)
+            seen = self.fake.steps
+            self.assertTrue(wait(lambda: self.fake.steps > seen + 3))
+            self.assertFalse(r.pause_event.is_set())
+            self.fake.gate.set()
+
     def test_gate_is_read_once_per_tick_not_per_pass(self):
         # Worker startup and wall-clock sleeps vary with CI load. Drive the same
         # watcher used by both runner loops at exact monotonic times instead.

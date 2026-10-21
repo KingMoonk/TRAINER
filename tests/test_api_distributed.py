@@ -174,6 +174,10 @@ class Invitations(unittest.TestCase):
         self.assertEqual((rows["box"].state, rows["box"].peer_job), ("invited", "job-box"))
         self.assertEqual((rows["old"].state, rows["old"].reason), ("unreachable", "old did not answer within 2 seconds."))
 
+    def test_a_run_that_ignores_the_plan_invites_members_that_ignore_theirs(self):
+        runs.invite(owner_job(MACHINES, ignore_plan=True), clients())
+        self.assertIs(FakeClient.calls[0][3]["params"]["ignore_plan"], True)
+
     def test_the_owner_s_member_options_go_to_the_invited_members_too(self):
         runs.invite(owner_job(MACHINES, member_options={"overlap": True}), clients())
         self.assertEqual(FakeClient.calls[0][3]["params"]["member_options"], {"overlap": True})

@@ -393,7 +393,8 @@ def invite(job, client_for=PeerClient, only=None, wait=INVITE_WAIT):
             return
         body = {"kind": "diloco_member", "label": f"{job.label} (member)",
                 "params": {"coordinator_url": url, "run": job.id, "node": machine.node, "epoch": 0,
-                           **({"member_options": p["member_options"]} if p.get("member_options") else {})}}
+                           **({"member_options": p["member_options"]} if p.get("member_options") else {}),
+                           **({"ignore_plan": True} if p.get("ignore_plan") else {})}}
         try:
             machine.peer_job = take(machine, client_for(machine.address, timeout=ASK_TIMEOUT, retries=ASK_RETRIES), body)
         except Exception as exc:  # noqa: BLE001 - whatever went wrong is the machine's note
