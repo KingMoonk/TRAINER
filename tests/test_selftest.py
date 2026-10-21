@@ -304,6 +304,13 @@ class JobParams(unittest.TestCase):
         self.assertEqual(p["config"]["steps"], st.ROUNDS * st.INNER_STEPS)
         self.assertTrue(p["examples"] and p["selftest"] and "version" not in p)
 
+    def test_the_run_ignores_the_queue_plan_and_the_launch_step_says_so(self):
+        p = st.job_params([{"node": "me", "address": "local"}], "http://me:8787", 8787, "me")
+        self.assertIs(p["ignore_plan"], True)
+        test = st.SelfTest(Probe(), [PEER], "http://me:8787", "me", sleep=lambda s: None)
+        self.assertTrue(test._launch())
+        self.assertIn("ignore each machine's queue plan", test.index["launch"].detail)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -56,11 +56,13 @@ class Result:
 
 
 def job_params(machines, peer_url, api_port, owner):
-    """The params of the self-test run's job: the built-in text and a tiny design, every machine required, nothing saved as a version."""
+    """The params of the self-test run's job: the built-in text and a tiny design, every machine required, nothing saved as a version.
+    `ignore_plan` keeps the queue's plan (a person at the keyboard under the default idle-only plan) from holding the run and the member
+    jobs it invites (studio_queue.ignores_plan); the launch step says so."""
     from studio_diloco import Settings
     settings = Settings(rounds=ROUNDS, inner_steps=INNER_STEPS, outer_lr=.7, outer_momentum=.9, min_members=len(machines), max_members=len(machines),
                         shards=8, delta_dtype="float16")
-    return {"config": {**CONFIG, "steps": ROUNDS * INNER_STEPS}, "examples": TEXT, "mode": "from_scratch", "selftest": True,
+    return {"config": {**CONFIG, "steps": ROUNDS * INNER_STEPS}, "examples": TEXT, "mode": "from_scratch", "selftest": True, "ignore_plan": True,
             **{k: getattr(settings, k) for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")}, "delta_dtype": settings.delta_dtype,
             "settings": asdict(settings), "min_members": settings.min_members, "max_members": settings.max_members,
             "machines": machines, "owner": owner, "peer_url": peer_url, "api_port": api_port}
@@ -187,7 +189,8 @@ class SelfTest:
             self.probe.launch()
         except Exception as exc:  # noqa: BLE001
             return self._bad("launch", str(exc), "Free this computer (stop or wait for its current job), then test again.", started)
-        self._ok("launch", "Queued; the real invite and join path takes over.", started)
+        self._ok("launch", "Queued; the real invite and join path takes over. For this test only, the run and its member jobs ignore each "
+                 "machine's queue plan (idle only, hours, battery), so a machine in use still takes part.", started)
         self.began = self.clock()
         return True
 

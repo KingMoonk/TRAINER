@@ -155,6 +155,12 @@ def in_window(plan, hour):
     return start <= hour < end if start < end else hour >= start or hour < end
 
 
+def ignores_plan(job):
+    """True when `job` carries `ignore_plan` in its params: the queue's plan (hours, battery, idle) does not hold it. Only the cluster
+    self-test sets it, on its own run and the member jobs it invites, so a person at the keyboard can prove the cluster."""
+    return bool(job is not None and job.params.get("ignore_plan"))
+
+
 def next_start(plan, now):
     """When the plan next lets training start, as a whole hour: `now` when already inside the window, the next
     opening otherwise, None when the plan has no hours limit ("any"). The single source for "Starts tonight at 22:00"."""
@@ -481,7 +487,8 @@ class Runner:
 
     # ---- runner thread
     def _sync_pause(self):
-        (self.pause_event.set if self.user_paused or self.blocked else self.pause_event.clear)()
+        held = self.blocked and not ignores_plan(self.running)
+        (self.pause_event.set if self.user_paused or held else self.pause_event.clear)()
 
     @timed("queue._gate")
     def _gate(self):
@@ -562,7 +569,7 @@ class Runner:
             self._watch()
             self._place_waiting()
             job = self._next_local()
-            if not job or self.blocked or self.user_paused:
+            if not job or (self.blocked and not ignores_plan(job)) or self.user_paused:
                 self.wake.wait(self.tick)
                 continue
             self._run(job)
@@ -653,6 +660,7 @@ class Runner:
         share = self._share(job)  # before the lock: evicting waits on chat's own lock
         with self.lock:
             job.status, self.running, self.progress, self.stopping = "running", job, {}, False
+            self._sync_pause()  # a job that ignores the plan is not held by the gate that stood when it started
             job.params = {**job.params, "memory_share": share}  # studio_memory.batch_cap fits the job's batch to it
             self.stop_event.clear()
             self._save()
@@ -702,6 +710,7 @@ class Runner:
             self.yielding = None
             job.error, job.details = error, details if error else ""
             self.running = None
+            self._sync_pause()
             self.stopping = False
             self.stopping_job = ""
             self.follow_up(job)
