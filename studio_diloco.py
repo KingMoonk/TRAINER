@@ -778,7 +778,19 @@ class Coordinator:
             raise ValueError(f"The run had moved on to data source {coordinator.rules.source + 1}, but only {len(coordinator.spans)} "
                              f"{'is' if len(coordinator.spans) == 1 else 'are'} supplied (later_examples); training on the first would be a different run.")
         if not state:
+            grown = None  # an extension made before the first round closed; only for the run it was made on (same rounds and H to start)
+            if (directory / "extended.json").is_file():
+                grown = json.loads((directory / "extended.json").read_text(encoding="utf-8"))
+                if (grown["plan"][0]["rounds"], grown["plan"][0]["h"]) != (settings.rounds, settings.inner_steps):
+                    grown = None
+            if grown:
+                coordinator.settings = replace(settings, rounds=grown["rounds"], inner_steps=grown["inner_steps"])
+                coordinator.plan = [dict(entry) for entry in grown["plan"]]
             coordinator._start_files(model)
+            if grown:
+                from studio_core import atomic_json
+                coordinator.record.update({"steps": plan_total(coordinator.plan)})
+                atomic_json(directory / "run.json", coordinator.record)
             held = directory / "paused.json"  # a pause before the first round closed
             if held.is_file():
                 saved = json.loads(held.read_text(encoding="utf-8"))
@@ -1492,7 +1504,7 @@ class Coordinator:
     def _view(self, number, node):
         entry = self.members.get(node) or self.pending.get(node)
         base = {"term": self.term, "round": number, "member": entry is not None, "current": self.next_round, "paused": self.paused,
-                "polishing": self.polishing}
+                "polishing": self.polishing, "rounds": self.settings.rounds, "plan": [dict(entry) for entry in self.plan]}
         if self.finished:
             return {**base, "state": "finished"}
         if number < self.next_round:
@@ -1503,8 +1515,7 @@ class Coordinator:
             return {**base, "state": "open", "generation": current.generation, "rank": rank,
                     "replica": node in replica_nodes(current.members, self.settings.replicas, self.prefer),
                     "deadline_s": max(0., current.deadline - self.clock()), "shards": current.deal[node], "members": len(current.members),
-                    "lr_scale": self.rules.lr_scale, "steps": current.steps[node], "train_s": current.train_seconds,
-                    "rounds": self.settings.rounds, "plan": [dict(entry) for entry in self.plan]}
+                    "lr_scale": self.rules.lr_scale, "steps": current.steps[node], "train_s": current.train_seconds}
         return {**base, "state": "pending"}
 
     def round_view(self, number, node="", wait=0.):
@@ -1523,7 +1534,7 @@ class Coordinator:
                 self._advance()
                 view = self._view(number, node)
                 if (view["state"] != first["state"] or view.get("member") != first.get("member") or view["paused"] != first["paused"]
-                        or view["polishing"] != first["polishing"]):
+                        or view["polishing"] != first["polishing"] or view["plan"] != first["plan"]):
                     return view
             return first
 
@@ -1951,12 +1962,14 @@ class Coordinator:
 
     def _save_extended(self):
         """Write the new length, H and plan to diloco.json (and run.json) without closing a round, so a restart or a successor coordinator
-        keeps them. Before the first round has closed there is no diloco.json: the run is then built again from the start."""
+        keeps them. Before the first round has closed there is no diloco.json: extended.json holds them instead (see build)."""
         from studio_core import atomic_json
         path = self.directory / "diloco.json"
         if path.is_file():
             saved = json.loads(path.read_text(encoding="utf-8"))
             atomic_json(path, {**saved, "settings": self.settings.__dict__, "plan": self.plan})
+        else:  # no round has closed: extended.json holds it for build, which reads it like paused.json
+            atomic_json(self.directory / "extended.json", {"rounds": self.settings.rounds, "inner_steps": self.settings.inner_steps, "plan": self.plan})
         if self.record:
             self.record.update({"rounds": self.settings.rounds, "inner_steps": self.settings.inner_steps,
                                 "steps": plan_total(self.plan)})
@@ -2942,6 +2955,7 @@ class Member:
             if view["state"] == "finished":
                 self.finished = True
                 return None
+            self._replica_plan(view)
             if view["state"] == "pending" and view.get("paused"):
                 self._replica_paused()
             if view["state"] == "pending" and view.get("paused") and not quiet and not noted:
@@ -3092,6 +3106,22 @@ class Member:
             self.holding = (number, rank)
             self.emit({"type": "info", "text": f"Holding round {number} as a replica."})
             self._announce()
+
+    def _replica_plan(self, view):
+        """Every view of a round carries the run's plan: write it (and the rounds and H it ends in) into the replica's copy of
+        diloco.json when it differs, so a run extended after the replica fetched its state still has the extension in a coordinator
+        made from the replica."""
+        plan = view.get("plan")
+        if self.replica_dir is None or self.holding is None or not plan:
+            return
+        path = self.replica_dir / STATE_FILE
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if record.get("plan") != plan:
+            settings = {**record["settings"], "rounds": plan_rounds(plan), "inner_steps": plan[-1]["h"]}
+            self._write_replica(self.replica_epoch, STATE_FILE, json.dumps({**record, "settings": settings, "plan": plan}).encode("utf-8"))
 
     def _replica_paused(self):
         """The run is paused and no round is open, so the replica's copy of diloco.json (fetched when the round before opened) does not
