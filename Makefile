@@ -3,6 +3,7 @@
 #   make dev        the live loop: API (--reload) + Next dev server on 127.0.0.1; Ctrl+C stops both; tailnet / -> page, /api/ -> API
 #   make run        the built app: API serving web/out, opens the browser (python app.py); tailnet / -> API
 #   make test       ruff + all unit tests; `make test T="tests.test_x tests.test_y"` for just those modules
+#   make network-bench BENCH_ARGS="--output /tmp/network.json"  synthetic shared-link transfer discovery
 #   make web-check  web/: Vitest, lint, typecheck, build
 # Windows: install make once (`winget install ezwinports.make`), then the same commands work in PowerShell.
 
@@ -15,11 +16,12 @@ else
 endif
 
 T ?=
+BENCH_ARGS ?= --output artifacts/network-discovery.json
 
-.PHONY: help setup dev run test test-ci web-test web-lint web-build web-check web-fixtures
+.PHONY: help setup dev run test test-ci web-test web-lint web-build web-check web-fixtures network-bench
 
 help:
-	@echo "make setup | dev | run | test [T=\"tests.test_x\"] | test-ci | web-test | web-lint | web-build | web-check | web-fixtures"
+	@echo "make setup | dev | run | test [T=\"tests.test_x\"] | test-ci | web-test | web-lint | web-build | web-check | web-fixtures | network-bench [BENCH_ARGS=\"...\"]"
 
 setup:
 	$(SYS_PY) tasks.py setup
@@ -49,3 +51,6 @@ web-fixtures:
 	$(VENV_PY) tasks.py web:fixtures
 
 web-check: web-test web-lint web-build
+
+network-bench:
+	$(VENV_PY) tasks.py network:bench $(BENCH_ARGS)
