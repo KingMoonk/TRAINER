@@ -9,3 +9,4 @@ fastapi
 uvicorn
 python-multipart
 httpx
+certifi>=2026.10.19
