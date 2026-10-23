@@ -1,4 +1,4 @@
-// The Quick test page's strings, moved from studio_ia/copy.py (QUICKTEST) and studio_ia/pages/quicktest.py.
+// The Quick test page's strings.
 export const QUICKTEST = {
   lead: "Try a design idea for a few minutes on a tiny dataset, before you save it and train it for real.",
   throwaway: "Throwaway",

@@ -1,5 +1,4 @@
-// The strings this page uses, moved from studio_ia/copy.py (QUEUE) and studio_ia/pages/queue.py. The Python copy stays while
-// the Tk page uses it.
+// The strings this page uses.
 
 export const T = {
   title: "Queue",

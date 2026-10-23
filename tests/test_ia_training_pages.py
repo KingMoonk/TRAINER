@@ -52,7 +52,7 @@ class RecommendedCollection(unittest.TestCase):
         self.svc = WorkspaceServices(Workspace(self.tmp.name))
         self.addCleanup(self.svc.close)
         self.events = []
-        self.svc.subscribe(lambda kind, payload: self.events.append((kind, payload)))
+        self.svc.watch(lambda kind, payload: self.events.append((kind, payload)))
 
     def states(self):
         return {r["id"]: r["state"] for r in self.svc.collection()}

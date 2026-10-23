@@ -62,7 +62,6 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 
 from studio_core import replace_file
-from studio_ui_guard import slow
 from studio_versions import NoCheckpoint
 
 WEIGHT = "weight::"
@@ -313,7 +312,6 @@ _ROW = ("number", "name", "change", "parent", "spec", "scorecard", "score_device
 _shared = threading.Lock()
 
 
-@slow("copy a version for a peer")
 def shared_copy(version, checkpoint_path, folder, origin=None):
     """The weights-only copy of a version a peer fetches, as (path, metadata): what `publish` would upload, kept as `v<n>.npz` and
     `v<n>.json` in `folder`. It is built once and reused until the checkpoint or the version's row changes."""
@@ -350,11 +348,9 @@ class _Store:
     A missing object is a KeyError from _get_*; _has says False instead."""
     origin = None
 
-    @slow("publish a version")
     def publish(self, version, checkpoint_path):
         return self.publish_reporting(version, checkpoint_path)[0]
 
-    @slow("publish a version")
     def publish_reporting(self, version, checkpoint_path):
         """`publish`, and whether this call put the objects up: (key, created). False when the version was already there, in which case
         the objects are not this caller's to delete."""
@@ -375,14 +371,12 @@ class _Store:
         the look-up of `key` happens inside whatever lock the check holds, so two uploads of one key cannot both count."""
         yield key is None or not self.exists(key)
 
-    @slow("write a marker if absent")
     def create_if_absent(self, key, data):
         """Write `data` (bytes) under `key` only when nothing is there: True when this call wrote it, False when another writer got there
         first. It is atomic: of several callers racing for one key exactly one gets True. Used for the failover tie-break (#362); `key`
         is a path of the same segments as a published key (`runs/<run>/term/<n>`) and never shows in `list`."""
         return self._create(_check_key(key), bytes(data))
 
-    @slow("read a marker")
     def read(self, key):
         """The bytes under `key`, or None when nothing is there."""
         try:
@@ -390,14 +384,12 @@ class _Store:
         except KeyError:
             return None
 
-    @slow("delete a version")
     def delete(self, key):
         """Remove a published version, its listing first so nobody is offered weights that are going. A missing object is not an error."""
         key = _check_key(key)
         self._delete(key + ".json")
         self._delete(key + ".npz")
 
-    @slow("pull a version")
     def pull(self, key, dest_dir):
         key = _check_key(key)
         try:
@@ -411,7 +403,6 @@ class _Store:
             self._get_file(key + ".npz", artifact)
             return finish_pull(artifact, {**meta, "key": key}, destination)
 
-    @slow("list published versions")
     def list(self):
         entries = []
         for name in self._json_names():
@@ -424,11 +415,9 @@ class _Store:
             entries.append({**meta, "key": key})
         return sorted(entries, key=lambda entry: (entry.get("published_at") or "", entry["key"]))
 
-    @slow("look up a published version")
     def exists(self, key):
         return self._has(_check_key(key) + ".json")
 
-    @slow("look up a published version")
     def metadata(self, key):
         """The metadata of the published `key`: None when it is not there, {} when it is there and cannot be read."""
         try:

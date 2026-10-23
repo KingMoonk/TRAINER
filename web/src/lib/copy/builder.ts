@@ -1,6 +1,5 @@
-// The Builder's strings: the design half, the learning loop and the cards around the tower. They moved here from
-// studio_ia/copy.py BUILDER; the Python copy keeps only what the server itself writes (the sentences design.py and
-// expectation.py return).
+// The Builder's strings: the design half, the learning loop and the cards around the tower. The server writes its own
+// sentences (design.py and expectation.py return them).
 
 export const BUILDER = {
   h1: "Build your model",
@@ -145,7 +144,7 @@ export const BUILDER = {
   versions_empty: "No version saved yet.",
   cannot_write: "This design cannot be written:",
   loading_failed: "The Builder could not load its design maths:",
-  // splitting a draft into one version per change (studio_ia/copy.py, #83)
+  // splitting a draft into one version per change (#83)
   one_change: "{count} changes at once: if the result moves, you won't be able to tell which change did it.",
   one_change_split: "Split them into {count} versions, one change each, queued one after another, and every result has one cause.",
   one_change_cannot: "These can't be split here, so they train together.",
@@ -154,7 +153,7 @@ export const BUILDER = {
   no_text: "There is no plain text to train on yet. Add some in Your data, then queue it.",
   text_sets_failed: "Your text sets could not be read, so these changes cannot be split here: {reason}",
   split_partial: "Saved {saved}; queued {queued} of {total} jobs. {reason}",
-  // the lab notebook, the explain panel and the starting questions (studio_ia/copy.py, #83)
+  // the lab notebook, the explain panel and the starting questions (#83)
   notebook: "Lab notebook · one line per version",
   notebook_tip:
     "What each version changed, what that did to held-back error, step time and memory. Error is measured; memory is estimated from the design; step time is measured when both runs logged their speed.",

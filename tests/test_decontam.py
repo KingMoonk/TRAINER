@@ -6,7 +6,7 @@ import studio_data_kinds as dk
 import studio_decontam as decontam
 from studio_catalog import _entry, convert_record
 from studio_core import Workspace
-from studio_ia.copy import FEEDBACK
+from studio_api.routers.post_training import T as FEEDBACK
 from studio_ia.services import WorkspaceServices
 from studio_model import partition_examples
 

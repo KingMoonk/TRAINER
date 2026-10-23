@@ -1,4 +1,4 @@
-// Page strings, moved from BENCH, CHAT (the few-shot and verdict lines) in studio_ia/copy.py. The Python copy stays while a Tk page uses it.
+// Page strings,
 export const BENCH = {
   h1: "Benchmark",
   lead: "The same three checks on every trained version, charted against how much text it trained on. Use it to see whether more training or a different design really helped.",

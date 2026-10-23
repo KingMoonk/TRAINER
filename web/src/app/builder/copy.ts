@@ -1,5 +1,4 @@
-// Builder history copy. The desktop strings stay in studio_ia/copy.py until
-// its last Tk user is removed; core editor copy is owned by #148.
+// Builder history copy. Core editor copy is owned by #148.
 export const T = {
   lead: "Review saved designs, follow training, and inspect what changed.",
   versions: "Versions",

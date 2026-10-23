@@ -1,5 +1,4 @@
-// The strings the Pretraining page shows, moved from the PRETRAINING table (and the learning-rate range test lines of the
-// BUILDER table) in studio_ia/copy.py, which stay while the Tk pages use them.
+// The strings the Pretraining page shows.
 
 export const T = {
   makeData: "Make extra data",

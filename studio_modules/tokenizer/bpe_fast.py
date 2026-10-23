@@ -22,7 +22,6 @@ from pathlib import Path
 from studio_core import messages_of
 from studio_registry import ModuleSpec, register
 from studio_slots import OFFSET
-from studio_ui_guard import slow
 
 FORMAT = "groundwork-tokenizer/1"
 MIN_VOCAB, MAX_VOCAB = 1024, 65536
@@ -140,7 +139,6 @@ class FastBPETokenizer:
 
     # -- fitting --------------------------------------------------------------------------------------------------
     @classmethod
-    @slow("train a tokenizer")
     def fit(cls, examples, vocab_size=16384, fit_chars=200_000_000, min_frequency=2):
         """Learn `vocab_size - 7 - 256` merges from a sample of `examples` (any iterable of examples). Deterministic for the same
         sample, vocabulary size and library version; memory follows the number of distinct words in the sample, not the corpus."""

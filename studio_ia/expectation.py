@@ -3,7 +3,33 @@
 Pure and window-free, so the Builder and Pretraining pages say the same thing. A rough guide, not a promise."""
 from __future__ import annotations
 
-from studio_ia.copy import EXPECTATION as T
+
+T = {  # short_* is the one visible line; the rest is the hover text behind the ⓘ
+    "short_letters": "Expect: word-like gibberish",
+    "short_words": "Expect: real words, loose grammar",
+    "short_words_text": "Expect: real words, with enough text",
+    "short_sentences": "Expect: simple sentences",
+    "short_sentences_text": "Expect: simple sentences, with enough text",
+    "guide": "A rough guide, not a promise:",
+    "letters": "Letter patterns: common short words and word-shaped nonsense.",
+    "words": "Real words, loose grammar; short phrases hang together.",
+    "words_text": "Real words, loose grammar; short phrases hang together, given tens of MB of text.",
+    "sentences": "Simple coherent sentences (children’s-story level).",
+    "sentences_text": "Simple coherent sentences (children’s-story level), given tens to hundreds of MB of simple text and hours of training.",
+    "move_up": "To move up: {changes}.",
+    "wider_deeper": "a wider and deeper design",
+    "more_text": "more text",
+    "custom_pieces": "custom word pieces",
+    "chat_scale": "Answers that hold a conversation need hundreds of millions of parameters and billions of word pieces; this app teaches the same steps at laptop scale.",
+    "byte": "Letters (bytes) spell every word out letter by letter, so a small model mostly learns spelling-shaped output and its context covers fewer words.",
+    "bpe_custom": "Custom word pieces come out as whole common words, so the same context covers about 3 to 4 times more text; the word list costs parameters (list size × width).",
+    "bpe_fast": "Learned word pieces come out as common words and word parts, so the same context covers about 3 to 4 times more text than letters; they are learned from a sample of all your text, and the word list costs parameters (list size × width).",
+    "bpe_gpt2": "GPT-2 word pieces give the same benefit, but the list has about 50,000 entries.",
+    "word": "Whole words are one token each, so the same context covers about 5 times more text than letters and each token carries more meaning; but a rare word, or one your data never shows, is lost (it becomes an unknown mark), and the word list costs parameters (list size × width).",
+    "table_heavy": "More than half of the parameters sit in the word table rather than in the blocks that do the thinking, so only the rest counts toward what it can learn.",
+    "continues": "Plain-text training makes it continue text rather than answer; Post-training round 1 teaches it to answer.",
+}
+
 
 LITTLE_TEXT = 5_000_000  # word pieces seen: below this a model only picks up letter patterns
 ENOUGH_TEXT = 20_000_000  # about 80 MB of text as word pieces

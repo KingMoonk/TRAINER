@@ -325,7 +325,6 @@ class TrainCli(unittest.TestCase):
 class SelfLaunch(unittest.TestCase):
     def test_module_command_from_source_is_python_dash_m(self):
         self.assertEqual(module_command("studio_worker", "run", "id", "--root", "/r"), [sys.executable, "-m", "studio_worker", "run", "id", "--root", "/r"])
-        self.assertEqual(module_command("studio_brain3d"), [sys.executable, "-m", "studio_brain3d"])
 
     def test_workspace_root_is_the_source_folder_but_a_user_folder_when_frozen(self):
         self.assertEqual(studio_core.ROOT, ROOT)

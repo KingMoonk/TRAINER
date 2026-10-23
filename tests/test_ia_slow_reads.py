@@ -1,4 +1,4 @@
-"""Stored-data reads are done once per change, in one pass, and ready() tells the shell when one would be long."""
+"""Stored-data reads are done once per change, in one pass, and kept between launches."""
 import tempfile
 import unittest
 from unittest import mock
@@ -35,18 +35,6 @@ class SlowReads(unittest.TestCase):
         self.assertEqual(self.svc.post_training(None)["example"], {"prompt": self.svc.post_rows("conversations")[0]["user"],
                                                                    "answer": self.svc.post_rows("conversations")[0]["assistant"]})
 
-    def test_ready_sends_only_a_large_uncached_read_to_the_worker(self):
-        read = lambda: self.svc.data("text")  # noqa: E731
-        self.assertTrue(self.svc.ready(read))  # small store: read in place
-        self.ws._dataset(self.big)["recordCount"] = 10 ** 6
-        self.assertFalse(self.svc.ready(read))
-        self.assertNotIn("summaries", self.svc._data)  # asking did not read anything
-        read()
-        self.assertTrue(self.svc.ready(read))
-        self.ws.add(self.big, [{"text": "another"}])
-        self.ws._dataset(self.big)["recordCount"] = 10 ** 6
-        self.assertFalse(self.svc.ready(read))
-
     def test_summary_is_saved_and_a_new_launch_reads_it_until_the_files_change(self):
         first = {k: self.svc.data(k) for k in dk.KINDS}
         example = self.svc.post_training(None)["example"]
@@ -63,7 +51,6 @@ class SlowReads(unittest.TestCase):
     def test_next_step_asks_for_text_without_summarising_the_store(self):
         with mock.patch.object(dk, "scan", wraps=dk.scan) as scan:
             self.assertTrue(self.svc.has_text())
-            self.assertTrue(self.svc.ready(self.svc.next_step))  # nothing long to wait for at launch
             self.svc.next_step()
             self.assertEqual((scan.call_count, "summaries" in self.svc._data), (0, False))
         empty = WorkspaceServices(Workspace(tempfile.mkdtemp()))

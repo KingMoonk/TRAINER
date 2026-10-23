@@ -1,4 +1,4 @@
-// Page strings, moved from COMPARE in studio_ia/copy.py (and the lines the Tk page builds inline). The Python copy stays while the Tk page uses it.
+// Page strings.
 export const COMPARE = {
   h1: "Compare runs",
   lead: "Change one thing, hold the rest equal, run several seeds. A difference counts only if it is larger than the spread across seeds.",

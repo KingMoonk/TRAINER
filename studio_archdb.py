@@ -18,7 +18,6 @@ import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from studio_ui_guard import slow
 from studio_arch import validate_spec
 from studio_core import atomic_json, now, replace_file, uid
 from studio_spec import is_model_spec, to_legacy_view, upgrade, validate_spec as validate_model_spec
@@ -62,7 +61,6 @@ def spec_hash(spec):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-@slow("hash a file")
 def _hash_file(path):
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -71,7 +69,6 @@ def _hash_file(path):
     return digest.hexdigest()
 
 
-@slow("hash a file")
 def _hash_member(archive, name):
     digest = hashlib.sha256()
     with archive.open(name) as handle:
@@ -80,7 +77,6 @@ def _hash_member(archive, name):
     return digest.hexdigest()
 
 
-@slow("hash a file")
 def _copy_hashed(source, target):
     digest = hashlib.sha256()
     size = 0
@@ -92,7 +88,6 @@ def _copy_hashed(source, target):
     return digest.hexdigest(), size
 
 
-@slow("hash a file")
 def _write_member(archive, arcname, source):
     digest = hashlib.sha256()
     with open(source, "rb") as src, archive.open(arcname, "w", force_zip64=True) as dst:

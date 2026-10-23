@@ -4,7 +4,6 @@ from __future__ import annotations
 import errno
 import io
 import logging
-import queue
 import socket
 import tempfile
 import threading
@@ -15,10 +14,16 @@ from typing import Any, Callable
 
 import numpy as np
 
-import studio_ui_guard as ui_guard
 from studio_ia.busy import Busy
 from studio_timing import timed
 from studio_versions import NoCheckpoint
+
+
+def start_thread(target, *args):
+    """Run target(*args) on a daemon thread and return it."""
+    thread = threading.Thread(target=target, args=args, daemon=True)
+    thread.start()
+    return thread
 
 
 @dataclass
@@ -145,33 +150,15 @@ class Services:
     workspace: Any = None
 
     def __init__(self):
-        self._subscribers: list[Callable[[str, Any], None]] = []
-        self._ui = None  # a Tk widget; set by the shell so events hop onto the Tk thread
-        self._ui_thread, self._events = None, queue.SimpleQueue()  # events emitted on other threads, for pump()
         self._raw: list[Callable[[str, Any], None]] = []  # watchers that take events on the emitting thread (the API)
         self._raw_lock = threading.Lock()
         self._settings = {}
         self.busy = Busy(self.emit)  # `with self.busy("Loading ...", total=n) as task: task.step()`: shown as the busy card, GET /busy
-        from studio_ia.snapshots import Snapshots
-        self.snapshots = Snapshots(self)  # what the Tk thread reads instead of calling slow services; inert until the shell starts it
 
     # events ---------------------------------------------------------------
-    def bind_ui(self, widget):
-        self._ui, self._ui_thread = widget, threading.get_ident()
-        ui_guard.bind(self._ui_thread)  # the @slow primitives read it: one running on this thread is a freeze
-
-    def on_ui_thread(self):
-        return self._ui_thread is not None and threading.get_ident() == self._ui_thread
-
-    def subscribe(self, callback):
-        """callback(kind, payload) runs on the Tk thread. Returns an unsubscribe function."""
-        self._subscribers.append(callback)
-        return lambda: self._subscribers.remove(callback) if callback in self._subscribers else None
-
     def watch(self, callback):
-        """callback(kind, payload) runs synchronously on whichever thread emits, never through Tk; safe to call from any
-        thread. For code with no Tk loop (the API server). Keep the callback quick: it runs inside emit(), on the worker
-        that emitted. Returns an unsubscribe function."""
+        """callback(kind, payload) runs synchronously on whichever thread emits; safe to call from any thread. Keep the
+        callback quick: it runs inside emit(), on the worker that emitted. Returns an unsubscribe function."""
         with self._raw_lock:
             self._raw.append(callback)
 
@@ -182,44 +169,18 @@ class Services:
         return off
 
     def emit(self, kind, payload=None):
-        """Safe from any thread. On the Tk thread delivery is scheduled with `after`; another thread only queues the event
-        for pump(), because a Tk call from a worker can reach an app that is already destroyed and crash the process.
-        Watchers (watch()) are told first, right here on the emitting thread; the Tk path below is unchanged by them."""
+        """Safe from any thread. Every watcher (watch()) is told right here, on the emitting thread."""
         with self._raw_lock:
             raw = list(self._raw)
         for callback in raw:
             callback(kind, payload)
 
-        def deliver():
-            for callback in list(self._subscribers):
-                callback(kind, payload)
-        if self._ui is None:
-            deliver()
-        elif self.on_ui_thread():
-            self._ui.after(0, deliver)
-        else:
-            self._events.put((kind, payload))
-
-    def pump(self):
-        """Tk thread: deliver the events other threads emitted since the last call, in order."""
-        while True:
-            try:
-                kind, payload = self._events.get_nowait()
-            except queue.Empty:
-                return
-            for callback in list(self._subscribers):
-                callback(kind, payload)
-
-    # slow reads: what one is doing right now, polled by the shell's loading panel ---------------------------------
+    # slow reads: what one is doing right now, polled by the API's jobs (studio_api.jobs) ---------------------------------
     loading = ("", None)
 
     def note(self, text, fraction=None):
         """Safe from any thread. fraction None = no measurable progress yet."""
         self.loading = (text, fraction)
-
-    def ready(self, work):
-        """True when work() (service reads only) will not keep the Tk thread waiting; otherwise the shell hands it to its worker."""
-        return True
 
     # staged design change: the Network designer's unsaved draft, read by Quick test and Compare runs ----------------
     _staged = None
@@ -348,10 +309,6 @@ class Services:
     def has_text(self):
         """Whether any text has been added. The sidebar asks at launch, so a store that has not been summarised yet must not be read."""
         return self.data("text").count > 0
-
-    def next_step_if_ready(self):
-        """next_step() when it will not keep the Tk thread waiting (ready()), else None: a page's empty state keeps its own words."""
-        return self.next_step() if self.ready(self.next_step) else None
 
     def start_queue(self):
         """Let jobs saved as waiting by an earlier session run (no-op where there is no real queue)."""
@@ -609,7 +566,7 @@ class Services:
         """The loss on a grid of weights around a version's weights (studio_landscape): {mode, unit, grid, span, seed, axis [grid], loss
         [grid][grid] (rows are the second direction), ceiling, current {x, y, loss, step}, minimum {x, y, loss, inside}, trajectory
         [{step, x, y, loss}], center {step, name}, batch {rows, tokens}, cost {seconds, evaluations}, note, live}. snapshot picks the
-        centre from viewer_snapshots (default: the best checkpoint). live is a small, throttled frame with the same directions as the
+        centre from the version's training snapshots (default: the best checkpoint). live is a small, throttled frame with the same directions as the
         last one (new_anchor starts them afresh). ValueError with a sentence when it cannot run. Slow: call it off the Tk thread."""
         raise NotImplementedError
 
@@ -695,65 +652,6 @@ class Services:
         """Check a loop's best on all the held-back data and, if the gate passes, make it the version's checkpoint: the gate result."""
         raise NotImplementedError
 
-    # 3D viewer (S11): a separate Panda3D process; Services only starts, stops and talks to it -------------------
-    def viewer_status(self) -> dict:
-        """{'available': bool, 'running': bool, 'connected': bool}. available False = the viewer cannot be launched here."""
-        raise NotImplementedError
-
-    def viewer_start(self, scene=None):
-        """Launch the viewer (no-op if running), send the current version's spec and `scene` ({'level','mode'}) when given."""
-        raise NotImplementedError
-
-    def viewer_stop(self):
-        raise NotImplementedError
-
-    def viewer_send(self, message):
-        """Queue one dict message for a running viewer (e.g. {'type': 'scene', 'level': 'Window', 'mode': 'Train'})."""
-        raise NotImplementedError
-
-    def viewer_poll(self) -> list:
-        """Messages the viewer sent back since the last call."""
-        raise NotImplementedError
-
-    def viewer_snapshots(self, number=None) -> list:
-        """A version's training snapshots, oldest first; omit number for the current version."""
-        raise NotImplementedError
-
-    def viewer_probe_step(self, text, number=None):
-        """Run one real training step of the chosen (default current) version's checkpoint without touching training, save it
-        as a snapshot and return its path; None when the version has no checkpoint. Slow: call it off the Tk thread."""
-        raise NotImplementedError
-
-    def viewer_token_text(self, number, ids):
-        """The text of each token id (a list of strings, '' for a piece with no text), for the viewer's labels; None when the version
-        has no tokenizer yet. A small file read."""
-        return None
-
-    def viewer_summary(self, number=None) -> tuple:
-        """(state, summary) of a version's saved whole-context summary (studio_summary.summary_state): state is ready, stale, none or
-        no_checkpoint; summary is {edges, n_ctx, step, attention, stream_norms} when ready or stale, else None. A file read."""
-        from studio_summary import summary_state
-        return summary_state(self._summary_checkpoint(number))
-
-    def viewer_summarize(self, number=None) -> dict:
-        """Run the chosen (default current) version's checkpoint over a full window of its held-back text, save the summary beside
-        the run's snapshots and return it (studio_summary.whole_context). ValueError with a sentence when there is no checkpoint or
-        no held-back text to read. Slow: call it off the Tk thread."""
-        from pathlib import Path
-
-        from studio_ia.copy import INSIDE3D
-        from studio_summary import save_summary, whole_context
-        checkpoint = self._summary_checkpoint(number)
-        if not checkpoint or not Path(checkpoint).is_file():
-            raise ValueError(INSIDE3D["summary_no_checkpoint"])
-        summary = whole_context(checkpoint, self._heldout())
-        save_summary(checkpoint, summary)
-        return summary
-
-    def _summary_checkpoint(self, number):
-        version = self.current_version() if number is None else next((v for v in self.versions() if v.number == number), None)
-        return version.best_checkpoint if version is not None else None
-
     def _heldout(self):
         """The held-back documents as text."""
         raise NotImplementedError
@@ -810,41 +708,9 @@ class FakeServices(Services):
         self._worker_lock = threading.Lock()
         self._versions: list[Version] = []
         self._queue = QueueState()
-        self.viewer_log: list = []  # (action, payload): the fake viewer records calls and spawns nothing
-        self._viewer_running = False
-        self.snapshot_paths: list = []  # what viewer_snapshots returns
-        self.probe_path = None  # what viewer_probe_step returns
-        self.heldout_docs: list = []  # the held-back text viewer_summarize reads
+        self.heldout_docs: list = []  # the held-back text
         self.reviewed_text = True  # whether the text sets hold an example marked Good
         self.conversations_in_text = 40  # how many conversations a cluster run's teacher can answer are in the data
-
-    def viewer_status(self):
-        return {"available": True, "running": self._viewer_running, "connected": self._viewer_running}
-
-    def viewer_start(self, scene=None):
-        self._viewer_running = True
-        self.viewer_log.append(("start", scene))
-
-    def viewer_stop(self):
-        self._viewer_running = False
-        self.viewer_log.append(("stop", None))
-
-    def viewer_send(self, message):
-        if self._viewer_running:
-            self.viewer_log.append(("send", message))
-
-    def viewer_poll(self):
-        return []
-
-    def viewer_snapshots(self, number=None):
-        return list(self.snapshot_paths)
-
-    def viewer_token_text(self, number, ids):
-        return None
-
-    def viewer_probe_step(self, text, number=None):
-        self.viewer_log.append(("probe", text))
-        return self.probe_path
 
     def inspect_landscape(self, version, snapshot=None, mode="random", grid=21, span=1.0, seed=0, live=False, new_anchor=False, stop=None):
         """A made-up bowl with two ripples and a path that walks into it one point longer per call, so a live page has something to show."""
@@ -1514,7 +1380,6 @@ class FakeServices(Services):
 import json  # noqa: E402
 import math  # noqa: E402
 import uuid  # noqa: E402
-from studio_ia.snapshots import start_thread  # noqa: E402
 from dataclasses import asdict, fields  # noqa: E402
 from pathlib import Path  # noqa: E402
 
@@ -1580,20 +1445,8 @@ LANDSCAPE_LIVE_PATH = 6  # and draws at most this many of the newest snapshots a
 LANDSCAPE_LIVE_THROTTLE = 3.0  # it sleeps 3 s per second of work, so a live frame takes about a quarter of one core
 
 
-class _Cold(BaseException):
-    """Raised inside ready(): the read asked for is not cached. Not an Exception, so no page's own handler swallows it."""
-
-
-class _Slow(_Cold):
-    """A _Cold that is long however small the store is (scoring a checkpoint, parsing the held-back text): ready() says no."""
-
-
-class _Pending(Exception):
-    """_held_scores(later=True) on the Tk thread: the checkpoint is being scored on a worker, which emits "versions" when done."""
-
-
 class WorkspaceServices(Services):
-    """Every Services method over the real modules. Queue events fire on the runner thread and hop to Tk via emit."""
+    """Every Services method over the real modules. Queue events fire on the runner thread and reach the watchers through emit."""
 
     auto_bench = True  # a version that gets weights is scored on the frozen suite by itself (_bench_later); a test may turn it off
 
@@ -1626,13 +1479,11 @@ class WorkspaceServices(Services):
         import studio_memory
         self._models, self._cache = {}, {}
         self.ledger = studio_memory.Ledger()  # the bytes of the chat models in _models
-        self._chat_lock = threading.RLock()  # _models, _using, _job_running and where each model is; no Tk-thread read takes it
+        self._chat_lock = threading.RLock()  # _models, _using, _job_running and where each model is
         self._using, self._job_running = {}, False  # per model, the lock a reply holds so the model is not moved under it
         self._lock = threading.RLock()
         self._made = {}  # cache key -> the lock held while it is being made
-        self._data, self._probe = {}, threading.local()  # reads of the stored data, kept until it next changes
-        self._to_score, self._scorer, self._unscorable = {}, False, set()  # held-back scores the Tk thread asked for (_held_scores)
-        self._score_lock = threading.Lock()
+        self._data = {}  # reads of the stored data, kept until it next changes
         self._bench_lock, self._bench_wait, self._bench_busy = threading.Lock(), [], False  # versions waiting for the frozen suite (_bench_later)
 
     @classmethod
@@ -1645,10 +1496,6 @@ class WorkspaceServices(Services):
         return self
 
     def close(self):
-        if self._ui_thread is not None:
-            ui_guard.unbind(self._ui_thread)
-        if getattr(self, "_viz", None) is not None:
-            self._viz.stop(wait=False)
         self.runner.shutdown(timeout=2)
         import studio_distributed
         studio_distributed.unload(self.root)
@@ -1657,73 +1504,6 @@ class WorkspaceServices(Services):
         bench = getattr(self, "_bench_thread", None)
         if bench is not None:  # it writes under data/bench, which a caller removing the workspace must not race
             bench.join(60)
-
-    # 3D viewer --------------------------------------------------------------
-    _viz = None
-
-    def viewer_status(self):
-        script = Path(__file__).resolve().parent.parent / "studio_brain3d.py"
-        viz = self._viz
-        return {"available": script.exists(), "running": bool(viz and viz.running), "connected": bool(viz and viz.connected)}
-
-    def viewer_start(self, scene=None):
-        from studio_vizbridge import VizBridge
-        if self._viz is None:
-            self._viz = VizBridge(Path(__file__).resolve().parent.parent / "studio_brain3d.py")
-        if not self._viz.running:
-            self._viz.start(log_path=self.root / "logs" / "viewer.log")
-        version = self.current_version()
-        if version is not None and version.spec:
-            self._viz.send({"type": "spec", "spec": version.spec})
-        if scene:
-            self._viz.send({"type": "scene", **scene})
-
-    def viewer_stop(self):
-        if self._viz is not None:
-            self._viz.stop(wait=False)
-
-    def viewer_send(self, message):
-        if self._viz is not None:
-            self._viz.send(message)
-
-    def viewer_poll(self):
-        return self._viz.poll() if self._viz is not None else []
-
-    def viewer_snapshots(self, number=None):
-        version = self.current_version() if number is None else next((v for v in self.versions() if v.number == number), None)
-        if version is None:
-            return []
-        return [str(p) for run in version.runs for p in sorted(Path(self._abs(run)).glob("viz/step_*.npz"))]
-
-    def viewer_token_text(self, number, ids):
-        import json
-
-        from studio_model import Tokenizer
-        version = self.current_version() if number is None else next((v for v in self.versions() if v.number == number), None)
-        for run in (version.runs if version is not None else []):
-            path = Path(self._abs(run)) / "tokenizer.json"
-            if path.is_file():
-                tokenizer = Tokenizer.restore(json.loads(path.read_text(encoding="utf-8")))
-                return [tokenizer.decode([int(i)]) for i in ids]
-        return None
-
-    def viewer_probe_step(self, text, number=None):
-        import numpy as np
-
-        from studio_core import uid
-        from studio_model import Tokenizer, load_checkpoint
-        from studio_snapshot import one_step, save
-        version = self.current_version() if number is None else next((v for v in self.versions() if v.number == number), None)
-        source = version.best_checkpoint if version is not None else None
-        if not source or not Path(source).exists():
-            return None
-        data = load_checkpoint(source)
-        ids = np.asarray(Tokenizer.restore(data["tokenizer"]).encode(text), dtype=np.int64)[None, -data["config"]["context"]:]
-        if ids.shape[1] < 2:
-            raise ValueError("the probe text needs at least two tokens")
-        targets = np.roll(ids, -1, axis=1)
-        targets[:, -1] = -100  # the last position has no next token to predict
-        return str(save(self.workspace.run_dir / uid("probe"), one_step(source, ids, targets)))
 
     # versions ---------------------------------------------------------------
     def _rows(self):
@@ -1890,10 +1670,7 @@ class WorkspaceServices(Services):
             if best is None:  # with one scored version there is nothing to compare, so no held-back text is read
                 best = row
                 continue
-            try:
-                gain = self._gate(self._abs(best["best_checkpoint"]), self._abs(row["best_checkpoint"]))
-            except _Pending:  # not scored yet: the stored numbers decide, as without held-back text, until the worker's "versions" event
-                gain = None
+            gain = self._gate(self._abs(best["best_checkpoint"]), self._abs(row["best_checkpoint"]))
             if gain is not None:
                 weighed[row["number"]] = {**gain, "vs": best["number"]}
                 self._rescored(best)
@@ -1913,10 +1690,7 @@ class WorkspaceServices(Services):
         import studio_eval
         if row["scorecard"].get("bpc_method") == studio_eval.SCORE_METHOD:
             return
-        try:
-            scores = self._held_scores(self._abs(row["best_checkpoint"]), later=True)
-        except _Pending:  # swapped in when the worker's "versions" event makes this read again
-            return
+        scores = self._held_scores(self._abs(row["best_checkpoint"]))
         if scores is not None:
             card = {**(self.store.get(row["number"]).get("scorecard") or {}), "bpc": studio_eval.corpus_bpc(scores),
                     "bpc_method": studio_eval.SCORE_METHOD}
@@ -2327,31 +2101,17 @@ class WorkspaceServices(Services):
             return self._made.setdefault(key, threading.Lock())
 
     def _fresh(self, key, make):
-        """make() once per state of the stored data (Workspace.revision). The Tk thread asks ready() first, so it only ever
-        picks up a finished result; a lane that asks while the other makes the same entry waits and takes it."""
+        """make() once per state of the stored data (Workspace.revision); a caller that asks while another makes the same
+        entry waits and takes it."""
         revision = self.workspace.revision
         hit = self._data.get(key)
         if hit is None or hit[0] != revision:
-            if getattr(self._probe, "on", False):
-                raise _Cold
             with self._once(key):
                 revision = self.workspace.revision
                 hit = self._data.get(key)
                 if hit is None or hit[0] != revision:
                     hit = self._data[key] = (revision, make())
         return hit[1]
-
-    def ready(self, work):
-        self._probe.on = True
-        try:
-            work()
-            return True
-        except _Slow:
-            return False
-        except _Cold:  # a small store is read in milliseconds, in place; a large one goes to the worker
-            return self.workspace.is_small()
-        finally:
-            self._probe.on = False
 
     def _stamp(self):
         """Size and time of the files the stored data lives in: says whether data/summaries.sqlite still describes them."""
@@ -3334,8 +3094,6 @@ class WorkspaceServices(Services):
         if stamp is None:
             return []
         if getattr(self, "_heldout_hit", (None,))[0] != stamp:
-            if getattr(self._probe, "on", False):
-                raise _Slow
             path = self.root / "data" / "heldout.json"
             self._heldout_hit = (stamp, [_doc(r) for r in json.loads(path.read_text(encoding="utf-8"))])
         return self._heldout_hit[1]
@@ -3347,12 +3105,9 @@ class WorkspaceServices(Services):
         return Tokenizer.restore(load_checkpoint(ckpt)["tokenizer"])
 
     def _cached(self, key, make):
-        """make() once per key. A hit never waits (the Tk thread reads these); a miss is long, so ready() answers no for it and
-        only a worker gets here. Misses of different keys run at once; two for the same key run make() once."""
+        """make() once per key. Misses of different keys run at once; two for the same key run make() once."""
         if key in self._cache:
             return self._cache[key]
-        if getattr(self._probe, "on", False):
-            raise _Slow
         with self._once(key):
             if key not in self._cache:
                 self._cache[key] = make()
@@ -3373,11 +3128,9 @@ class WorkspaceServices(Services):
         name = str(Path(ckpt).relative_to(self.root)) if Path(ckpt).is_relative_to(self.root) else str(ckpt)
         return name, json.dumps([name, file, stamp, studio_eval.SCORE_METHOD])
 
-    def _held_scores(self, ckpt, later=False):
+    def _held_scores(self, ckpt):
         """(documents, 2) array of nats and characters per held-back document for a checkpoint, or None without held-back text.
-        Kept in data/held_back_scores/ per key (_score_key), so a new launch scores nothing it already scored. Scoring takes
-        seconds per version: with later=True the Tk thread does not wait for it but gets _Pending, and a worker scores the
-        checkpoint (_score_later)."""
+        Kept in data/held_back_scores/ per key (_score_key), so a new launch scores nothing it already scored."""
         import hashlib
         import studio_eval
         got = self._score_key(ckpt)
@@ -3392,17 +3145,13 @@ class WorkspaceServices(Services):
                 self._cache[("scores", key)] = np.load(file)
             except (OSError, ValueError):
                 pass  # unreadable: scored again below
-        if (later and ("scores", key) not in self._cache and self.on_ui_thread()
-                and not getattr(self._probe, "on", False)):  # ready() still says not ready, so a page's worker reads it in place
-            self._score_later(ckpt, key)
-            raise _Pending
 
         def make():
             docs = self._heldout()
             if not docs:
                 return None
             from studio_backend import cap_threads
-            cap_threads()  # a snapshot worker scores here too, not only _score_later: leave cores for Tk and training
+            cap_threads()  # leave cores for training
             scores = np.array(studio_eval.score_docs(ckpt, docs), dtype=np.float64)
             with self._lock:
                 folder.mkdir(parents=True, exist_ok=True)
@@ -3414,41 +3163,10 @@ class WorkspaceServices(Services):
             return scores
         return self._cached(("scores", key), make)
 
-    def _score_later(self, ckpt, key):
-        """Score ckpt's held-back text on one worker, after any already asked for, then emit "versions" once so whatever
-        weighed versions without these scores reads again. A checkpoint whose scoring failed is not tried again from here."""
-        with self._score_lock:
-            if key in self._unscorable or key in self._to_score:
-                return
-            self._to_score[key] = ckpt
-            if self._scorer:
-                return
-            self._scorer = True
-
-        def run():
-            from studio_backend import cap_threads
-            cap_threads()
-            while True:
-                with self._score_lock:
-                    if not self._to_score:
-                        self._scorer = False
-                        break
-                    key, ckpt = next(iter(self._to_score.items()))
-                try:
-                    self._held_scores(ckpt)
-                except Exception:
-                    logging.getLogger(__name__).exception("scoring %s on the held-back text failed", ckpt)
-                    self._unscorable.add(key)
-                with self._score_lock:
-                    self._to_score.pop(key, None)
-            self.emit("versions", None)
-        start_thread(run)
-
     def _gate(self, parent_ckpt, candidate_ckpt):
-        """studio_eval.paired_gain of one checkpoint against another on the held-back text, or None without it. Once per pair.
-        _Pending on the Tk thread while either is still being scored."""
+        """studio_eval.paired_gain of one checkpoint against another on the held-back text, or None without it. Once per pair."""
         import studio_eval
-        parent, candidate = self._held_scores(parent_ckpt, later=True), self._held_scores(candidate_ckpt, later=True)
+        parent, candidate = self._held_scores(parent_ckpt), self._held_scores(candidate_ckpt)
         if parent is None or candidate is None:
             return None
         return self._cached(("gain", self._score_key(parent_ckpt)[1], self._score_key(candidate_ckpt)[1]),
@@ -3468,15 +3186,12 @@ class WorkspaceServices(Services):
             run = Path(v.best_checkpoint).parent
             tok = self._tokenizer(run)
             train = _run_docs(run)
-            scores = self._held_scores(best.best_checkpoint, later=True) if best and best.best_checkpoint else None
+            scores = self._held_scores(best.best_checkpoint) if best and best.best_checkpoint else None
             return {"uniform_bpc": studio_eval.uniform_bpc(tok, docs), "unigram_bpc": studio_eval.unigram_bpc(tok, train or docs, eval_docs=docs),
                     "best_so_far_bpc": None if scores is None else studio_eval.corpus_bpc(scores)}
         key = ("refs", v.best_checkpoint, best.best_checkpoint if best else None, (best.scorecard or {}).get("bpc") if best else None,
                self._heldout_stamp())
-        try:
-            return self._cached(key, make)
-        except _Pending:  # the best version is being scored: the lines come with the worker's "versions" event
-            return out
+        return self._cached(key, make)
 
     @timed("services.run_curve")
     def run_curve(self, run_dir):
@@ -3652,6 +3367,13 @@ class WorkspaceServices(Services):
         import studio_inspect
         return studio_inspect.loss_view(self._checkpoint(version), text, pos, trained)
 
+    def _training_snapshots(self, number):
+        """A version's training snapshots (viz/step_*.npz of each run), each run's in step order."""
+        version = next((v for v in self.versions() if v.number == number), None)
+        if version is None:
+            return []
+        return [str(p) for run in version.runs for p in sorted(Path(self._abs(run)).glob("viz/step_*.npz"))]
+
     def inspect_landscape(self, version, snapshot=None, mode="random", grid=21, span=1.0, seed=0, live=False, new_anchor=False, stop=None):
         import numpy as np
 
@@ -3665,7 +3387,7 @@ class WorkspaceServices(Services):
             mode, grid = "random", min(grid, LANDSCAPE_LIVE_GRID)
         mine = landscape.run_snapshots(run)  # the model is rebuilt from this run's own files, so only its snapshots share its shape
         if snapshot is not None:
-            every = [Path(p) for p in self.viewer_snapshots(v.number)]
+            every = [Path(p) for p in self._training_snapshots(v.number)]
             if not 0 <= snapshot < len(every) or every[snapshot] not in mine:
                 raise ValueError("Choose a snapshot of this version's latest run.")
             center = every[snapshot]

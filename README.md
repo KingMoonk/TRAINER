@@ -264,14 +264,13 @@ Entry points and engine services sit in the repository root; swappable model/tra
 |---|---|---|
 | Entry points | `app.py`, `train.py` | Start the API and open the web UI, or run training from the command line. |
 | API | `studio_api/` | The web UI's server; it talks only to `studio_ia/services.py`, which wraps the workspace, the version store and the queue. |
-| UI helpers | `studio_ia/copy.py`, `studio_glossary.py` | Every string on screen, plain-English glossary. |
+| UI helpers | `studio_glossary.py` | Plain-English glossary. |
 | Data | `studio_core.py`, `studio_catalog.py`, `studio_planning.py` | Workspace persistence, parsing and normalization, verified dataset downloads, bounded dataset mixtures. |
 | Learning engine | `studio_model.py`, `studio_backend.py` | Tokenizers, transformer, handwritten gradients, AdamW, training loop, checkpoints, inference, CPU/CUDA backend selection. |
 | Modular network engine | `studio_registry.py`, `studio_spec.py`, `studio_validate.py`, `studio_estimate.py`, `studio_compile.py`, `studio_modules/` | Registry-discovered modules, canonical ModelSpec, compatibility checks, module estimates and the compiler. |
 | Network editing | `studio_arch.py`, `studio_archdb.py` | Desktop architecture editor, per-block designs, and a versioned SQLite store of revisions and weight files. |
 | Curriculum and post-training | `studio_curriculum.py`, `studio_rlhf.py` | Stage-by-stage training across datasets; DPO/IPO preference training and the Ollama teacher client. |
 | Inspection and experiments | `studio_inspect.py`, `studio_summary.py`, `studio_experiments.py`, `studio_snapshot.py`, `studio_scene.py` | Probe, summary, experiment, snapshot/replay and renderer-independent scene services. |
-| 3D viewer | `studio_vizbridge.py`, `studio_brain3d.py` | `studio_brain3d.py` is a Panda3D viewer run as a separate process. `studio_vizbridge.py` connects it to the GUI over a loopback socket. |
 
 ### Dependency flow
 
@@ -284,7 +283,7 @@ train.py ─┐
           └──► studio_core, studio_backend
 ```
 
-`studio_model.py` owns training and checkpoint compatibility. The modular compiler and its services sit alongside it; they do not import Tkinter. The Panda3D viewer stays in its separate process and communicates through `studio_vizbridge.py`.
+`studio_model.py` owns training and checkpoint compatibility. The modular compiler and its services sit alongside it; they do not import Tkinter.
 
 ### Runtime data
 

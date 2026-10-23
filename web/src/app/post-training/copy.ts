@@ -1,5 +1,4 @@
-// The strings this page uses, moved from studio_ia/copy.py (FEEDBACK) and studio_ia/pages/post_training.py. The Python copy
-// stays while the Tk page uses it.
+// The strings this page uses.
 
 export const T = {
   title: "Post-training",

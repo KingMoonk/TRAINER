@@ -99,7 +99,7 @@ class ServicesTest(unittest.TestCase):
     def test_queue_events(self):
         from studio_ia.services import Job
         seen = []
-        unsub = self.svc.subscribe(lambda k, p: seen.append(k))
+        unsub = self.svc.watch(lambda k, p: seen.append(k))
         self.svc.pause()  # keep the runner from picking the job up
         job = self.svc.enqueue(Job("x", "quicktest", "t"))
         self.assertEqual([j.id for j in self.svc.queue().up_next], [job.id])
@@ -108,7 +108,7 @@ class ServicesTest(unittest.TestCase):
         self.assertIn("queue", seen)
         unsub()
 
-    def test_viewer_snapshots_are_the_current_versions_training_snapshots(self):
+    def test_training_snapshots_are_a_versions_viz_files_in_step_order(self):
         version = self.svc.current_version()
         made = []
         for run in version.runs:
@@ -118,32 +118,12 @@ class ServicesTest(unittest.TestCase):
                 made.append(viz / f"step_{step:08d}.npz")
                 made[-1].write_bytes(b"")
         self.addCleanup(lambda: [path.unlink() for path in made])
-        paths = self.svc.viewer_snapshots()
+        paths = self.svc._training_snapshots(version.number)
         self.assertEqual(sorted(paths), sorted(str(path) for path in made))
         self.assertTrue(paths[0].endswith("step_00000010.npz"))  # each run's snapshots in step order
-        self.assertEqual(self.svc.viewer_snapshots(version.number), paths)
         other = self.svc.versions()[0]
-        self.assertFalse(set(paths) & set(self.svc.viewer_snapshots(other.number)))
-        self.assertEqual(self.svc.viewer_snapshots(999), [])
-
-    def test_viewer_probe_uses_the_selected_versions_checkpoint(self):
-        from studio_snapshot import one_step
-        older = self.svc.versions()[0]
-        with mock.patch("studio_snapshot.one_step", wraps=one_step) as step:
-            path = self.svc.viewer_probe_step("The cat sat on the mat.", older.number)
-        self.addCleanup(lambda: Path(path).unlink(missing_ok=True))
-        self.assertEqual(step.call_args.args[0], older.best_checkpoint)
-        self.assertIsNone(self.svc.viewer_probe_step("The cat sat on the mat.", 999))
-
-    def test_viewer_probe_step_saves_one_real_snapshot(self):
-        from studio_snapshot import load
-        path = self.svc.viewer_probe_step("The cat sat on the mat because it was tired.")
-        self.assertTrue(Path(path).exists())
-        self.assertTrue(path.startswith(str(self.svc.workspace.run_dir)))
-        self.assertNotIn(path, self.svc.viewer_snapshots())  # a probe is not a training snapshot
-        self.assertTrue(any(key.startswith("weight::") for key in load(path)["arrays"]))
-        with self.assertRaises(ValueError):
-            self.svc.viewer_probe_step("a")
+        self.assertFalse(set(paths) & set(self.svc._training_snapshots(other.number)))
+        self.assertEqual(self.svc._training_snapshots(999), [])
 
     def test_inspect(self):
         out = self.svc.inspect_forward(None, "hello")
@@ -174,7 +154,7 @@ class WordListsTest(unittest.TestCase):
 
 
 class BandTest(unittest.TestCase):
-    """Scoring the held-back text stays off the Tk thread: ready() says no for it, it is kept on disk, and one scored version needs none."""
+    """Scoring the held-back text is kept on disk, and one scored version needs none."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -205,11 +185,9 @@ class BandTest(unittest.TestCase):
         self.assertEqual(verdict["better"], verdict["upper"] < 0)
         self.assertGreaterEqual(verdict["docs"], studio_eval.MIN_DOCS)
 
-    def test_missing_scores_go_to_the_worker_and_are_kept_on_disk(self):
-        self.assertFalse(self.svc.ready(self.svc.best_version))  # two scored versions, nothing scored yet
+    def test_missing_scores_are_kept_on_disk(self):
         self.svc.best_version()
         self.assertEqual(len(list(self.scores.glob("*.npy"))), 2)  # one file per checkpoint
-        self.assertTrue(self.svc.ready(self.svc.best_version))
         again = WorkspaceServices(self.svc.workspace)  # a new launch: the scores come from disk, the pair is only compared
         self.addCleanup(again.close)
         with mock.patch("studio_eval.score_docs", side_effect=AssertionError("scored again")):
@@ -217,54 +195,12 @@ class BandTest(unittest.TestCase):
             self.assertEqual(again.best_version().number, self.svc.best_version().number)
             self.assertEqual(again.gate_result(2)["diff"], self.svc.gate_result(2)["diff"])
 
-    def tk_thread(self, emitted):
-        """This test thread stands in for the Tk thread; emitted() runs for every event the services send."""
-        self.svc._ui_thread = threading.get_ident()
-        self.addCleanup(setattr, self.svc, "_ui_thread", None)
-        patch = mock.patch.object(self.svc, "emit", side_effect=emitted)
-        patch.start()
-        self.addCleanup(patch.stop)
-
-    def test_on_the_tk_thread_missing_scores_are_made_by_a_worker_that_says_when_they_are_in(self):
-        import studio_eval
-        release, announced, scored_on = threading.Event(), threading.Event(), set()
-        real = studio_eval.score_docs
-
-        def slow(*args, **kwargs):
-            scored_on.add(threading.get_ident())
-            release.wait(30)
-            return real(*args, **kwargs)
-        self.tk_thread(lambda kind, payload=None: announced.set() if kind == "versions" else None)
-        with mock.patch("studio_eval.score_docs", side_effect=slow):
-            self.assertEqual(self.svc.best_version().number, 2)  # not scored yet: the stored numbers decide, and the launch goes on
-            self.assertIsNone(self.svc.gate_result(2))
-            self.assertFalse(list(self.scores.glob("*.npy")))
-            release.set()
-            self.assertTrue(announced.wait(30))
-        self.assertNotIn(threading.get_ident(), scored_on)
-        self.assertEqual(len(list(self.scores.glob("*.npy"))), 2)
-        with mock.patch("studio_eval.score_docs", side_effect=AssertionError("scored again")):
-            self.assertIsNotNone(self.svc.gate_result(2))  # what the "versions" event reads: weighed now, in place
-
-    def test_a_checkpoint_that_cannot_be_scored_is_not_tried_again_from_the_tk_thread(self):
-        announced = threading.Event()
-        self.tk_thread(lambda kind, payload=None: announced.set() if kind == "versions" else None)
-        with mock.patch("studio_eval.score_docs", side_effect=ValueError("broken")) as score, self.assertLogs("studio_ia.services", "ERROR"):
-            self.svc.best_version()
-            self.assertTrue(announced.wait(30))
-            calls = score.call_count
-            announced.clear()
-            self.svc.best_version()  # what the "versions" event makes the strip do
-            self.assertFalse(announced.wait(0.5))
-            self.assertEqual(score.call_count, calls)
-
     def test_a_changed_checkpoint_or_held_back_file_is_scored_again(self):
         self.svc.best_version()
         ckpt = self.svc.versions()[0].best_checkpoint
         first = self.svc._held_scores(ckpt).copy()
         heldout = Path(self.tmp.name) / "data" / "heldout.json"
         heldout.write_text(heldout.read_text(encoding="utf-8") + " ", encoding="utf-8")
-        self.assertFalse(self.svc.ready(lambda: self.svc._held_scores(ckpt)))
         self.assertTrue((self.svc._held_scores(ckpt) == first).all())  # same text, same scores
         self.assertEqual(len(list(self.scores.glob("*.npy"))), 2)  # the stale file of that checkpoint is gone, not piled up
 
@@ -274,7 +210,7 @@ class BandTest(unittest.TestCase):
         ckpt = self.svc.versions()[0].best_checkpoint
         before = len(list(self.scores.glob("*.npy")))
         with mock.patch.object(studio_eval, "SCORE_METHOD", "old-method"):
-            self.assertFalse(self.svc.ready(lambda: self.svc._held_scores(ckpt)))  # the files on disk belong to the current method
+            self.svc._held_scores(ckpt)  # the files on disk belong to the current method
         card = self.svc.store.get(1)["scorecard"]
         self.assertEqual(card["bpc_method"], studio_eval.SCORE_METHOD)  # the 3.0 above was replaced by a fresh measurement
         self.assertNotEqual(card["bpc"], 3.)

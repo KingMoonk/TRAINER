@@ -137,8 +137,11 @@ class KeepMarkerTests(unittest.TestCase):
 
 class LocalReasonTests(unittest.TestCase):
     def test_over_the_fake_services(self):
+        import studio_distributed
         from studio_ia.services import FakeServices
 
+        studio_distributed.RUNS.clear()  # runs other tests left in this process are not this computer's
+        self.addCleanup(studio_distributed.RUNS.clear)
         services = FakeServices(sleep=lambda seconds: None)
         self.assertIsNone(entry.local_reason(services))
         services.demo_run()

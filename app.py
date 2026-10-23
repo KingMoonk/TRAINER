@@ -21,7 +21,7 @@ OPEN_WITHIN = 60.  # seconds to wait for the server to answer before giving up o
 BUILD_HINT = "The web UI is not built yet: run .venv/bin/python tasks.py web:build, then start the app again."
 
 
-HIDDEN = ("studio_brain3d", "studio_worker")  # the --hidden-import list in .github/workflows/release.yml: launched by name, so the import scan misses them
+HIDDEN = ("studio_worker",)  # the --hidden-import list in .github/workflows/release.yml: launched by name, so the import scan misses them
 
 
 def split_smoke(argv):

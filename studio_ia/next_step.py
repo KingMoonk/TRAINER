@@ -45,9 +45,3 @@ def next_step(has_text, versions, queue, outlook="") -> NextStep:
     best = trained[-1]
     return NextStep("chat", "Talk to it", f"Version {best.number} has trained. Ask it something in Chat.")
 
-
-def empty_line(services) -> str:
-    """The sentence a page with nothing to show puts under its "No trained version yet": what to do about it, from the same
-    next_step() the sidebar uses. "" when it cannot be known without a long read, or when the answer is to use the page itself."""
-    step = services.next_step_if_ready()
-    return "" if step is None or step.route == "chat" else step.line

@@ -19,7 +19,6 @@ import time
 import urllib.request
 from pathlib import Path
 
-from studio_ui_guard import slow
 from studio_core import ROOT, atomic_json, fingerprint, normalize, now, replace_file, truthy, uid
 from studio_decontam import group_id
 
@@ -307,7 +306,6 @@ def _cancel(stop):
         raise DownloadCancelled("Download cancelled. Completed source files are cached for the next attempt.")
 
 
-@slow("hash a file")
 def file_sha256(path, stop=None):
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
