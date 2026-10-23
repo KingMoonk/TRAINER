@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 import studio_diloco
 import studio_parts
+import studio_upload_admission
 
 router = APIRouter(prefix="/collective/{run}", tags=["collective"])
 # A long poll holds its thread for up to 30 s per member: its own pool keeps them from filling the threads every other plain `def` route shares.
@@ -104,6 +105,52 @@ class RoundView(Versioned):
 
 class Accepted(Versioned):
     accepted: bool = True
+
+
+class DeltaAnnouncement(BaseModel):
+    protocol: Literal[1] = 1
+    node: str
+    generation: int
+    epoch: int
+    tokens: int
+    steps: int
+    total: int
+    sha256: str
+    count: int
+    part_size: int
+    seconds: float = 0.
+    loss: float | None = None
+    down_bps: float = 0.
+
+
+def admission_identity(found, run, number, body):
+    """Fence a grant manifest against the coordinator's current membership lease."""
+    with found.cond:
+        found._advance()
+        try:
+            found._admit(found.current, number, body.node, body.generation, body.epoch, found.term)
+        except studio_diloco.Stale as exc:
+            raise HTTPException(409, str(exc), headers={studio_diloco.TERM_HEADER: str(found.term)}) from None
+        return transfer_identity(run, number, found.term, body.node, body.generation, body.epoch, body.tokens, body.steps,
+                                 body.seconds, body.loss, body.down_bps)
+
+
+def validate_upload_member(found, number, node, generation, epoch):
+    with found.cond:
+        found._advance()
+        try:
+            found._admit(found.current, number, node, generation, epoch, found.term)
+        except studio_diloco.Stale as exc:
+            raise HTTPException(409, str(exc), headers={studio_diloco.TERM_HEADER: str(found.term)}) from None
+
+
+def upload_admission(request: Request):
+    return request.app.state.upload_admission
+
+
+def admission_error(exc):
+    status = 429 if "budget is full" in str(exc) or "admission is full" in str(exc) else 409
+    raise HTTPException(status, str(exc)) from None
 
 
 class Progressed(Accepted):
@@ -278,6 +325,142 @@ async def delta_part(request: Request, round: int, node: str, generation: int, e
     def apply():
         found.submit(round, node, generation, epoch, tokens, steps, studio_diloco.decode_arrays(whole), seconds, loss, len(whole), found.term, speed)
     await run_in_threadpool(apply)
+    return Accepted(term=found.term)
+
+
+@router.post("/rounds/{round}/delta/transfers")
+def announce_delta(request: Request, round: int, body: DeltaAnnouncement,
+                   run: str = Run,
+                   found: "studio_diloco.Coordinator" = Depends(member_call)):
+    """Opt in to bounded receiver grants for one immutable encoded delta."""
+    if body.steps < 1 or body.tokens < 0 or body.seconds < 0:
+        raise HTTPException(422, "Delta counters must be non-negative and steps must be positive.")
+    manager = upload_admission(request)
+    identity = transfer_identity(run, round, found.term, body.node, body.generation, body.epoch, body.tokens, body.steps,
+                                 body.seconds, body.loss, body.down_bps)
+    existing = manager.resume(identity, body.total, body.sha256, body.count, body.part_size)
+    if existing is not None:
+        if existing["complete"]:
+            return existing
+        try:
+            admission_identity(found, run, round, body)
+        except HTTPException:
+            manager.cancel_transfer(existing["transfer_id"], existing["incarnation"])
+            raise
+        manager.fence_member(run, body.node, body.generation, body.epoch, found.term)
+        return existing
+    identity = admission_identity(found, run, round, body)
+    manager.fence_member(run, body.node, body.generation, body.epoch, found.term)
+    try:
+        return manager.announce(identity, body.total, body.sha256, body.count, body.part_size)
+    except studio_upload_admission.AdmissionError as exc:
+        admission_error(exc)
+
+
+def transfer_identity(run, round, term, node, generation, epoch, tokens, steps, seconds, loss, down_bps):
+    return (run, term, round, node, generation, epoch, tokens, steps, seconds, loss, down_bps)
+
+
+def delta_already_submitted(found, number, node):
+    with found.cond:
+        current = found.current
+        return ((current is not None and current.number == number and node in current.contributions) or
+                any(row.get("round") == number and node in row.get("contributed", []) for row in found.history))
+
+
+async def apply_granted_delta(found, manager, transfer_id, incarnation, identity, number, node, generation, epoch,
+                              tokens, steps, seconds, loss, down_bps, body, elapsed):
+    speed = rates(len(body), elapsed, down_bps)
+
+    def apply():
+        found.submit(number, node, generation, epoch, tokens, steps, studio_diloco.decode_arrays(body), seconds,
+                     loss, len(body), found.term, speed)
+
+    try:
+        await run_in_threadpool(apply)
+    except studio_diloco.Stale as exc:
+        if not delta_already_submitted(found, number, node):
+            manager.cancel_transfer(transfer_id, incarnation)
+            raise HTTPException(409, str(exc), headers={studio_diloco.TERM_HEADER: str(found.term)}) from None
+    except Exception:
+        manager.cancel_transfer(transfer_id, incarnation)
+        raise
+    manager.mark_complete(transfer_id, incarnation, identity)
+
+
+@router.get("/rounds/{round}/delta/transfers/capabilities")
+def delta_transfer_capabilities(request: Request, round: int, term: int = Term,
+                                found: "studio_diloco.Coordinator" = Depends(member_call)):
+    return upload_admission(request).capabilities()
+
+
+@router.get("/rounds/{round}/delta/transfers/{transfer_id}/grants")
+def delta_grants(request: Request, transfer_id: str, round: int, incarnation: str, node: str, generation: int,
+                 epoch: int, tokens: int, steps: int, term: int = Term, seconds: float = 0., loss: float | None = None,
+                 down_bps: float = 0., run: str = Run,
+                 found: "studio_diloco.Coordinator" = Depends(member_call)):
+    identity = transfer_identity(run, round, found.term, node, generation, epoch, tokens, steps, seconds, loss, down_bps)
+    manager = upload_admission(request)
+    try:
+        validate_upload_member(found, round, node, generation, epoch)
+        manager.fence_member(run, node, generation, epoch, found.term)
+    except HTTPException:
+        manager.cancel_transfer(transfer_id, incarnation)
+        raise
+    try:
+        return manager.grant(transfer_id, incarnation, identity)
+    except studio_upload_admission.AdmissionError as exc:
+        admission_error(exc)
+
+
+@router.post("/rounds/{round}/delta/transfers/{transfer_id}/parts", status_code=202, response_model=Accepted,
+             openapi_extra=OCTET_BODY)
+async def granted_delta_part(request: Request, transfer_id: str, round: int, incarnation: str, grant_id: str,
+                             part: int, size: int, part_sha256: str, node: str, generation: int, epoch: int,
+                             tokens: int, steps: int, term: int = Term, seconds: float = 0., loss: float | None = None,
+                             down_bps: float = 0., run: str = Run,
+                             found: "studio_diloco.Coordinator" = Depends(member_call)):
+    identity = transfer_identity(run, round, found.term, node, generation, epoch, tokens, steps, seconds, loss, down_bps)
+    manager = upload_admission(request)
+    try:
+        disposition = manager.begin_part(transfer_id, incarnation, identity, grant_id, part, size)
+        if disposition == "duplicate":
+            pending = manager.pending(transfer_id, incarnation, identity)
+            if pending is not None:
+                body, elapsed = pending
+                await apply_granted_delta(found, manager, transfer_id, incarnation, identity, round, node,
+                                          generation, epoch, tokens, steps, seconds, loss, down_bps, body, elapsed)
+            return Accepted(term=found.term)
+        try:
+            validate_upload_member(found, round, node, generation, epoch)
+            manager.fence_member(run, node, generation, epoch, found.term)
+        except HTTPException:
+            manager.cancel_transfer(transfer_id, incarnation)
+            raise
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                declared = int(content_length)
+            except ValueError:
+                raise studio_upload_admission.AdmissionError("Content-Length is invalid.") from None
+            if declared != size:
+                raise studio_upload_admission.AdmissionError("Content-Length does not match the granted part size.")
+        body_buffer = bytearray()
+        async for chunk in request.stream():
+            if len(body_buffer) + len(chunk) > size:
+                raise studio_upload_admission.AdmissionError("Request body exceeds the granted part size.")
+            body_buffer.extend(chunk)
+        if len(body_buffer) != size:
+            raise studio_upload_admission.AdmissionError("Request body does not match the granted part size.")
+        body = bytes(body_buffer)
+        finished = manager.finish_part(transfer_id, incarnation, identity, grant_id, part, body, part_sha256)
+    except studio_upload_admission.AdmissionError as exc:
+        manager.cancel_part(grant_id)
+        admission_error(exc)
+    if finished is not None:
+        whole, took = finished
+        await apply_granted_delta(found, manager, transfer_id, incarnation, identity, round, node,
+                                  generation, epoch, tokens, steps, seconds, loss, down_bps, whole, took)
     return Accepted(term=found.term)
 
 

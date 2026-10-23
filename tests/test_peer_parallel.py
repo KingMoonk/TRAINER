@@ -124,6 +124,13 @@ class ParallelUploads(unittest.TestCase):
             self.assertIs(posting.parts_route, False)
             self.assertEqual([path for method, path, _ in peer.requests], ["/up/parts", "/up", "/up"])  # one probe, ever
 
+    def test_receiver_grant_opt_in_falls_back_when_legacy_peer_has_no_capability_route(self):
+        with Peer(parts=False) as peer:
+            posting = client(peer, receiver_grants=True)
+            posting.post_bytes("/up", BODY)
+            self.assertEqual(peer.uploads, [BODY])
+            self.assertFalse(posting.receiver_grants)
+
     def test_a_small_body_is_one_post(self):
         with Peer() as peer:
             client(peer).post_bytes("/up", BODY[:PART])

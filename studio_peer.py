@@ -84,11 +84,15 @@ def base_url(address):
 
 
 class PeerClient:
-    def __init__(self, address, timeout=TIMEOUT, retries=RETRIES, opener=None, sleep=time.sleep, rng=None, streams=STREAMS, part=PART):
+    def __init__(self, address, timeout=TIMEOUT, retries=RETRIES, opener=None, sleep=time.sleep, rng=None, streams=STREAMS, part=PART,
+                 receiver_grants=False):
         self.address, self.base = address, base_url(address)
         self.timeout, self.retries = timeout, retries
         self.streams, self.part = max(1, int(streams)), max(1, int(part))  # settable: a member applies its own `streams` option
         self.parts_route = None  # whether the peer has the `/parts` upload route: None until asked, then True or False
+        self.receiver_grants = bool(receiver_grants)  # experimental opt-in; legacy behavior remains the default
+        self._receiver_grant_limit = None
+        self._receiver_grant_max_transfer = None
         self._open = opener or urllib.request.urlopen  # urlopen(request, timeout=...) -> a response with .read() and .status
         self._sleep, self._rng = sleep, rng or random.Random()
 
@@ -133,11 +137,101 @@ class PeerClient:
         """POST a binary body (an .npz); extra fields go in the query string. A body bigger than one part goes as parts posted at
         the same time to `<path>/parts` (see _post_parts) when the peer has that route."""
         data = bytes(data)
+        if self.receiver_grants and data:
+            sent = self._post_granted(path, data, params, timeout)
+            if sent is not None:
+                return sent
         if self.streams > 1 and len(data) > self.part and self.parts_route is not False:
             sent = self._post_parts(path, data, params, timeout)
             if sent is not None:
                 return sent
         return _json(self._call("POST", path, params, data, "application/octet-stream", timeout))
+
+    def _post_granted(self, path, data, params, timeout):
+        """Upload immutable encoded bytes under exact, receiver-issued part grants."""
+        base_path = path.rstrip("/")
+        route = f"{base_path}/transfers"
+        if self._receiver_grant_limit is None:
+            try:
+                capabilities = self.get_json(f"{route}/capabilities", params=params, timeout=timeout)
+            except PeerError as exc:
+                if exc.status == 404:
+                    self.receiver_grants = False
+                    return None
+                raise
+            if capabilities.get("protocol") != 1:
+                self.receiver_grants = False
+                return None
+            if int(capabilities.get("max_part_size", 0)) < 1 or int(capabilities.get("max_transfer", 0)) < 1:
+                raise PeerError("The receiver advertises no usable delta grant capacity.")
+            self._receiver_grant_limit = int(capabilities["max_part_size"])
+            self._receiver_grant_max_transfer = int(capabilities["max_transfer"])
+        if len(data) > self._receiver_grant_max_transfer:
+            raise PeerError(f"The encoded delta is {len(data)} bytes, above the receiver-grant transfer limit of "
+                            f"{self._receiver_grant_max_transfer} bytes.")
+        part_size = min(self.part, self._receiver_grant_limit)
+        whole = hashlib.sha256(data).hexdigest()
+        count = -(-len(data) // part_size)
+        manifest = {key: (params or {}).get(key, default) for key, default in
+                    (("node", ""), ("generation", 0), ("epoch", 0), ("tokens", 0), ("steps", 1),
+                     ("seconds", 0.), ("loss", None), ("down_bps", 0.))}
+        manifest.update(protocol=1, total=len(data), sha256=whole, count=count, part_size=part_size)
+        for attempt in range(2):
+            try:
+                return self._run_granted_transfer(route, manifest, params, timeout, data, part_size, count)
+            except PeerError as exc:
+                if attempt == 0 and exc.status == 409 and ("receiver restarted" in exc.detail.lower() or
+                                                           "unknown or fenced transfer" in exc.detail.lower()):
+                    continue  # receiver incarnation changed: announce the same immutable bytes again
+                if exc.status == 404 and exc.detail == "grant announcement unsupported":
+                    self.receiver_grants = False
+                    return None
+                raise
+        raise PeerError("The receiver restarted repeatedly during delta admission.")
+
+    def _run_granted_transfer(self, route, manifest, params, timeout, data, part_size, count):
+        try:
+            answer = self.post_json(route, manifest, params=params, timeout=timeout)
+        except PeerError as exc:
+            if exc.status == 404:
+                raise PeerError("The peer does not support delta grant announcements.", status=404,
+                                detail="grant announcement unsupported") from None
+            raise
+        if answer.get("complete"):
+            return {"accepted": True, "term": (params or {}).get("term", 1)}
+        transfer_id, incarnation = answer["transfer_id"], answer["incarnation"]
+        grant_path = f"{route}/{transfer_id}/grants"
+        part_path = f"{route}/{transfer_id}/parts"
+        shared = {key: value for key, value in {**(params or {}), **manifest, "incarnation": incarnation}.items()
+                  if value is not None}
+        pending = set(range(count))
+        idle, pool = 0, ThreadPoolExecutor(max_workers=max(1, self.streams), thread_name_prefix="peer-grants")
+        try:
+            while pending:
+                answer = self.get_json(grant_path, shared, timeout)
+                grants = answer.get("grants", [])
+                if not grants:
+                    idle += 1
+                    self._sleep(min(1., .1 * (2 ** min(idle - 1, 3))) * self._rng.uniform(.8, 1.2))
+                    continue
+                idle = 0
+
+                def send(grant):
+                    index = int(grant["part"])
+                    start = index * part_size
+                    body = data[start:start + part_size]
+                    query = {**shared, "grant_id": grant["grant_id"], "part": index, "size": len(body),
+                             "part_sha256": hashlib.sha256(body).hexdigest()}
+                    return _json(self._send("POST", part_path, query, body, "application/octet-stream", timeout,
+                                            None, None, None, PART_RETRIES))
+
+                futures = [pool.submit(send, grant) for grant in grants]
+                for grant, future in zip(grants, futures):
+                    future.result()
+                    pending.discard(int(grant["part"]))
+            return {"accepted": True, "term": (params or {}).get("term", 1)}
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     # -- parallel transfers
     def _ranged(self, path, params, timeout, cancel, sink):

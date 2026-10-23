@@ -727,6 +727,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/collective/{run}/rounds/{round}/delta/transfers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Announce Delta
+         * @description Opt in to bounded receiver grants for one immutable encoded delta.
+         */
+        post: operations["announce_delta_collective__run__rounds__round__delta_transfers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collective/{run}/rounds/{round}/delta/transfers/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Delta Transfer Capabilities */
+        get: operations["delta_transfer_capabilities_collective__run__rounds__round__delta_transfers_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collective/{run}/rounds/{round}/delta/transfers/{transfer_id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Delta Grants */
+        get: operations["delta_grants_collective__run__rounds__round__delta_transfers__transfer_id__grants_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collective/{run}/rounds/{round}/delta/transfers/{transfer_id}/parts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Granted Delta Part */
+        post: operations["granted_delta_part_collective__run__rounds__round__delta_transfers__transfer_id__parts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/collective/{run}/shards/{shard}": {
         parameters: {
             query?: never;
@@ -4376,6 +4447,45 @@ export interface components {
             remote_inner_steps: number;
             /** Rounds */
             rounds: number;
+        };
+        /** DeltaAnnouncement */
+        DeltaAnnouncement: {
+            /** Count */
+            count: number;
+            /**
+             * Down Bps
+             * @default 0
+             */
+            down_bps: number;
+            /** Epoch */
+            epoch: number;
+            /** Generation */
+            generation: number;
+            /** Loss */
+            loss?: number | null;
+            /** Node */
+            node: string;
+            /** Part Size */
+            part_size: number;
+            /**
+             * Protocol
+             * @default 1
+             * @constant
+             */
+            protocol: 1;
+            /**
+             * Seconds
+             * @default 0
+             */
+            seconds: number;
+            /** Sha256 */
+            sha256: string;
+            /** Steps */
+            steps: number;
+            /** Tokens */
+            tokens: number;
+            /** Total */
+            total: number;
         };
         /** Dispatch */
         Dispatch: {
@@ -10063,6 +10173,182 @@ export interface operations {
             };
             header?: never;
             path: {
+                round: number;
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__routers__collective__Accepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    announce_delta_collective__run__rounds__round__delta_transfers_post: {
+        parameters: {
+            query: {
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
+            header?: never;
+            path: {
+                round: number;
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeltaAnnouncement"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delta_transfer_capabilities_collective__run__rounds__round__delta_transfers_capabilities_get: {
+        parameters: {
+            query: {
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+            };
+            header?: never;
+            path: {
+                round: number;
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delta_grants_collective__run__rounds__round__delta_transfers__transfer_id__grants_get: {
+        parameters: {
+            query: {
+                incarnation: string;
+                node: string;
+                generation: number;
+                epoch: number;
+                tokens: number;
+                steps: number;
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+                seconds?: number;
+                loss?: number | null;
+                down_bps?: number;
+            };
+            header?: never;
+            path: {
+                transfer_id: string;
+                round: number;
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    granted_delta_part_collective__run__rounds__round__delta_transfers__transfer_id__parts_post: {
+        parameters: {
+            query: {
+                incarnation: string;
+                grant_id: string;
+                part: number;
+                size: number;
+                part_sha256: string;
+                node: string;
+                generation: number;
+                epoch: number;
+                tokens: number;
+                steps: number;
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+                seconds?: number;
+                loss?: number | null;
+                down_bps?: number;
+            };
+            header?: never;
+            path: {
+                transfer_id: string;
                 round: number;
                 /** @description the run id: the pretrain_distributed job's id */
                 run: string;

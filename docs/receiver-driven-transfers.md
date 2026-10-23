@@ -1,6 +1,6 @@
 # Receiver-driven transfers over the swarm network
 
-Discovery for [#648](https://github.com/KingMoonk/TRAINER/issues/648). This note describes a proposed protocol, not an implemented transport. Secondary GPU work is deferred to [#649](https://github.com/KingMoonk/TRAINER/issues/649).
+Discovery and implementation notes for [#648](https://github.com/KingMoonk/TRAINER/issues/648). The opt-in delta upload path from [#650](https://github.com/KingMoonk/TRAINER/issues/650) is implemented as an experimental HTTP admission protocol; downloads and default enablement remain future work. Secondary GPU work is deferred to [#649](https://github.com/KingMoonk/TRAINER/issues/649).
 
 ## Objective and constraints
 
@@ -21,6 +21,16 @@ Source: John Ousterhout, [It's Time to Replace TCP in the Datacenter](https://ar
 - The overlap exchange encodes, uploads, waits for the next round, and downloads weights in the background. The next compute boundary calls `Member._join`; any exchange time beyond the available computation becomes an exposed stall.
 - Progress reports have a bounded coordinator-lock wait and can return `accepted=false`. Round views use a separate long-poll executor but still acquire coordinator state. Measure both transport completion and application acceptance.
 - Existing `node_rates` report application goodput. Timeline marks approximate transfer phases; they do not establish exact transfer overlap. Traffic records have a bounded ring; long experiments need continuous export.
+
+## Implemented prototype (#650)
+
+`PeerClient(receiver_grants=True)` or the member's `--receiver-grants` flag opts into experimental protocol version 1. It first requests capabilities, announces the immutable encoded body and its run/round/term/generation/lease identity, then polls for exact byte ranges and sends only those parts. The sender clamps its part size to the receiver's advertised limit. A 404 on capability discovery disables the option for that client and falls back to the existing upload route; it is off by default.
+
+The API process owns one admission manager shared by requests in that process. The supported `studio_api` entrypoint starts Uvicorn without a worker count (one worker); grant accounting is therefore process-wide for the current server. A multi-worker deployment must partition traffic or use a shared admission service before enabling this protocol. A service restart creates a new incarnation and fences old transfer IDs. Grants expire against the receiver's monotonic clock; unstarted reservations are returned, while receiving requests remain charged until they drain or the transfer expires. Completed announcements and repeated part acknowledgements are idempotent.
+
+The first guardrails default to 32 MiB outstanding, 512 MiB reserved assembly memory, 4 MiB maximum grant, 256 MiB per transfer, 256 active transfers and eight per member. `--delta-outstanding-mib`, `--delta-assembly-mib`, and `--delta-grant-mib` configure the three byte budgets. These are safety defaults for the opt-in prototype, not WAN tuning results. The receiver reserves up to twice the encoded body plus bounded final-request buffers for part storage and whole-body verification; its advertised maximum transfer size reflects that reservation. Grant polls are rate-limited per transfer, member and process. The upload body is read incrementally and rejected if it exceeds its grant. Admission emits announced, granted, accepted and fenced events with ranges, current byte counts and total transfer duration; existing API traffic records call timing, status and byte counts.
+
+This prototype does not yet separate admission wait from transmission time, count retries by reason, guarantee fair scheduling between runs, or implement cross-process accounting. A process restart fences old grants; the sender re-announces the same bytes once after an incarnation error, but there is no durable status across coordinator recovery or repeated restarts. It has no production-network benefit measurement. Those remain #650 acceptance work; no DiLoCo numerical, membership, deadline or late-update rule changed.
 
 ## First-principles budgets
 

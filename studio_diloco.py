@@ -2620,9 +2620,11 @@ class Member:
 
     def __init__(self, client, run, node, epoch, shard_dir, stop, clock=time.monotonic, emit=None, wait=LONG_POLL, patience=300., sleep=time.sleep,
                  progress=True, overlap=False, spawn=Background, replica_dir=None, locate=None, pause=None, memory_share=None,
-                 cache_dir=None, streams=None):
+                 cache_dir=None, streams=None, receiver_grants=False):
         if streams is not None and hasattr(client, "streams"):
             client.streams = max(1, int(streams))  # parallel streams per transfer (studio_peer.PeerClient); None keeps the client's default
+        if hasattr(client, "receiver_grants"):
+            client.receiver_grants = bool(receiver_grants)  # opt in to the experimental upload admission protocol
         self.down_bps = 0.  # how fast the latest weights came down, bytes per second; told to the coordinator with the change
         self.pause, self.memory_share = pause, memory_share  # this node's queue plan: its pause event and its share of memory
         self.client, self.run, self.node, self.epoch, self.shard_dir, self.stop = client, run, node, epoch, Path(shard_dir), stop
@@ -3425,6 +3427,7 @@ def main(argv=None):
                         help="train the next round while this round's delta uploads and the next weights download (applied a round late)")
     member.add_argument("--streams", type=int, default=None,
                         help="parallel streams per transfer of weights, shards and changes (default: studio_peer.STREAMS; 1 is one stream)")
+    member.add_argument("--receiver-grants", action="store_true", help="opt in to experimental receiver-granted delta uploads")
     member.add_argument("--root", default="", help="folder that holds data/remote_shards (default: the workspace root)")
     args = parser.parse_args(argv)
     import socket
@@ -3438,7 +3441,8 @@ def main(argv=None):
             if event.get("type") in ("metric", "info"):
                 print(json.dumps({key: event[key] for key in ("type", "step", "loss", "val_loss", "text") if key in event}), flush=True)
         run_member(PeerClient(args.coordinator), args.run, args.node or socket.gethostname(), args.epoch, root,
-                   Path(scratch) / "member", show, stop, overlap=args.overlap, streams=args.streams)
+                   Path(scratch) / "member", show, stop, overlap=args.overlap, streams=args.streams,
+                   receiver_grants=args.receiver_grants)
     except KeyboardInterrupt:
         stop.set()
     finally:
