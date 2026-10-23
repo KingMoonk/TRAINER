@@ -764,6 +764,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/collective/{run}/rounds/{round}/delta/transfers/{transfer_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Cancel Delta */
+        delete: operations["cancel_delta_collective__run__rounds__round__delta_transfers__transfer_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/collective/{run}/rounds/{round}/delta/transfers/{transfer_id}/grants": {
         parameters: {
             query?: never;
@@ -10269,6 +10286,50 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_delta_collective__run__rounds__round__delta_transfers__transfer_id__delete: {
+        parameters: {
+            query: {
+                incarnation: string;
+                node: string;
+                generation: number;
+                epoch: number;
+                tokens: number;
+                steps: number;
+                /** @description the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join */
+                term: number;
+                seconds?: number;
+                loss?: number | null;
+                down_bps?: number;
+            };
+            header?: never;
+            path: {
+                transfer_id: string;
+                round: number;
+                /** @description the run id: the pretrain_distributed job's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

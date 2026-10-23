@@ -88,6 +88,8 @@ def parse(argv=None, prog="python -m studio_api"):
                         help="receiver-grant assembly-memory budget in MiB (default: 512; experimental opt-in uploads)")
     parser.add_argument("--delta-grant-mib", type=positive_mib, default=4,
                         help="largest receiver grant in MiB (default: 4; experimental opt-in uploads)")
+    parser.add_argument("--delta-turn-mib", type=positive_mib, default=4,
+                        help="maximum bytes granted to one transfer per fair queue turn in MiB (default: 4)")
     parser.add_argument("--allow-origin", action="append", default=[], type=origin, metavar="ORIGIN",
                         help=f"a web origin (the Vercel site) allowed to call the API from a browser once authenticated; repeat for "
                              f"several, or list them comma-separated in ${ORIGINS} (default: none)")
@@ -122,7 +124,8 @@ def build(args):
     hosts.start_refresh()
     upload_admission_options = {"max_outstanding": args.delta_outstanding_mib << 20,
                                 "max_assembly": args.delta_assembly_mib << 20,
-                                "grant_bytes": args.delta_grant_mib << 20}
+                                "grant_bytes": args.delta_grant_mib << 20,
+                                "turn_bytes": args.delta_turn_mib << 20}
     if args.fake:
         from studio_ia.services import FakeServices
 

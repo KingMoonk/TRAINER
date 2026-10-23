@@ -200,6 +200,38 @@ class OverHttp(Collective):
         self.assertEqual(admission.outstanding_bytes, 0)
         self.assertEqual(admission.assembly_bytes, 0)
 
+    def test_status_recovers_unapplied_assembly_and_commit_wins_concurrent_cancel(self):
+        coordinator = self.start(inner_steps=2, rounds=3, outer_lr=1.)
+        admission = UploadAdmission()
+        peer = PeerClient(self.serve(admission))
+        peer.post_json("/collective/r1/join", {"node": "a", "epoch": 1}, {"term": 0})
+        view = peer.get_json("/collective/r1/rounds/0", {"node": "a", "term": 1})
+        body = self.delta_body(coordinator)
+        identity = ("r1", 1, 0, "a", view["generation"], 1, 10, 2, 0., None, 0.)
+        transfer = admission.announce(identity, len(body), hashlib.sha256(body).hexdigest(), 1, len(body))
+        ident, inc = transfer["transfer_id"], transfer["incarnation"]
+        grant = admission.grant(ident, inc, identity)["grants"][0]
+        admission.begin_part(ident, inc, identity, grant["grant_id"], 0, len(body))
+        admission.finish_part(ident, inc, identity, grant["grant_id"], 0, body, hashlib.sha256(body).hexdigest())
+        admission.end_part(grant["grant_id"])
+        self.assertFalse(admission.transfers[ident]["applying"])
+        original_submit = coordinator.submit
+
+        def submit(*args, **kwargs):
+            # The application worker owns the outcome already; cancellation
+            # must not destroy its forthcoming receipt after numerical submit.
+            admission.cancel_transfer(ident, inc)
+            return original_submit(*args, **kwargs)
+
+        coordinator.submit = submit
+        query = {"incarnation": inc, "node": "a", "generation": view["generation"], "epoch": 1,
+                 "tokens": 10, "steps": 2, "term": 1}
+        route = f"/collective/r1/rounds/0/delta/transfers/{ident}/grants"
+        self.assertTrue(peer.get_json(route, query)["complete"])
+        self.assertTrue(peer.get_json(route, query)["complete"])
+        self.assertEqual(len(coordinator.history), 1)
+        self.assertEqual(admission.assembly_bytes, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

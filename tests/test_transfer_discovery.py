@@ -49,6 +49,15 @@ class MeasurementTests(unittest.TestCase):
                 self.assertGreater(result['control']['bulk']['samples'], 0)
                 self.assertEqual(result['control']['bulk']['errors'], 0)
 
+    def test_real_http_receiver_grants_preserve_integrity_and_fair_member_completion(self):
+        result = run_case(b'grant-payload' * 8192, 512 * 1024, .001, 4, 2, 4096, .03, .005,
+                          direction='up', receiver_grants=True)
+        self.assertTrue(result['integrity_ok'])
+        self.assertEqual(result['useful_bytes'], 2 * 13 * 8192)
+        self.assertEqual({row['member'] for row in result['transfers'] if row['valid']}, {0, 1})
+        self.assertLessEqual(result['aggregate_useful_bytes_per_second'], 512 * 1024 * 1.03)
+        self.assertEqual(result['control']['bulk']['errors'], 0)
+
 
 if __name__ == '__main__':
     unittest.main()

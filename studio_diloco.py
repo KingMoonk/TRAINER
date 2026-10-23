@@ -3275,7 +3275,10 @@ class Member:
         from studio_peer import PeerError
         began = self.clock()
         try:
-            self._call(lambda: self.client.post_bytes(f"{self.base}/rounds/{number}/delta", body, params, timeout=self.wait + 120))
+            options = {"timeout": self.wait + 120}
+            if getattr(self.client, "receiver_grants", False):
+                options["cancel"] = lambda: self.stop.is_set() or self.fenced or self.superseded
+            self._call(lambda: self.client.post_bytes(f"{self.base}/rounds/{number}/delta", body, params, **options))
             upload, trained = self.clock() - began, params.get("seconds", 0.)
             sparse = f" (top {self.info['delta_sparsity']:.1%})" if self.info.get("delta_sparsity") else ""
             text = (f"in {upload:.2f} s, while the next round trained." if overlapped

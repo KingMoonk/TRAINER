@@ -15328,6 +15328,164 @@
         ]
       }
     },
+    "/collective/{run}/rounds/{round}/delta/transfers/{transfer_id}": {
+      "delete": {
+        "operationId": "cancel_delta_collective__run__rounds__round__delta_transfers__transfer_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transfer_id",
+            "required": true,
+            "schema": {
+              "title": "Transfer Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "round",
+            "required": true,
+            "schema": {
+              "title": "Round",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "the run id: the pretrain_distributed job's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "description": "the run id: the pretrain_distributed job's id",
+              "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+              "title": "Run",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "incarnation",
+            "required": true,
+            "schema": {
+              "title": "Incarnation",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "node",
+            "required": true,
+            "schema": {
+              "title": "Node",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "generation",
+            "required": true,
+            "schema": {
+              "title": "Generation",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "epoch",
+            "required": true,
+            "schema": {
+              "title": "Epoch",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tokens",
+            "required": true,
+            "schema": {
+              "title": "Tokens",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "steps",
+            "required": true,
+            "schema": {
+              "title": "Steps",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+            "in": "query",
+            "name": "term",
+            "required": true,
+            "schema": {
+              "description": "the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join",
+              "minimum": 0,
+              "title": "Term",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "seconds",
+            "required": false,
+            "schema": {
+              "default": 0.0,
+              "title": "Seconds",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "loss",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Loss"
+            }
+          },
+          {
+            "in": "query",
+            "name": "down_bps",
+            "required": false,
+            "schema": {
+              "default": 0.0,
+              "title": "Down Bps",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Delta",
+        "tags": [
+          "collective"
+        ]
+      }
+    },
     "/collective/{run}/rounds/{round}/delta/transfers/{transfer_id}/grants": {
       "get": {
         "operationId": "delta_grants_collective__run__rounds__round__delta_transfers__transfer_id__grants_get",

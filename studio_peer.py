@@ -24,6 +24,7 @@ import random
 import shutil
 import threading
 import time
+from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import urllib.error
 import urllib.parse
@@ -57,6 +58,46 @@ def observe(callback):
     return stop
 
 
+class SenderEgressBudget:
+    """FIFO, nonblocking admission for outstanding grant-upload bytes in this process.
+
+    This bounds application concurrency, not network rate or kernel socket buffers.
+    One queued request per transfer prevents a many-stream client jumping the queue.
+    """
+
+    def __init__(self, capacity=32 << 20):
+        if capacity < 1:
+            raise ValueError("Sender egress capacity must be positive.")
+        self.capacity, self.outstanding = int(capacity), 0
+        self.lock, self.queue = threading.Lock(), deque()
+
+    def acquire(self, owner, size):
+        if not 0 < size <= self.capacity:
+            raise ValueError("Part exceeds sender egress capacity.")
+        with self.lock:
+            if not any(queued is owner for queued, _ in self.queue):
+                self.queue.append((owner, size))
+            head, requested = self.queue[0]
+            if head is not owner or requested > self.capacity - self.outstanding:
+                return False
+            self.queue.popleft()
+            self.outstanding += requested
+            return True
+
+    def release(self, size):
+        with self.lock:
+            self.outstanding -= size
+            if self.outstanding < 0:
+                raise RuntimeError("Sender egress credit released more than once.")
+
+    def cancel(self, owner):
+        with self.lock:
+            self.queue = deque((queued, size) for queued, size in self.queue if queued is not owner)
+
+
+_SENDER_EGRESS = SenderEgressBudget()
+
+
 class PeerError(Exception):
     """A call to a peer that failed. `status` is the HTTP status when the peer answered, None when it was not reached."""
 
@@ -85,12 +126,17 @@ def base_url(address):
 
 class PeerClient:
     def __init__(self, address, timeout=TIMEOUT, retries=RETRIES, opener=None, sleep=time.sleep, rng=None, streams=STREAMS, part=PART,
-                 receiver_grants=False):
+                 receiver_grants=False, sender_egress=None, grant_deadline=600.):
         self.address, self.base = address, base_url(address)
         self.timeout, self.retries = timeout, retries
         self.streams, self.part = max(1, int(streams)), max(1, int(part))  # settable: a member applies its own `streams` option
         self.parts_route = None  # whether the peer has the `/parts` upload route: None until asked, then True or False
+        if grant_deadline <= 0:
+            raise ValueError("Grant operation deadline must be positive.")
+        self.grant_deadline = float(grant_deadline)
+        self.sender_egress = _SENDER_EGRESS if sender_egress is None else sender_egress
         self.receiver_grants = bool(receiver_grants)  # experimental opt-in; legacy behavior remains the default
+        self.admission_mode = "requested" if receiver_grants else "legacy"
         self._receiver_grant_limit = None
         self._receiver_grant_max_transfer = None
         self._open = opener or urllib.request.urlopen  # urlopen(request, timeout=...) -> a response with .read() and .status
@@ -133,70 +179,97 @@ class PeerClient:
                 shutil.copyfileobj(response, stream, BLOCK)
         self._call("GET", path, params, None, None, timeout, save)
 
-    def post_bytes(self, path, data, params=None, timeout=None):
+    def post_bytes(self, path, data, params=None, timeout=None, cancel=None):
         """POST a binary body (an .npz); extra fields go in the query string. A body bigger than one part goes as parts posted at
         the same time to `<path>/parts` (see _post_parts) when the peer has that route."""
         data = bytes(data)
         if self.receiver_grants and data:
-            sent = self._post_granted(path, data, params, timeout)
+            sent = self._post_granted(path, data, params, timeout, cancel)
             if sent is not None:
                 return sent
+        if cancel is not None and cancel():
+            raise Cancelled("The upload was cancelled.")
         if self.streams > 1 and len(data) > self.part and self.parts_route is not False:
             sent = self._post_parts(path, data, params, timeout)
             if sent is not None:
                 return sent
         return _json(self._call("POST", path, params, data, "application/octet-stream", timeout))
 
-    def _post_granted(self, path, data, params, timeout):
+    def _post_granted(self, path, data, params, timeout, cancel=None):
         """Upload immutable encoded bytes under exact, receiver-issued part grants."""
+        deadline = time.monotonic() + self.grant_deadline
+
+        def check():
+            if cancel is not None and cancel():
+                raise Cancelled("The upload was cancelled.")
+            if time.monotonic() >= deadline:
+                raise PeerError("Receiver-granted upload exceeded its operation deadline.")
+
+        check()
         base_path = path.rstrip("/")
         route = f"{base_path}/transfers"
         if self._receiver_grant_limit is None:
             try:
-                capabilities = self.get_json(f"{route}/capabilities", params=params, timeout=timeout)
+                capabilities = self.get_json(f"{route}/capabilities", params=params, timeout=min(2., timeout or self.timeout))
             except PeerError as exc:
                 if exc.status == 404:
                     self.receiver_grants = False
+                    self.admission_mode = "legacy_unsupported"
                     return None
                 raise
             if capabilities.get("protocol") != 1:
                 self.receiver_grants = False
+                self.admission_mode = "legacy_protocol"
                 return None
             if int(capabilities.get("max_part_size", 0)) < 1 or int(capabilities.get("max_transfer", 0)) < 1:
                 raise PeerError("The receiver advertises no usable delta grant capacity.")
             self._receiver_grant_limit = int(capabilities["max_part_size"])
             self._receiver_grant_max_transfer = int(capabilities["max_transfer"])
+        self.admission_mode = "granted"
         if len(data) > self._receiver_grant_max_transfer:
             raise PeerError(f"The encoded delta is {len(data)} bytes, above the receiver-grant transfer limit of "
                             f"{self._receiver_grant_max_transfer} bytes.")
-        part_size = min(self.part, self._receiver_grant_limit)
+        part_size = min(self.part, self._receiver_grant_limit, self.sender_egress.capacity)
         whole = hashlib.sha256(data).hexdigest()
         count = -(-len(data) // part_size)
         manifest = {key: (params or {}).get(key, default) for key, default in
                     (("node", ""), ("generation", 0), ("epoch", 0), ("tokens", 0), ("steps", 1),
                      ("seconds", 0.), ("loss", None), ("down_bps", 0.))}
         manifest.update(protocol=1, total=len(data), sha256=whole, count=count, part_size=part_size)
-        for attempt in range(2):
+        for attempt in range(3):
             try:
-                return self._run_granted_transfer(route, manifest, params, timeout, data, part_size, count)
+                check()
+                return self._run_granted_transfer(route, manifest, params, timeout, data, part_size, count, check)
             except PeerError as exc:
-                if attempt == 0 and exc.status == 409 and ("receiver restarted" in exc.detail.lower() or
-                                                           "unknown or fenced transfer" in exc.detail.lower()):
-                    continue  # receiver incarnation changed: announce the same immutable bytes again
+                recoverable = ("receiver restarted" in exc.detail.lower() or "unknown or fenced transfer" in exc.detail.lower()
+                               or "receiver grant expired" in exc.detail.lower())
+                if attempt < 2 and exc.status == 409 and recoverable:
+                    continue  # reannounce the same immutable bytes after fencing or reacquire expired credit
                 if exc.status == 404 and exc.detail == "grant announcement unsupported":
                     self.receiver_grants = False
+                    self.admission_mode = "legacy_unsupported"
                     return None
                 raise
         raise PeerError("The receiver restarted repeatedly during delta admission.")
 
-    def _run_granted_transfer(self, route, manifest, params, timeout, data, part_size, count):
-        try:
-            answer = self.post_json(route, manifest, params=params, timeout=timeout)
-        except PeerError as exc:
-            if exc.status == 404:
-                raise PeerError("The peer does not support delta grant announcements.", status=404,
-                                detail="grant announcement unsupported") from None
-            raise
+    def _run_granted_transfer(self, route, manifest, params, timeout, data, part_size, count, check=lambda: None):
+        # Control calls have their own bounded waits and never join the bulk pool.
+        control_timeout = min(2., timeout or self.timeout)
+        part_timeout = timeout or self.timeout
+        check()
+        while True:
+            check()
+            try:
+                answer = self.post_json(route, manifest, params=params, timeout=control_timeout)
+                break
+            except PeerError as exc:
+                if exc.status == 429:
+                    self._sleep(POLL * self._rng.uniform(.8, 1.2))
+                    continue  # bounded by cancellation and the operation deadline, using identical bytes
+                if exc.status == 404:
+                    raise PeerError("The peer does not support delta grant announcements.", status=404,
+                                    detail="grant announcement unsupported") from None
+                raise
         if answer.get("complete"):
             return {"accepted": True, "term": (params or {}).get("term", 1)}
         transfer_id, incarnation = answer["transfer_id"], answer["incarnation"]
@@ -205,33 +278,89 @@ class PeerClient:
         shared = {key: value for key, value in {**(params or {}), **manifest, "incarnation": incarnation}.items()
                   if value is not None}
         pending = set(range(count))
-        idle, pool = 0, ThreadPoolExecutor(max_workers=max(1, self.streams), thread_name_prefix="peer-grants")
-        try:
-            while pending:
-                answer = self.get_json(grant_path, shared, timeout)
-                grants = answer.get("grants", [])
-                if not grants:
-                    idle += 1
-                    self._sleep(min(1., .1 * (2 ** min(idle - 1, 3))) * self._rng.uniform(.8, 1.2))
-                    continue
-                idle = 0
+        pool = ThreadPoolExecutor(max_workers=max(1, self.streams), thread_name_prefix="peer-grants")
+        in_flight, grant_queue = {}, []
+        retry_after, complete = .1, False
+        owner = object()
 
-                def send(grant):
+        def send_part(query, body):
+            try:
+                check()
+                return self._send("POST", part_path, query, body, "application/octet-stream",
+                                  part_timeout, None, None, None, -self.retries)
+            finally:
+                self.sender_egress.release(len(body))
+
+        try:
+            while True:
+                check()
+                # Inspect completed uploads before asking the receiver for more credit.
+                for future in [future for future in in_flight if future.done()]:
+                    index = in_flight.pop(future)
+                    try:
+                        future.result()
+                    except PeerError as exc:
+                        if exc.status is not None:
+                            raise
+                        # An ambiguous acknowledgement is reconciled through receiver status;
+                        # it must never cause the immutable delta to be encoded again.
+                    else:
+                        pending.discard(index)
+                if len(in_flight) < max(1, self.streams):
+                    answer = self.get_json(grant_path, shared, control_timeout)
+                    if answer.get("complete"):
+                        complete = True
+                        return {"accepted": True, "term": (params or {}).get("term", 1)}
+                    pending.difference_update(int(index) for index in answer.get("accepted_parts", []))
+                    busy = set(in_flight.values())
+                    for grant in answer.get("grants", []):
+                        index = int(grant["part"])
+                        if index < 0 or index >= count:
+                            raise PeerError("Receiver granted a part outside the announced transfer.")
+                        if index in pending and index not in busy and not any(int(g["part"]) == index for g in grant_queue):
+                            grant_queue.append(grant)
+                    retry_after = max(.02, min(1., float(answer.get("retry_after", .1))))
+                while grant_queue and len(in_flight) < max(1, self.streams):
+                    check()
+                    grant = grant_queue[0]
                     index = int(grant["part"])
-                    start = index * part_size
-                    body = data[start:start + part_size]
+                    if index not in pending or index in in_flight.values():
+                        grant_queue.pop(0)
+                        continue
+                    body = data[index * part_size:(index + 1) * part_size]
+                    if not self.sender_egress.acquire(owner, len(body)):
+                        break  # keep polling control; local bulk capacity never occupies its executor
+                    grant_queue.pop(0)
                     query = {**shared, "grant_id": grant["grant_id"], "part": index, "size": len(body),
                              "part_sha256": hashlib.sha256(body).hexdigest()}
-                    return _json(self._send("POST", part_path, query, body, "application/octet-stream", timeout,
-                                            None, None, None, PART_RETRIES))
-
-                futures = [pool.submit(send, grant) for grant in grants]
-                for grant, future in zip(grants, futures):
-                    future.result()
-                    pending.discard(int(grant["part"]))
-            return {"accepted": True, "term": (params or {}).get("term", 1)}
+                    # Do not blindly retry a possibly accepted POST. Status replays issued
+                    # grants or acknowledges accepted parts after an interrupted response.
+                    try:
+                        future = pool.submit(send_part, query, body)
+                    except BaseException:
+                        self.sender_egress.release(len(body))
+                        raise
+                    in_flight[future] = index
+                if in_flight:
+                    wait(in_flight, timeout=POLL, return_when=FIRST_COMPLETED)
+                else:
+                    # Bounded slices keep cancellation responsive during admission backoff.
+                    until = time.monotonic() + retry_after
+                    while time.monotonic() < until:
+                        check()
+                        self._sleep(min(POLL, max(0., until - time.monotonic())))
         finally:
-            pool.shutdown(wait=False, cancel_futures=True)
+            # Never reannounce while the preceding attempt still has active sends.
+            # Calls have bounded socket waits; queued tasks are cancelled immediately.
+            self.sender_egress.cancel(owner)
+            # Every submitted task owns byte credit and must execute its release.
+            pool.shutdown(wait=True)
+            if not complete:
+                try:
+                    self._call("DELETE", f"{route}/{transfer_id}", shared, None, None, control_timeout,
+                               retries=-self.retries)
+                except PeerError:
+                    pass  # expiry/fencing still bounds abandoned receiver reservations
 
     # -- parallel transfers
     def _ranged(self, path, params, timeout, cancel, sink):
@@ -360,7 +489,8 @@ class PeerClient:
         def note():
             if _observers:
                 event = dict(remote=self.address, method=method, path=f"/{path.lstrip('/')}", params=params, request=data,
-                             request_type=content_type, seconds=time.perf_counter() - clock, started=started, **seen)
+                             request_type=content_type, seconds=time.perf_counter() - clock, started=started,
+                             admission=self.admission_mode, retries=attempt, **seen)
                 for callback in list(_observers):
                     callback(event)
         for attempt in range(retries + 1):
