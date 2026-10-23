@@ -136,6 +136,19 @@ class SenderGrantTests(unittest.TestCase):
 
 
 class SenderEgressTests(unittest.TestCase):
+    def test_dormant_demand_expires_without_releasing_active_bytes(self):
+        now = [0.]
+        budget = SenderEgressBudget(4, demand_ttl=5, clock=lambda: now[0])
+        active, abandoned, live = object(), object(), object()
+        self.assertTrue(budget.acquire(active, 4))
+        self.assertFalse(budget.acquire(abandoned, 4))
+        now[0] = 6.
+        self.assertFalse(budget.acquire(live, 4))
+        self.assertEqual(budget.outstanding, 4)
+        budget.release(4)
+        self.assertTrue(budget.acquire(live, 4))
+        budget.release(4)
+
     def test_fifo_queue_and_cancelled_waiter_release_the_next_turn(self):
         budget = SenderEgressBudget(4)
         first, second, third = object(), object(), object()

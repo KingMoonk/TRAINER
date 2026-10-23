@@ -3,6 +3,7 @@ import hashlib
 import unittest
 
 from studio_upload_admission import AdmissionError, UploadAdmission
+from studio_peer import SenderEgressBudget
 
 
 class UploadAdmissionTests(unittest.TestCase):
@@ -117,6 +118,24 @@ class UploadAdmissionTests(unittest.TestCase):
         with self.assertRaises(AdmissionError):
             manager.announce(identity, 8, hashlib.sha256(b"different").hexdigest(), 2, 4)
 
+    def test_required_upload_gets_next_turn_and_older_background_then_progresses(self):
+        manager = UploadAdmission(max_assembly=1000, max_outstanding=4, grant_bytes=4)
+        a, aid, inc = self.setup_transfer(manager, body=b'abcdefgh')
+        b, bid, _ = self.setup_transfer(manager, 'b', body=b'ABCDEFGH')
+        first = manager.grant(aid, inc, a)['grants'][0]
+        self.assertEqual(manager.grant(bid, inc, b, priority=True)['grants'], [])
+
+        def accept(identity, ident, grant, body):
+            manager.begin_part(ident, inc, identity, grant['grant_id'], grant['part'], len(body))
+            manager.finish_part(ident, inc, identity, grant['grant_id'], grant['part'], body, hashlib.sha256(body).hexdigest())
+            manager.end_part(grant['grant_id'])
+
+        accept(a, aid, first, b'abcd')
+        required = manager.grant(bid, inc, b, priority=True)['grants'][0]
+        accept(b, bid, required, b'ABCD')
+        older = manager.grant(aid, inc, a)['grants'][0]
+        self.assertEqual(older['part'], 1)
+
     def test_restart_incarnation_fences_old_grants_and_manifest_identity(self):
         manager = UploadAdmission()
         identity = ("run", 1, 0, "worker", 1, 0, 3, 2, 0., None, 0.)
@@ -173,6 +192,59 @@ class UploadAdmissionTests(unittest.TestCase):
         with self.assertRaises(AdmissionError):
             for _ in range(100):
                 manager.resume(identity, 8, transfer["digest"], 2, 4)
+
+    def test_upload_and_local_download_demand_share_ingress_and_retry_reacquires(self):
+        budget = SenderEgressBudget(4)
+        manager = UploadAdmission(max_assembly=1000, max_outstanding=16, grant_bytes=8, ingress_budget=budget)
+        self.assertEqual(manager.capabilities()["max_part_size"], 4)
+        identity, ident, inc = self.setup_transfer(manager)
+        download = object()
+        self.assertTrue(budget.acquire(download, 4))
+        self.assertEqual(manager.grant(ident, inc, identity)["grants"], [])
+        budget.release(4)
+        grant = manager.grant(ident, inc, identity)["grants"][0]
+        self.assertEqual(budget.outstanding, 4)
+        self.assertFalse(budget.acquire(download, 4))
+        manager.begin_part(ident, inc, identity, grant["grant_id"], 0, 4)
+        manager.end_part(grant["grant_id"])  # failed/disconnected read
+        self.assertEqual((manager.outstanding_bytes, budget.outstanding), (0, 0))
+        self.assertTrue(budget.acquire(download, 4))
+        self.assertEqual(manager.grant(ident, inc, identity)["grants"], [])
+        budget.release(4)
+        retry = manager.grant(ident, inc, identity)["grants"][0]
+        self.assertNotEqual(grant["grant_id"], retry["grant_id"])
+        self.assertEqual(budget.outstanding, 4)
+        manager.cancel_transfer(ident, inc)
+        self.assertEqual(budget.outstanding, 0)
+        self.assertEqual(list(budget.queue), [])
+
+    def test_shared_ingress_remains_reserved_until_cancelled_request_drains(self):
+        budget = SenderEgressBudget(4)
+        manager = UploadAdmission(max_assembly=1000, max_outstanding=4, grant_bytes=4, ingress_budget=budget)
+        identity, ident, inc = self.setup_transfer(manager)
+        grant = manager.grant(ident, inc, identity)["grants"][0]
+        manager.begin_part(ident, inc, identity, grant["grant_id"], 0, 4)
+        manager.cancel_transfer(ident, inc)
+        self.assertEqual(budget.outstanding, 4)
+        manager.end_part(grant["grant_id"])
+        manager.end_part(grant["grant_id"])
+        self.assertEqual(budget.outstanding, 0)
+
+    def test_unstarted_expired_grant_releases_external_credit_before_reissue(self):
+        now = [0.]
+        budget = SenderEgressBudget(4, clock=lambda: now[0])
+        manager = UploadAdmission(clock=lambda: now[0], max_assembly=1000, max_outstanding=4,
+                                  grant_bytes=4, ttl=2, ingress_budget=budget)
+        identity, ident, inc = self.setup_transfer(manager)
+        old = manager.grant(ident, inc, identity)["grants"][0]
+        now[0] = 3.
+        manager._expire(now[0])
+        self.assertEqual((manager.outstanding_bytes, budget.outstanding), (0, 0))
+        new = manager.grant(ident, inc, identity)["grants"][0]
+        self.assertNotEqual(old["grant_id"], new["grant_id"])
+        self.assertEqual(budget.outstanding, 4)
+        manager.cancel_transfer(ident, inc)
+        self.assertEqual(budget.outstanding, 0)
 
 
 if __name__ == "__main__":

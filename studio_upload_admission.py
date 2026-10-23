@@ -30,19 +30,20 @@ class AdmissionError(ValueError):
 
 class UploadAdmission:
     def __init__(self, clock=time.monotonic, max_assembly=MAX_ASSEMBLY, max_outstanding=MAX_OUTSTANDING,
-                 grant_bytes=GRANT_BYTES, turn_bytes=None, ttl=GRANT_TTL, on_event=None):
+                 grant_bytes=GRANT_BYTES, turn_bytes=None, ttl=GRANT_TTL, on_event=None, ingress_budget=None):
         if min(max_assembly, max_outstanding, grant_bytes, ttl, grant_bytes if turn_bytes is None else turn_bytes) <= 0:
             raise ValueError("Admission budgets and lifetimes must be positive.")
         self.clock, self.max_assembly, self.max_outstanding = clock, max_assembly, max_outstanding
         self.grant_bytes, self.ttl = grant_bytes, ttl
-        self.turn_bytes = min(max_outstanding, grant_bytes if turn_bytes is None else turn_bytes)
-        self.on_event = on_event
+        self.turn_bytes = min(max_outstanding, grant_bytes if turn_bytes is None else turn_bytes,
+                              ingress_budget.capacity if ingress_budget is not None else max_outstanding)
+        self.on_event, self.ingress_budget = on_event, ingress_budget
         self.lock = threading.RLock()
         self.incarnation = secrets.token_hex(12)
         self.transfers, self.grants, self.by_identity = {}, {}, {}
         self.polls, self.node_polls = deque(), {}
         self.announcements, self.node_announcements = deque(), {}
-        self.grant_turns = deque()
+        self.grant_turns, self.last_required = deque(), False
         self.assembly_bytes = self.outstanding_bytes = 0
 
     def _limited(self, now, node, global_history, histories):
@@ -71,12 +72,23 @@ class UploadAdmission:
             transfer["body"] = None
 
     def _forget(self, ident):
+        self._drop_turn(ident)
         transfer = self.transfers.pop(ident)
         for grant_id in transfer["grants"]:
             self.grants.pop(grant_id, None)
         if self.by_identity.get(transfer["manifest_key"]) == ident:
             self.by_identity.pop(transfer["manifest_key"], None)
         self._drop_turn(ident)
+
+    def expire(self):
+        """The API lifespan sweeps unused grants even when upload senders stop polling."""
+        with self.lock:
+            self._expire(self.clock())
+
+    def close(self):
+        with self.lock:
+            for ident in list(self.transfers):
+                self.cancel_transfer(ident, self.incarnation, reason="shutdown")
 
     def _expire(self, now):
         for ident, transfer in list(self.transfers.items()):
@@ -87,13 +99,15 @@ class UploadAdmission:
         for grant_id, grant in list(self.grants.items()):
             if grant["state"] == "issued" and grant["expires"] <= now:
                 self.outstanding_bytes -= grant["size"]
+                self._release_ingress(grant)
                 self.transfers[grant["transfer"]]["grants"].discard(grant_id)
                 del self.grants[grant_id]
                 self._emit("grant_expired", transfer_id=grant["transfer"], bytes=grant["size"])
 
     def announce(self, identity, total, digest, count, part_size):
         if (not 0 < total <= MAX_TRANSFER or not 0 < count <= 4096 or
-                not 0 < part_size <= min(self.grant_bytes, self.max_outstanding, self.turn_bytes)):
+                not 0 < part_size <= min(self.grant_bytes, self.max_outstanding, self.turn_bytes,
+                                         self.ingress_budget.capacity if self.ingress_budget is not None else MAX_TRANSFER)):
             raise AdmissionError("Transfer size or part geometry is outside the admitted bounds.")
         if count != (total + part_size - 1) // part_size or len(digest) != 64:
             raise AdmissionError("Transfer manifest has inconsistent part geometry or hash.")
@@ -130,7 +144,7 @@ class UploadAdmission:
                                      "part_size": part_size, "parts": {}, "grants": set(), "touched": now, "began": now,
                                      "assembled": False, "complete": False, "cancelled": False, "reserved": True,
                                      "body": None, "applying": False, "memory_reservation": reservation,
-                                     "manifest_key": manifest_key, "last_poll": -float("inf"), "first_grant": None}
+                                     "manifest_key": manifest_key, "ingress_owner": object(), "priority": False, "last_poll": -float("inf"), "first_grant": None}
             self.by_identity[manifest_key] = ident
             self._emit("announced", transfer=self._public(ident, self.transfers[ident]))
             return {"transfer_id": ident, "incarnation": self.incarnation, "part_size": part_size}
@@ -152,8 +166,16 @@ class UploadAdmission:
     def _schedule(self, now):
         # Allocate for queued peers even if they are not the current caller. A
         # dormant caller can hold only its own bounded window until expiry.
+        visited = set()
         for _ in range(len(self.grant_turns)):
-            ident = self.grant_turns.popleft()
+            candidates = [ident for ident in self.grant_turns if ident not in visited]
+            required = [ident for ident in candidates if self.transfers[ident]["priority"]]
+            background = [ident for ident in candidates if not self.transfers[ident]["priority"]]
+            if not candidates:
+                break
+            ident = required[0] if required and (not background or not self.last_required) else background[0]
+            visited.add(ident)
+            self.grant_turns.remove(ident)
             transfer = self.transfers.get(ident)
             if (transfer is None or transfer["complete"] or transfer["cancelled"] or
                     now - transfer["last_poll"] > min(1., self.ttl)):
@@ -170,9 +192,12 @@ class UploadAdmission:
                 size = min(transfer["part_size"], transfer["total"] - start)
                 if size > available:
                     break
+                if self.ingress_budget is not None and not self.ingress_budget.acquire(transfer["ingress_owner"], size, transfer["priority"]):
+                    break
                 grant_id = secrets.token_urlsafe(18)
                 grant = {"transfer": ident, "part": part, "start": start, "end": start + size - 1, "size": size,
-                         "expires": now + self.ttl, "state": "issued", "active": False, "digest": None}
+                         "expires": now + self.ttl, "state": "issued", "active": False, "digest": None,
+                         "ingress_reserved": self.ingress_budget is not None}
                 self.grants[grant_id] = grant
                 transfer["grants"].add(grant_id)
                 self.outstanding_bytes += size
@@ -180,6 +205,7 @@ class UploadAdmission:
                 covered.add(part)
                 issued.append(self._grant_public(grant_id, grant, now))
             if issued:
+                self.last_required = bool(transfer["priority"] and background)
                 if transfer["first_grant"] is None:
                     transfer["first_grant"] = now
                 self._emit("granted", transfer=self._public(ident, transfer), ranges=issued,
@@ -197,7 +223,7 @@ class UploadAdmission:
         return {"grant_id": ident, "part": grant["part"], "start": grant["start"], "end": grant["end"],
                 "expires_in": max(0., grant["expires"] - now)}
 
-    def grant(self, ident, incarnation, identity):
+    def grant(self, ident, incarnation, identity, priority=False):
         now = self.clock()
         with self.lock:
             self._expire(now)
@@ -205,6 +231,7 @@ class UploadAdmission:
             transfer["touched"] = now
             limited = self._limited(now, identity[3], self.polls, self.node_polls)
             if not limited and not transfer["complete"]:
+                transfer["priority"] = bool(priority)
                 transfer["last_poll"] = now
                 if ident not in self.grant_turns:
                     self.grant_turns.append(ident)
@@ -309,12 +336,16 @@ class UploadAdmission:
                 return
             grant["active"] = False
             transfer = self.transfers[grant["transfer"]]
+            self._release_ingress(grant)
+            self.outstanding_bytes -= grant["size"]
             if grant["state"] == "accepted" or transfer["cancelled"]:
-                self.outstanding_bytes -= grant["size"]
                 if transfer["cancelled"]:
                     grant["state"] = "cancelled"
             else:
-                grant["state"] = "issued"  # same exact range may be retried after a disconnect
+                # Reissue through scheduling so every retry reacquires the
+                # shared physical ingress reservation before accepting bytes.
+                transfer["grants"].discard(grant_id)
+                del self.grants[grant_id]
                 self._emit("part_retry", transfer_id=grant["transfer"], part=grant["part"])
             if transfer["complete"] or transfer["cancelled"]:
                 self._release_memory(transfer)
@@ -335,6 +366,7 @@ class UploadAdmission:
                 grant = self.grants[grant_id]
                 if grant["state"] == "issued":
                     self.outstanding_bytes -= grant["size"]
+                    self._release_ingress(grant)
                     grant["state"] = "cancelled"
             self.by_identity.pop(transfer["manifest_key"], None)
             self._drop_turn(ident)
@@ -356,11 +388,20 @@ class UploadAdmission:
             raise AdmissionError("Unknown or fenced transfer identity.")
         return transfer
 
+    def _release_ingress(self, grant):
+        if grant.get("ingress_reserved"):
+            grant["ingress_reserved"] = False
+            self.ingress_budget.release(grant["size"])
+
     def _drop_turn(self, ident):
+        transfer = self.transfers.get(ident)
+        if transfer is not None and self.ingress_budget is not None:
+            self.ingress_budget.cancel(transfer["ingress_owner"])
         self.grant_turns = deque(queued for queued in self.grant_turns if queued != ident)
 
     def capabilities(self):
-        part = min(self.grant_bytes, self.max_outstanding, self.turn_bytes)
+        part = min(self.grant_bytes, self.max_outstanding, self.turn_bytes,
+                   self.ingress_budget.capacity if self.ingress_budget is not None else MAX_TRANSFER)
         return {"protocol": 1, "max_transfer": min(MAX_TRANSFER, max(0, (self.max_assembly - 3 * part) // 3)),
                 "max_part_size": part, "max_turn_bytes": self.turn_bytes}
 

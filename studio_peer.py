@@ -21,7 +21,6 @@ import http.client
 import json
 import os
 import random
-import shutil
 import threading
 import time
 from collections import deque
@@ -59,29 +58,46 @@ def observe(callback):
 
 
 class SenderEgressBudget:
-    """FIFO, nonblocking admission for outstanding grant-upload bytes in this process.
+    """Fair, nonblocking admission for outstanding bulk bytes in this process.
 
     This bounds application concurrency, not network rate or kernel socket buffers.
     One queued request per transfer prevents a many-stream client jumping the queue.
     """
 
-    def __init__(self, capacity=32 << 20):
-        if capacity < 1:
-            raise ValueError("Sender egress capacity must be positive.")
-        self.capacity, self.outstanding = int(capacity), 0
-        self.lock, self.queue = threading.Lock(), deque()
+    def __init__(self, capacity=32 << 20, demand_ttl=5., clock=time.monotonic):
+        if capacity < 1 or demand_ttl <= 0:
+            raise ValueError("Bulk byte capacity and demand lifetime must be positive.")
+        self.clock, self.demand_ttl = clock, float(demand_ttl)
+        self.capacity, self.outstanding, self.peak = int(capacity), 0, 0
+        self.lock, self.queue, self.last_required = threading.Lock(), deque(), False
 
-    def acquire(self, owner, size):
+    def acquire(self, owner, size, priority=False):
         if not 0 < size <= self.capacity:
             raise ValueError("Part exceeds sender egress capacity.")
         with self.lock:
-            if not any(queued is owner for queued, _ in self.queue):
-                self.queue.append((owner, size))
-            head, requested = self.queue[0]
+            now = self.clock()
+            # Expire only waiting demand, never byte reservations held by an
+            # active request. A dormant upload poller cannot block downloads.
+            self.queue = deque((queued, size if queued is owner else amount,
+                                priority if queued is owner else urgent, now if queued is owner else touched)
+                               for queued, amount, urgent, touched in self.queue
+                               if now - touched <= self.demand_ttl)
+            if not any(queued is owner for queued, _, _, _ in self.queue):
+                self.queue.append((owner, size, priority, now))
+            required, background = [], []
+            for demand in self.queue:
+                value = demand[2]() if callable(demand[2]) else demand[2]
+                (required if value else background).append(demand)
+            if required and (not background or not self.last_required):
+                head, requested, _, _ = required[0]
+            else:
+                head, requested, _, _ = background[0]
             if head is not owner or requested > self.capacity - self.outstanding:
                 return False
-            self.queue.popleft()
+            self.queue = deque(demand for demand in self.queue if demand[0] is not owner)
+            self.last_required = bool(required and head is required[0][0] and background)
             self.outstanding += requested
+            self.peak = max(self.peak, self.outstanding)
             return True
 
     def release(self, size):
@@ -92,10 +108,11 @@ class SenderEgressBudget:
 
     def cancel(self, owner):
         with self.lock:
-            self.queue = deque((queued, size) for queued, size in self.queue if queued is not owner)
+            self.queue = deque(demand for demand in self.queue if demand[0] is not owner)
 
 
 _SENDER_EGRESS = SenderEgressBudget()
+_RECEIVER_INGRESS = SenderEgressBudget()
 
 
 class PeerError(Exception):
@@ -126,7 +143,7 @@ def base_url(address):
 
 class PeerClient:
     def __init__(self, address, timeout=TIMEOUT, retries=RETRIES, opener=None, sleep=time.sleep, rng=None, streams=STREAMS, part=PART,
-                 receiver_grants=False, sender_egress=None, grant_deadline=600.):
+                 receiver_grants=False, sender_egress=None, grant_deadline=600., receiver_ingress=None):
         self.address, self.base = address, base_url(address)
         self.timeout, self.retries = timeout, retries
         self.streams, self.part = max(1, int(streams)), max(1, int(part))  # settable: a member applies its own `streams` option
@@ -135,6 +152,9 @@ class PeerClient:
             raise ValueError("Grant operation deadline must be positive.")
         self.grant_deadline = float(grant_deadline)
         self.sender_egress = _SENDER_EGRESS if sender_egress is None else sender_egress
+        self.receiver_ingress = _RECEIVER_INGRESS if receiver_ingress is None else receiver_ingress
+        self.receiver_downloads = bool(receiver_grants)
+        self.download_admission_mode = "requested" if receiver_grants else "legacy"
         self.receiver_grants = bool(receiver_grants)  # experimental opt-in; legacy behavior remains the default
         self.admission_mode = "requested" if receiver_grants else "legacy"
         self._receiver_grant_limit = None
@@ -146,8 +166,8 @@ class PeerClient:
         query = f"?{urllib.parse.urlencode(params)}" if params else ""
         return f"{self.base}/{path.lstrip('/')}{query}"
 
-    def get_json(self, path, params=None, timeout=None):
-        return _json(self._call("GET", path, params, None, None, timeout))
+    def get_json(self, path, params=None, timeout=None, headers=None):
+        return _json(self._call("GET", path, params, None, None, timeout, headers=headers))
 
     def post_json(self, path, body=None, params=None, timeout=None):
         data = json.dumps(body if body is not None else {}).encode("utf-8")
@@ -156,35 +176,54 @@ class PeerClient:
     def delete_json(self, path, params=None, timeout=None):
         return _json(self._call("DELETE", path, params, None, None, timeout))
 
+    supports_admission_priority = True
     interruptible = True  # get_bytes takes `cancel`
 
-    def get_bytes(self, path, params=None, timeout=None, cancel=None):
+    def get_bytes(self, path, params=None, timeout=None, cancel=None, priority=False):
         """GET a binary body into memory, BLOCK bytes at a time (over `streams` parallel ranges when the peer serves them and the body
         is bigger than one part). `cancel()`, when it returns true, ends the call with Cancelled (no retry) within a fraction of a
-        second, so a download of tens of megabytes can be stopped."""
+        second, so a download of tens of megabytes can be stopped. Admission-enabled calls drain outstanding readers before
+        returning; cancellation can therefore wait for their existing socket timeouts."""
+        if self.receiver_grants:
+            self.receiver_downloads = True
+        if self.receiver_downloads:
+            return self._admitted_download(path, params, timeout, cancel, _Memory(), priority)
         if self.streams > 1:
             return self._ranged(path, params, timeout, cancel, _Memory())
         return self._call("GET", path, params, None, None, timeout, None, cancel)
 
-    def get_file(self, path, target, params=None, timeout=None):
+    def get_file(self, path, target, params=None, timeout=None, cancel=None, priority=False):
         """GET a binary body straight into the file `target`, a block at a time (a version's weights are too big to hold in memory).
         `timeout` bounds each wait for the peer, not the whole transfer. A retry starts the file over."""
+        if self.receiver_grants:
+            self.receiver_downloads = True
+        if self.receiver_downloads:
+            with _File(target) as sink:
+                self._admitted_download(path, params, timeout, cancel, sink, priority)
+            return
         if self.streams > 1:
             with _File(target) as sink:
-                self._ranged(path, params, timeout, None, sink)
+                self._ranged(path, params, timeout, cancel, sink)
             return
 
         def save(response):
             with open(target, "wb") as stream:
-                shutil.copyfileobj(response, stream, BLOCK)
+                while True:
+                    if cancel is not None and cancel():
+                        raise Cancelled("The download was cancelled.")
+                    chunk = response.read(BLOCK)
+                    if not chunk:
+                        break
+                    stream.write(chunk)
         self._call("GET", path, params, None, None, timeout, save)
 
-    def post_bytes(self, path, data, params=None, timeout=None, cancel=None):
+    def post_bytes(self, path, data, params=None, timeout=None, cancel=None, priority=False):
         """POST a binary body (an .npz); extra fields go in the query string. A body bigger than one part goes as parts posted at
         the same time to `<path>/parts` (see _post_parts) when the peer has that route."""
         data = bytes(data)
         if self.receiver_grants and data:
-            sent = self._post_granted(path, data, params, timeout, cancel)
+            self.receiver_downloads = True
+            sent = self._post_granted(path, data, params, timeout, cancel, priority)
             if sent is not None:
                 return sent
         if cancel is not None and cancel():
@@ -195,7 +234,7 @@ class PeerClient:
                 return sent
         return _json(self._call("POST", path, params, data, "application/octet-stream", timeout))
 
-    def _post_granted(self, path, data, params, timeout, cancel=None):
+    def _post_granted(self, path, data, params, timeout, cancel=None, priority=False):
         """Upload immutable encoded bytes under exact, receiver-issued part grants."""
         deadline = time.monotonic() + self.grant_deadline
 
@@ -239,7 +278,7 @@ class PeerClient:
         for attempt in range(3):
             try:
                 check()
-                return self._run_granted_transfer(route, manifest, params, timeout, data, part_size, count, check)
+                return self._run_granted_transfer(route, manifest, params, timeout, data, part_size, count, check, priority)
             except PeerError as exc:
                 recoverable = ("receiver restarted" in exc.detail.lower() or "unknown or fenced transfer" in exc.detail.lower()
                                or "receiver grant expired" in exc.detail.lower())
@@ -252,7 +291,7 @@ class PeerClient:
                 raise
         raise PeerError("The receiver restarted repeatedly during delta admission.")
 
-    def _run_granted_transfer(self, route, manifest, params, timeout, data, part_size, count, check=lambda: None):
+    def _run_granted_transfer(self, route, manifest, params, timeout, data, part_size, count, check=lambda: None, priority=False):
         # Control calls have their own bounded waits and never join the bulk pool.
         control_timeout = min(2., timeout or self.timeout)
         part_timeout = timeout or self.timeout
@@ -307,7 +346,8 @@ class PeerClient:
                     else:
                         pending.discard(index)
                 if len(in_flight) < max(1, self.streams):
-                    answer = self.get_json(grant_path, shared, control_timeout)
+                    answer = self.get_json(grant_path, shared, control_timeout,
+                                           headers={"X-Transfer-Priority": "required" if (priority() if callable(priority) else priority) else "background"})
                     if answer.get("complete"):
                         complete = True
                         return {"accepted": True, "term": (params or {}).get("term", 1)}
@@ -328,7 +368,7 @@ class PeerClient:
                         grant_queue.pop(0)
                         continue
                     body = data[index * part_size:(index + 1) * part_size]
-                    if not self.sender_egress.acquire(owner, len(body)):
+                    if not self.sender_egress.acquire(owner, len(body), priority):
                         break  # keep polling control; local bulk capacity never occupies its executor
                     grant_queue.pop(0)
                     query = {**shared, "grant_id": grant["grant_id"], "part": index, "size": len(body),
@@ -361,6 +401,155 @@ class PeerClient:
                                retries=-self.retries)
                 except PeerError:
                     pass  # expiry/fencing still bounds abandoned receiver reservations
+
+    def _admitted_download(self, path, params, timeout, cancel, sink, priority=False):
+        """Pin one representation and share bounded local outstanding range bytes.
+
+        Local ingress credit covers requested parts, not the final model retained
+        by the caller. Missing server admission is explicit legacy fallback: its
+        response/egress bytes are not claimed to be receiver bounded.
+        """
+        job, owner = _Job(cancel), object()
+        budget = self.receiver_ingress
+        part_size = min(self.part, budget.capacity)
+        identity = {"etag": None, "sha256": None, "total": None, "admitted": None}
+        self.download_admission_mode = "requested"
+        pool = ThreadPoolExecutor(max_workers=self.streams, thread_name_prefix="peer-ingress")
+        pending = set()
+
+        def reserve(size):
+            while not budget.acquire(owner, size, priority):
+                job.check()
+                self._sleep(POLL)
+            try:
+                job.check()
+            except BaseException:
+                budget.release(size)
+                raise
+
+        def fetch(start):
+            requested_end = start + part_size - 1
+            if identity["total"] is not None:
+                requested_end = min(requested_end, identity["total"] - 1)
+            headers = {"X-Transfer-Admission": "1", "Range": f"bytes={start}-{requested_end}"}
+
+            def read(response):
+                job.check()
+                response_headers = getattr(response, "headers", None) or {}
+                admitted = response_headers.get("X-Transfer-Admission") == "1"
+                if identity["admitted"] is None:
+                    identity["admitted"] = admitted
+                    self.download_admission_mode = "admitted" if admitted else "legacy-fallback"
+                elif admitted != identity["admitted"]:
+                    raise PeerError("The peer changed download admission during a transfer.")
+                if admitted:
+                    digest = response_headers.get("X-Content-SHA256", "").lower()
+                    etag = response_headers.get("ETag", "")
+                    try:
+                        valid = len(digest) == 64 and int(digest, 16) >= 0 and etag == f'"{digest}"'
+                    except ValueError:
+                        valid = False
+                    if not valid:
+                        raise PeerError("Admitted download lacks a strong SHA-256 representation identity.")
+                    if identity["etag"] is None:
+                        identity["etag"], identity["sha256"] = etag, digest
+                    elif (etag, digest) != (identity["etag"], identity["sha256"]):
+                        raise PeerError("The peer changed the pinned download representation.")
+                status = getattr(response, "status", 200)
+                if status != 206:
+                    if start != 0 or status != 200:
+                        raise PeerError("The peer did not serve the requested range.", status=status)
+                    if not admitted:
+                        identity["total"] = None
+                        return sink.whole(response, job)
+                    try:
+                        total = int(response_headers.get("Content-Length", "-1"))
+                    except ValueError:
+                        total = -1
+                    if not 0 <= total <= part_size:
+                        raise PeerError("Admitted download exceeded the requested ingress window.")
+                    first, last = 0, total - 1
+                else:
+                    first, last, total = _content_range(response)
+                    if first != start or last != min(requested_end, total - 1) or total < 1:
+                        raise PeerError("The peer answered inconsistent download ranges.")
+                if identity["total"] is None:
+                    identity["total"] = total
+                elif total != identity["total"]:
+                    raise PeerError("The peer changed the pinned download size.")
+                body = _read_exact(response, last - first + 1, job)
+                size = len(body)
+                sink.put(start, body)
+                return size
+
+            for attempt in range(self.retries + PART_RETRIES + 1):
+                job.check()
+                headers["X-Transfer-Priority"] = "required" if (priority() if callable(priority) else priority) else "background"
+                if identity["etag"] is not None:
+                    headers["If-Match"] = identity["etag"]
+                try:
+                    return self._call("GET", path, params, None, None, timeout, read, None, headers, -self.retries)
+                except PeerError as exc:
+                    if (exc.status is not None and exc.status != 429) or attempt == self.retries + PART_RETRIES:
+                        raise
+                    # Rebuild If-Match after first-response headers were pinned,
+                    # including when its body ended before the first part did.
+                    self._sleep(min(POLL * (2 ** attempt), 1.))
+
+        def run(start, size):
+            try:
+                return fetch(start)
+            finally:
+                budget.release(size)
+
+        try:
+            # Complete the probe before scheduling remaining parts, so even a
+            # one-stream client learns and pins the representation first.
+            reserve(part_size)
+            run(0, part_size)
+            next_start = part_size
+            while pending or (identity["total"] is not None and next_start < identity["total"]):
+                job.check()
+                for future in [future for future in pending if future.done()]:
+                    pending.remove(future)
+                    future.result()
+                while (len(pending) < self.streams and identity["total"] is not None and
+                       next_start < identity["total"]):
+                    size = min(part_size, identity["total"] - next_start)
+                    if not budget.acquire(owner, size, priority):
+                        break
+                    try:
+                        pending.add(pool.submit(run, next_start, size))
+                    except BaseException:
+                        budget.release(size)
+                        raise
+                    next_start += part_size
+                if pending:
+                    wait(pending, timeout=POLL, return_when=FIRST_COMPLETED)
+                elif identity["total"] is not None and next_start < identity["total"]:
+                    self._sleep(POLL)
+            result = sink.result()
+            if identity["admitted"]:
+                if isinstance(sink, _Memory):
+                    digest = hashlib.sha256(result).hexdigest()
+                else:
+                    digest = hashlib.sha256()
+                    with open(sink.target, "rb") as stream:
+                        for chunk in iter(lambda: stream.read(BLOCK), b""):
+                            job.check()
+                            digest.update(chunk)
+                    digest = digest.hexdigest()
+                if digest != identity["sha256"]:
+                    raise PeerError("Downloaded body does not match its pinned SHA-256.")
+            return result
+        except BaseException:
+            job.abort.set()
+            raise
+        finally:
+            budget.cancel(owner)
+            # A file sink and byte reservations remain alive until every active
+            # reader has closed. Calls retain their caller-supplied socket waits.
+            pool.shutdown(wait=True)
 
     # -- parallel transfers
     def _ranged(self, path, params, timeout, cancel, sink):
@@ -490,7 +679,7 @@ class PeerClient:
             if _observers:
                 event = dict(remote=self.address, method=method, path=f"/{path.lstrip('/')}", params=params, request=data,
                              request_type=content_type, seconds=time.perf_counter() - clock, started=started,
-                             admission=self.admission_mode, retries=attempt, **seen)
+                             admission=self.admission_mode, download_admission=self.download_admission_mode, retries=attempt, **seen)
                 for callback in list(_observers):
                     callback(event)
         for attempt in range(retries + 1):
@@ -530,7 +719,7 @@ class _Job:
         self.cancel, self.total, self.size, self.abort = cancel, None, threading.Event(), threading.Event()
 
     def check(self):
-        if self.cancel is not None and self.cancel():
+        if self.abort.is_set() or (self.cancel is not None and self.cancel()):
             raise Cancelled("The download was cancelled.")
 
 
@@ -603,8 +792,7 @@ def _read_exact(response, length, job):
     """`length` bytes of a part, READ at a time; a body cut short is an OSError, which the part's retry takes up again."""
     chunks, got = [], 0
     while got < length:
-        if job.abort.is_set():
-            raise Cancelled("The download was cancelled.")
+        job.check()
         chunk = response.read(min(READ, length - got))
         if not chunk:
             raise OSError(f"the body ended after {got} of {length} bytes")

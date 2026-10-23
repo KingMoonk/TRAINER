@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from studio_parts import Assembler, byte_range
-from studio_peer import PeerClient
+from studio_peer import PeerClient, SenderEgressBudget, _Memory
 from studio_upload_admission import AdmissionError, UploadAdmission
 
 
@@ -67,7 +67,8 @@ class SyntheticPeer:
         self.payload, self.latency = payload, latency
         self.pacer, self.assembler = SharedPacer(rate), Assembler()
         self.admission_events = []
-        self.admission = UploadAdmission(max_outstanding=outstanding, turn_bytes=turn, on_event=lambda kind, event: self.admission_events.append({"kind": kind, **event}))
+        self.ingress, self.egress = SenderEgressBudget(outstanding), SenderEgressBudget(outstanding)
+        self.admission = UploadAdmission(max_outstanding=outstanding, turn_bytes=turn, ingress_budget=self.ingress, on_event=lambda kind, event: self.admission_events.append({"kind": kind, **event}))
         self.uploads, self.lock = {}, threading.Lock()
         peer = self
 
@@ -88,8 +89,20 @@ class SyntheticPeer:
                 self.end_headers()
                 for start in range(0, len(body), 16384):
                     chunk = body[start:start + 16384]
-                    peer.pacer.pace(len(chunk))
-                    self.wfile.write(chunk)
+                    admitted = (headers or {}).get('X-Transfer-Admission') == '1'
+                    owner = object()
+                    try:
+                        if admitted:
+                            while not peer.egress.acquire(owner, len(chunk), self.headers.get('X-Transfer-Priority') == 'required'):
+                                time.sleep(.005)
+                        try:
+                            peer.pacer.pace(len(chunk))
+                            self.wfile.write(chunk)
+                        finally:
+                            if admitted:
+                                peer.egress.release(len(chunk))
+                    finally:
+                        peer.egress.cancel(owner)
 
             def do_GET(self):
                 time.sleep(peer.latency)
@@ -104,19 +117,27 @@ class SyntheticPeer:
                     ident = path.split('/')[-2]
                     identity = peer.transfer_identity(query)
                     try:
-                        result = peer.admission.grant(ident, query['incarnation'], identity)
+                        result = peer.admission.grant(ident, query['incarnation'], identity,
+                                                     priority=self.headers.get('X-Transfer-Priority') == 'required')
                     except AdmissionError as exc:
                         self.reply(409, json.dumps({'detail': str(exc)}).encode())
                         return
                     self.reply(200, json.dumps(result).encode())
                 elif path == '/blob':
+                    headers = {}
+                    if self.headers.get('X-Transfer-Admission') == '1':
+                        digest = hashlib.sha256(peer.payload).hexdigest()
+                        headers = {'ETag': '"' + digest + '"', 'X-Content-SHA256': digest, 'X-Transfer-Admission': '1'}
+                        if self.headers.get('If-Match', headers['ETag']) != headers['ETag']:
+                            self.reply(412, b'{}')
+                            return
                     span = byte_range(self.headers.get('Range'), len(peer.payload))
                     if span is None:
-                        self.reply(200, peer.payload)
+                        self.reply(200, peer.payload, headers)
                     else:
                         first, last = span
                         self.reply(206, peer.payload[first:last + 1],
-                                   {'Content-Range': f'bytes {first}-{last}/{len(peer.payload)}'})
+                                   {**headers, 'Content-Range': f'bytes {first}-{last}/{len(peer.payload)}'})
                 else:
                     self.reply(404, b'{}')
 
@@ -242,7 +263,7 @@ class SyntheticPeer:
 
 
 def run_case(payload, rate, latency, streams, members, part, idle_seconds, control_interval, direction="exchange",
-             receiver_grants=False, matched_geometry=False, outstanding=32 << 20, turn=4 << 20):
+             receiver_grants=False, matched_geometry=False, outstanding=32 << 20, turn=4 << 20, background_members=0):
     """Real HTTP, synthetic endpoints and one shared half-duplex application service budget."""
     with SyntheticPeer(payload, rate, latency, outstanding, turn) as peer:
         controls, transfers, missed = [], [], []
@@ -280,7 +301,7 @@ def run_case(payload, rate, latency, streams, members, part, idle_seconds, contr
 
         def member(number):
             client = PeerClient(peer.address, streams=streams, part=part, retries=0, timeout=30,
-                                receiver_grants=receiver_grants)
+                                receiver_grants=receiver_grants, receiver_ingress=peer.ingress, sender_egress=peer.egress)
             barrier.wait()
             for flow in (('up', 'down') if direction == 'exchange' else (direction,)):
                 start, error, valid = time.monotonic(), None, False
@@ -290,7 +311,9 @@ def run_case(payload, rate, latency, streams, members, part, idle_seconds, contr
                             '/up', payload, {'member': str(number)}, timeout=30)
                         valid = peer.uploads.get(str(number)) == digest
                     else:
-                        valid = hashlib.sha256(client.get_bytes('/blob')).hexdigest() == digest
+                        downloaded = (client._ranged('/blob', None, None, None, _Memory()) if matched_geometry and not receiver_grants
+                                      else client.get_bytes('/blob', priority=number < members - background_members))
+                        valid = hashlib.sha256(downloaded).hexdigest() == digest
                     if not valid:
                         raise ValueError('payload integrity failed')
                 except Exception as exc:
@@ -325,13 +348,15 @@ def run_case(payload, rate, latency, streams, members, part, idle_seconds, contr
             rows = [row for row in transfers if row['member'] == number]
             useful_member = sum(row['bytes'] for row in rows if row['valid'] and row['error'] is None)
             duration = max(row['end'] for row in rows) - min(row['start'] for row in rows)
-            per_member.append({'member': number, 'useful_bytes': useful_member, 'duration_seconds': duration,
+            per_member.append({'member': number, 'background': number >= members - background_members, 'useful_bytes': useful_member, 'duration_seconds': duration,
                                'useful_bytes_per_second': useful_member / max(duration, 1e-9),
                                'errors': sum(row['error'] is not None for row in rows)})
         rates = [row['useful_bytes_per_second'] for row in per_member]
         fairness = sum(rates) ** 2 / (len(rates) * sum(rate ** 2 for rate in rates)) if rates and any(rates) else None
         return {'streams': streams, 'members': members, 'direction': direction, 'receiver_grants': receiver_grants,
-                'part_bytes': part, 'matched_geometry': matched_geometry, 'transfers': transfers, 'per_member': per_member, 'jain_fairness': fairness,
+                'part_bytes': part, 'matched_geometry': matched_geometry,
+                'ingress_peak_bytes': peer.ingress.peak, 'egress_peak_bytes': peer.egress.peak,
+                'shared_byte_budget': outstanding, 'transfers': transfers, 'per_member': per_member, 'jain_fairness': fairness,
                 'admission_events': peer.admission_events,
                 'control_raw': controls,
                 'missed_control_raw': missed, 'control': summaries,
@@ -350,6 +375,7 @@ def main():
     parser.add_argument('--latency-ms', type=float, default=30)
     parser.add_argument('--part-kib', type=int, default=256)
     parser.add_argument('--members', type=int, default=2)
+    parser.add_argument('--background-members', type=int, default=0, help='last N members request background-priority downloads')
     parser.add_argument('--direction', choices=('up', 'down', 'exchange'), default='exchange')
     parser.add_argument('--admission', choices=('baseline', 'grants', 'both'), default='baseline',
                         help='upload admission policy; both compares legacy multipart with receiver grants at identical part geometry')
@@ -364,6 +390,8 @@ def main():
         parser.error('sizes, rate, members and durations must be positive; latency must be nonnegative')
     if args.admission == 'both' and args.part_kib > min(args.window_kib, args.turn_kib, 4096):
         parser.error('matched comparison requires parts to fit the receiver window, turn and 4 MiB grant limit')
+    if not 0 <= args.background_members <= args.members:
+        parser.error('background-members must be between zero and members')
     size = int(args.payload_mib * 2**20)
     if size < 1:
         parser.error('payload must contain at least one byte')
@@ -377,7 +405,7 @@ def main():
               'clock': 'time.monotonic', 'percentiles': 'nearest rank; successful calls only; missed dispatches reported separately',
               'bottleneck': 'one shared FIFO byte-service budget for upload reads, download writes and control replies',
               'control_endpoint': 'synthetic /control, not production progress or round-view routes',
-              'stream_comparison': ('Matched multipart upload geometry for baseline/grants at both stream settings' if args.admission == 'both'
+              'stream_comparison': ('Matched multipart upload and ranged download geometry for baseline/grants at both stream settings' if args.admission == 'both'
                                     else 'Legacy 1 uses whole-body HTTP; legacy 8 uses multipart/ranges; grants use negotiated parts'),
               'admission_order': 'alternates baseline/grants by repetition when --admission both is selected',
               'latency_model': 'fixed handler delay before processing each request; not TCP RTT/loss simulation',
@@ -393,7 +421,7 @@ def main():
                 case = run_case(payload, args.rate_mib * 2**20, args.latency_ms / 1000, streams,
                                 args.members, args.part_kib * 1024, args.idle_seconds, args.control_interval,
                                 args.direction, receiver_grants, args.admission == 'both',
-                                args.window_kib * 1024, args.turn_kib * 1024)
+                                args.window_kib * 1024, args.turn_kib * 1024, args.background_members)
                 case['repetition'] = repetition + 1
                 result['cases'].append(case)
                 print(json.dumps({k: v for k, v in case.items()

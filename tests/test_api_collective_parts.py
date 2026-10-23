@@ -172,6 +172,25 @@ class OverHttp(Collective):
         self.assertEqual(coordinator.history[0]["node_bytes"], {"a": len(body)})
         self.assertIsNotNone(studio_run_health.summarize(coordinator.history)["rounds"][0]["members"]["a"]["up_mb_s"])
 
+    def test_admitted_downloads_pin_weights_shards_and_replica_state_over_real_http(self):
+        coordinator = self.start(inner_steps=2, rounds=3, outer_lr=1.)
+        peer = PeerClient(self.serve(), part=3000, streams=4, receiver_grants=True)
+        peer.post_json("/collective/r1/join", {"node": "a", "epoch": 1}, {"term": 0})
+        view = peer.get_json("/collective/r1/rounds/0", {"node": "a", "term": 1})
+        theta = peer.get_bytes("/collective/r1/params", {"round": 0, "node": "a", "term": 1}, priority=True)
+        self.assertEqual(theta, coordinator.params_bytes(0))
+        self.assertEqual(peer.download_admission_mode, "admitted")
+        self.assertEqual(peer.get_bytes("/collective/r1/shards/0", {"term": 1}), coordinator.shard_bytes(0))
+        target = self.dir / "shard.npz"
+        peer.get_file("/collective/r1/shards/0", target, {"term": 1})
+        self.assertEqual(target.read_bytes(), coordinator.shard_bytes(0))
+        peer.post_bytes("/collective/r1/rounds/0/delta", self.delta_body(coordinator),
+                        {"node": "a", "generation": view["generation"], "epoch": 1, "tokens": 10, "steps": 2, "term": 1})
+        state = peer.get_bytes("/collective/r1/state", {"round": 1, "term": 1}, priority=False)
+        self.assertEqual(state, coordinator.state_bytes(1))
+        self.assertEqual(peer.get_bytes("/collective/r1/validation", {"term": 1}), coordinator.validation_bytes())
+        self.assertEqual(peer.download_admission_mode, "admitted")
+
     def test_receiver_grants_are_opt_in_and_submit_the_delta_once(self):
         coordinator = self.start(inner_steps=2, rounds=3, outer_lr=1.)
         peer = PeerClient(self.serve(), part=3000, streams=4, receiver_grants=True)

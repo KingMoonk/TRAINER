@@ -824,7 +824,7 @@ export interface paths {
         };
         /**
          * Shard
-         * @description One training shard (tokens, target flags and offsets) as an .npz; a `Range` gets that part (a file response answers it).
+         * @description One shard; admitted readers share an immutable version and the process egress budget.
          */
         get: operations["shard_collective__run__shards__shard__get"];
         put?: never;

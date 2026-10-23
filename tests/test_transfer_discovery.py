@@ -58,6 +58,18 @@ class MeasurementTests(unittest.TestCase):
         self.assertLessEqual(result['aggregate_useful_bytes_per_second'], 512 * 1024 * 1.03)
         self.assertEqual(result['control']['bulk']['errors'], 0)
 
+    def test_required_and_background_exchanges_share_byte_budgets(self):
+        result = run_case(b'mixed' * 8192, 512 * 1024, .001, 4, 2, 4096, .03, .005,
+                          direction='exchange', receiver_grants=True, matched_geometry=True,
+                          outstanding=16384, turn=8192, background_members=1)
+        self.assertTrue(result['integrity_ok'], result['transfers'])
+        self.assertEqual(result['useful_bytes'], 4 * 5 * 8192)
+        self.assertGreater(result['ingress_peak_bytes'], 0)
+        self.assertLessEqual(result['ingress_peak_bytes'], 16384)
+        self.assertLessEqual(result['egress_peak_bytes'], 16384)
+        self.assertEqual([row['background'] for row in result['per_member']], [False, True])
+        self.assertEqual(result['control']['bulk']['errors'], 0)
+
 
 if __name__ == '__main__':
     unittest.main()

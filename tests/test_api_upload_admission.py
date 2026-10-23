@@ -1,7 +1,10 @@
 """Receiver lifecycle invariants through the collective API, including allowed late updates."""
 import hashlib
+import time
 
 import studio_diloco
+from studio_peer import SenderEgressBudget
+from studio_upload_admission import UploadAdmission
 
 from studio_api.routers.collective import transfer_identity
 from tests.test_api_collective import Collective
@@ -65,6 +68,23 @@ class UploadAdmissionAPI(Collective):
         self.assertGreater(manager.assembly_bytes, 0)
         manager.end_part(grant["grant_id"])
         self.assertEqual((manager.outstanding_bytes, manager.assembly_bytes), (0, 0))
+
+    def test_lifespan_sweep_releases_abandoned_upload_credit_without_another_upload_poll(self):
+        now = [0.]
+        budget = SenderEgressBudget(4)
+        manager = UploadAdmission(clock=lambda: now[0], ttl=1., ingress_budget=budget)
+        self.client.app.state.upload_admission = manager
+        identity = ('run', 1, 0, 'sender', 1, 0, 1, 1, 0., None, 0.)
+        transfer = manager.announce(identity, 4, hashlib.sha256(b'data').hexdigest(), 1, 4)
+        manager.grant(transfer['transfer_id'], transfer['incarnation'], identity)
+        self.assertEqual(budget.outstanding, 4)
+        now[0] = 2.
+        until, downloader = time.monotonic() + 3., object()
+        while not budget.acquire(downloader, 4):
+            self.assertLess(time.monotonic(), until, 'Lifespan did not sweep expired upload credit')
+            time.sleep(.01)
+        self.assertEqual(manager.outstanding_bytes, 0)
+        budget.release(4)
 
     def test_status_recovers_assembly_when_the_last_request_disappears_before_apply(self):
         c = self.start(inner_steps=2, rounds=3)

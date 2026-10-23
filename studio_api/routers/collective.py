@@ -22,12 +22,12 @@ from pydantic import BaseModel
 
 import studio_diloco
 import studio_parts
+import studio_download_admission
 import studio_upload_admission
 
 router = APIRouter(prefix="/collective/{run}", tags=["collective"])
 # A long poll holds its thread for up to 30 s per member: its own pool keeps them from filling the threads every other plain `def` route shares.
 LONG_POLLS = ThreadPoolExecutor(max_workers=64, thread_name_prefix="api-long-poll")
-BULK_APPLY_LIMITER = anyio.CapacityLimiter(2)  # decode/outer apply cannot exhaust the control worker limit
 Run = Path(pattern=studio_diloco.RUN_ID, description="the run id: the pretrain_distributed job's id")
 Term = Query(description="the run's term as the caller knows it; lower than the coordinator's is 409, higher makes it step down. 0 only on /join", ge=0)
 BINARY = {200: {"content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}}
@@ -184,6 +184,8 @@ def binary(found: "studio_diloco.Coordinator", content: bytes, request: Request 
     """A binary body. With the request's `Range: bytes=a-b` it answers that part (206, Content-Range: the body's size is how a member
     learns to fetch the parts at the same time, studio_peer.PeerClient); without one, the whole body."""
     headers = {studio_diloco.TERM_HEADER: str(found.term), "Accept-Ranges": "bytes"}
+    if request is not None and request.headers.get("x-transfer-admission") == "1":
+        return studio_download_admission.response(content, request, headers)
     try:
         span = studio_parts.byte_range(request.headers.get("range") if request is not None else None, len(content))
     except studio_parts.BadPart as exc:
@@ -214,8 +216,14 @@ def join(request: Request, response: Response, run: str = Run, term: int = Term,
     return admit(run, term, response, request, learning=True).join(body.node, body.epoch, term or None)
 
 
+async def prepared_binary(request, found, produce):
+    # Bulk serialization/hash work waits outside the default control worker pool.
+    return await anyio.to_thread.run_sync(lambda: binary(found, produce(), request),
+                                         limiter=request.app.state.download_build_limiter if request.headers.get("x-transfer-admission") == "1" else None)
+
+
 @router.get("/params", response_class=Response, responses=BINARY)
-def params(request: Request, round: int, node: str = "", since: int | None = None, found: "studio_diloco.Coordinator" = Depends(member_call)):
+async def params(request: Request, round: int, node: str = "", since: int | None = None, found: "studio_diloco.Coordinator" = Depends(member_call)):
     """The open round's global weights, fp32, as an .npz (a `Range` gets that part). `node`, who is asking, is noted on the round's
     timeline. A member that holds the weights of round `since` (the round before) gets the outer update that led to this round's
     instead, quantized to the run's delta_dtype, as an .npz marked with a `__update_from__` entry; with fp32 runs, or after a pivot or
@@ -223,22 +231,30 @@ def params(request: Request, round: int, node: str = "", since: int | None = Non
     try:
         span = request.headers.get("range")
         later = bool(span) and not span.replace(" ", "").lower().startswith("bytes=0-")  # a later part of a ranged download: counted once, with the first
-        return binary(found, found.params_bytes(round, node, since, count=not later), request)
+        return await prepared_binary(request, found, lambda: found.params_bytes(round, node, since, count=not later))
     except studio_diloco.Gone as exc:
         raise HTTPException(410, str(exc)) from None
 
 
 @router.get("/shards/{shard}", response_class=Response, responses=BINARY)
-def shard(shard: int, found: "studio_diloco.Coordinator" = Depends(member_call)):
-    """One training shard (tokens, target flags and offsets) as an .npz; a `Range` gets that part (a file response answers it)."""
-    try:
-        found.ensure_serving()
-        path = found.shard_path(shard)
-    except studio_diloco.Gone as exc:
-        raise HTTPException(410, str(exc)) from None
-    except KeyError:
-        raise HTTPException(404, f"No shard {shard}.") from None
-    return StreamedFile(path, media_type="application/octet-stream", headers={studio_diloco.TERM_HEADER: str(found.term)})
+async def shard(shard: int, request: Request, found: "studio_diloco.Coordinator" = Depends(member_call)):
+    """One shard; admitted readers share an immutable version and the process egress budget."""
+    admitted = request.headers.get("x-transfer-admission") == "1"
+
+    def prepare():
+        try:
+            found.ensure_serving()
+            path = found.shard_path(shard)
+        except studio_diloco.Gone as exc:
+            raise HTTPException(410, str(exc)) from None
+        except KeyError:
+            raise HTTPException(404, f"No shard {shard}.") from None
+        if admitted:
+            return studio_download_admission.response(studio_download_admission.snapshot(path), request,
+                                                      {studio_diloco.TERM_HEADER: str(found.term)})
+        return StreamedFile(path, media_type="application/octet-stream", headers={studio_diloco.TERM_HEADER: str(found.term)})
+
+    return await anyio.to_thread.run_sync(prepare, limiter=request.app.state.download_build_limiter if request.headers.get("x-transfer-admission") == "1" else None)
 
 
 @router.get("/shards/{shard}/hash")
@@ -254,25 +270,25 @@ def shard_hash(shard: int, found: "studio_diloco.Coordinator" = Depends(member_c
 
 
 @router.get("/state", response_class=Response, responses=BINARY)
-def state(request: Request, round: int, found: "studio_diloco.Coordinator" = Depends(member_call)):
+async def state(request: Request, round: int, found: "studio_diloco.Coordinator" = Depends(member_call)):
     """A replica's copy of what goes with theta of the latest round: the outer momentum (fp32) and diloco.json, in one .npz.
     409 when `round` is not the latest, 404 before any round has closed."""
     try:
-        return binary(found, found.state_bytes(round), request)
+        return await prepared_binary(request, found, lambda: found.state_bytes(round))
     except LookupError as exc:
         raise HTTPException(404, str(exc)) from None
 
 
 @router.get("/validation", response_class=Response, responses=BINARY)
-def validation(request: Request, found: "studio_diloco.Coordinator" = Depends(member_call)):
+async def validation(request: Request, found: "studio_diloco.Coordinator" = Depends(member_call)):
     """The validation windows as an .npz (the shard format), for a replica once per run. Replicas never train on them."""
-    return binary(found, found.validation_bytes(), request)
+    return await prepared_binary(request, found, found.validation_bytes)
 
 
 @router.get("/weights", response_class=Response, responses=BINARY)
-def weights(request: Request, found: "studio_diloco.Coordinator" = Depends(member_call)):
+async def weights(request: Request, found: "studio_diloco.Coordinator" = Depends(member_call)):
     """A finished run's final weights (its last.npz), for the owner when the run finished here after a failover. 409 while rounds are left."""
-    return binary(found, found.final_bytes(), request)
+    return await prepared_binary(request, found, found.final_bytes)
 
 
 OCTET_BODY = {"requestBody": {"required": True, "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}}
@@ -364,7 +380,7 @@ def transfer_identity(run, round, term, node, generation, epoch, tokens, steps, 
     return (run, term, round, node, generation, epoch, tokens, steps, seconds, loss, down_bps)
 
 
-async def apply_granted_delta(found, manager, transfer_id, incarnation, identity, number, node, generation, epoch,
+async def apply_granted_delta(request, found, manager, transfer_id, incarnation, identity, number, node, generation, epoch,
                               tokens, steps, seconds, loss, down_bps):
     def apply():
         # Claim inside the worker, never before an await which can be cancelled.
@@ -388,7 +404,7 @@ async def apply_granted_delta(found, manager, transfer_id, incarnation, identity
             manager.end_apply(transfer_id, failed=failed)
 
     try:
-        await anyio.to_thread.run_sync(apply, limiter=BULK_APPLY_LIMITER)
+        await anyio.to_thread.run_sync(apply, limiter=request.app.state.upload_apply_limiter)
     except studio_diloco.Stale as exc:
         raise HTTPException(409, str(exc), headers={studio_diloco.TERM_HEADER: str(found.term)}) from None
 
@@ -408,7 +424,7 @@ async def delta_grants(request: Request, transfer_id: str, round: int, incarnati
     manager = upload_admission(request)
     try:
         if manager.ready_to_apply(transfer_id, incarnation, identity):
-            await apply_granted_delta(found, manager, transfer_id, incarnation, identity, round, node,
+            await apply_granted_delta(request, found, manager, transfer_id, incarnation, identity, round, node,
                                       generation, epoch, tokens, steps, seconds, loss, down_bps)
         if not manager.completed(transfer_id, incarnation, identity):
             try:
@@ -418,7 +434,7 @@ async def delta_grants(request: Request, transfer_id: str, round: int, incarnati
                     manager.cancel_transfer(transfer_id, incarnation, reason="stale")
                     raise
             manager.fence_member(run, node, generation, epoch, found.term)
-        return manager.grant(transfer_id, incarnation, identity)
+        return manager.grant(transfer_id, incarnation, identity, priority=request.headers.get("x-transfer-priority") == "required")
     except studio_upload_admission.AdmissionError as exc:
         admission_error(exc)
 
@@ -482,7 +498,7 @@ async def granted_delta_part(request: Request, transfer_id: str, round: int, inc
         body = None
         if finished is not None:
             finished = None
-            await apply_granted_delta(found, manager, transfer_id, incarnation, identity, round, node,
+            await apply_granted_delta(request, found, manager, transfer_id, incarnation, identity, round, node,
                                       generation, epoch, tokens, steps, seconds, loss, down_bps)
         return Accepted(term=found.term)
     except TimeoutError:

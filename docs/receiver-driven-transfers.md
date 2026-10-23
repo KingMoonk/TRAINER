@@ -1,6 +1,6 @@
 # Receiver-driven transfers over the swarm network
 
-Discovery and implementation notes for [#648](https://github.com/KingMoonk/TRAINER/issues/648). The opt-in delta upload path from [#650](https://github.com/KingMoonk/TRAINER/issues/650) is implemented as an experimental HTTP admission protocol; downloads and default enablement remain future work. Secondary GPU work is deferred to [#649](https://github.com/KingMoonk/TRAINER/issues/649).
+Discovery and implementation notes for [#648](https://github.com/KingMoonk/TRAINER/issues/648). The opt-in delta upload path from [#650](https://github.com/KingMoonk/TRAINER/issues/650) is implemented as an experimental HTTP admission protocol; versioned downloads are also implemented under the same opt-in flag; default enablement remains gated on physical measurements. Secondary GPU work is deferred to [#649](https://github.com/KingMoonk/TRAINER/issues/649).
 
 ## Objective and constraints
 
@@ -24,7 +24,7 @@ Source: John Ousterhout, [It's Time to Replace TCP in the Datacenter](https://ar
 
 ## Implemented prototype (#650)
 
-`PeerClient(receiver_grants=True)` or the member's `--receiver-grants` flag opts into experimental protocol version 1. It first requests capabilities, announces the immutable encoded body and its run/round/term/generation/lease identity, then polls for exact byte ranges and sends only those parts. The sender clamps its part size to the receiver's advertised limit. A 404 on capability discovery disables the option for that client and falls back to the existing upload route; it is off by default.
+`PeerClient(receiver_grants=True)` or the member's `--receiver-grants` flag opts into experimental protocol version 1. For uploads, it first requests capabilities, announces the immutable encoded body and its run/round/term/generation/lease identity, then polls for exact byte ranges and sends only those parts. The sender clamps its part size to the receiver's advertised limit. A 404 on capability discovery disables the option for that client and falls back to the existing upload route; it is off by default.
 
 The API process owns one admission manager shared by all its requests. The supported `studio_api` entrypoint starts one Uvicorn worker. Upload clients also share one process-wide 32 MiB outstanding egress budget, with FIFO waiting and injectable `SenderEgressBudget` configuration. Multiple processes on one physical host must partition budgets or use a shared service before claiming a node-wide limit. These are application byte windows, not physical-link rate caps; legacy traffic is explicitly outside them.
 
@@ -36,7 +36,19 @@ Unused grants expire after 30 seconds on the receiver's monotonic clock. A recei
 
 A fresh receiver incarnation fences old transfer IDs after a process restart. At most two sender re-announcements reuse the same encoded bytes. Completion receipts are process-local: after recovery, existing coordinator fencing and duplicate/late-contribution rules remain authoritative, and the client may receive a stale error rather than a recovered success receipt. The grant path now accepts the same permitted one-round-late updates as the legacy path. Quantization and residual updates are unchanged.
 
-Admission events include announcement, grant ranges, initial grant wait, expiry, retry, cancellation, accepted duration and current accounting. Legacy uploads emit a `bypass` event. Client HTTP observers expose admission mode and retry count; `PeerClient.admission_mode` identifies negotiated or legacy fallback. The experiment reports per-member useful rates, Jain fairness, control delay and raw admission events. It does not yet measure exact GPU stalls, physical bandwidth headroom or time to validation loss. Scheduling by observed stalls, shared download/replica budgets and immutable download versions are the next step in #651.
+Admission events include announcement, grant ranges, initial grant wait, expiry, retry, cancellation, accepted duration and current accounting. Legacy uploads emit a `bypass` event. Client HTTP observers expose admission mode and retry count; `PeerClient.admission_mode` identifies negotiated or legacy fallback. The experiment reports per-member useful rates, Jain fairness, control delay and raw admission events. It does not yet measure exact GPU stalls, physical bandwidth headroom or time to validation loss. The #651 implementation below adds shared download budgets and explicit observed-wait priority.
+
+## Versioned downloads and observed waits (#651)
+
+The same opt-in flag enables admitted ranged GETs for weights, shards, validation and replica state, even with one stream. Each process has a shared 32 MiB ingress budget for both incoming granted uploads and locally requested download parts. Its shared 32 MiB egress budget covers granted outgoing uploads and admitted serving responses. The upload-specific receiver window is a sub-limit of ingress credit. Stream count is only a ceiling within those windows. Separate API/member processes still need explicit partitioning or shared ownership before these can be described as physical-node limits.
+
+`X-Transfer-Admission: 1` requests the protocol. An admitted response supplies a strong SHA-256 `ETag` and `X-Content-SHA256`; the receiver pins them before reading the first body, sends `If-Match` on subsequent ranges and retries, and verifies the complete body before decode or file success. A same-size version change returns 412. An unavailable old representation fails rather than combining versions. Peers without the response marker retain explicit `legacy-fallback` behavior, which does not claim admitted server traffic. Upload capability fallback does not disable independently negotiated downloads.
+
+Serving byte credit remains held until the ASGI send completes, including disconnect/cancellation drain. Serialization, hashing and snapshot construction use a separate worker limiter for admitted requests, leaving the existing control worker pool available. Shard responses use immutable temporary snapshots; the cache retains at most eight files, and active plus cached snapshot storage shares a 512 MiB limit. Identical concurrent readers share a snapshot. Active responses keep their storage charged until they drain; temporary exhaustion returns 429 with bounded client retry. Individual admitted shards above 512 MiB are rejected. Byte digest caching retains at most sixteen immutable objects totaling 64 MiB. These limits are experimental guardrails.
+
+Required requests get one turn followed by an older background turn when both wait; FIFO order within each class prevents a stream of urgent claims from starving background work. For overlapped exchanges, a local event becomes required only while the training thread is actually inside `_join`. It is evaluated on new grant/range requests, with distinct compute-round and exchange-round identifiers. Synchronous weights, required shards and their necessary exchange work are required immediately. Replica prefetch stays background and is cancelled on demotion; a foreground request for a shard already being prefetched promotes that existing transfer. Already queued TCP bytes cannot be preempted.
+
+`diloco_transfer` events record encode, upload outcome, download outcome, weight decode and measured exchange-join wait. Join events carry `exposed_wait_s`, `compute_round` and `exchange_round`; background phases do not rewrite the training progress round. Existing coordinator history remains the source for accepted contributions, permitted late updates and missing rounds. The tests exercise dynamic priority and cancellation without changing local step counts, quantization/residuals, full-weight fallback or replica recovery rules. Time to validation loss and real GPU efficiency remain physical-machine gates.
 
 ## First-principles budgets
 
@@ -92,7 +104,7 @@ The synthetic control endpoint is not the production progress/view route. The ex
 
 ## Evidence and decision gates
 
-[Measured local results and raw samples](measurements/648-loopback.md) cover upload/download contention and the current 4 MiB part size.
+[Initial local results](measurements/648-loopback.md) cover contention and the current 4 MiB part size. [The matched admission comparison](measurements/650-admission.md) holds upload geometry fixed and records the throughput/control-delay tradeoff.
 
 The local experiment is an application-paced shared-bottleneck model using real HTTP client transfers. It can validate instrumentation and demonstrate contention under its assumptions. It cannot establish physical link saturation, real Mac–BEAST behavior, GPU utilization, or convergence. Independent client connections on one machine are not three physical nodes.
 

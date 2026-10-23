@@ -2623,14 +2623,17 @@ class Member:
                  cache_dir=None, streams=None, receiver_grants=False):
         if streams is not None and hasattr(client, "streams"):
             client.streams = max(1, int(streams))  # parallel streams per transfer (studio_peer.PeerClient); None keeps the client's default
+        self.receiver_grants = bool(receiver_grants)
         if hasattr(client, "receiver_grants"):
-            client.receiver_grants = bool(receiver_grants)  # opt in to the experimental upload admission protocol
+            client.receiver_grants = self.receiver_grants
+            client.receiver_downloads = self.receiver_grants
         self.down_bps = 0.  # how fast the latest weights came down, bytes per second; told to the coordinator with the change
         self.pause, self.memory_share = pause, memory_share  # this node's queue plan: its pause event and its share of memory
         self.client, self.run, self.node, self.epoch, self.shard_dir, self.stop = client, run, node, epoch, Path(shard_dir), stop
         self.cache_dir = Path(cache_dir) if cache_dir else None  # shards by content hash, kept across runs (None: per-run copies only)
         self.replica_dir = Path(replica_dir) if replica_dir else None  # where a replica keeps the latest round (None: it keeps none)
         self.prefetch, self.prefetched, self.shard_locks, self.replica_lock = None, False, {}, threading.Lock()
+        self.shard_demands = {}  # required users can promote a shard already being prefetched
         self.replica_epoch, self.replica_guard = 0, threading.RLock()  # a write to replica_dir is void once the epoch it began under is over
         self.clock, self.emit, self.wait, self.patience, self.sleep = clock, emit or (lambda event: None), wait, patience, sleep
         self.relocate = RELOCATE_SECONDS  # how long a coordinator that no longer has the run is given to be replaced before the member leaves
@@ -2650,6 +2653,7 @@ class Member:
         self.live = {"loss": None, "tokens_per_second": None}
         self.wake, self.halt, self.reporter = threading.Event(), threading.Event(), None
         self.overlap, self.spawn, self.pending, self.entered, self.anchor = overlap, spawn, None, None, None
+        self.pending_round, self.exchange_waiting = None, threading.Event()
         # locate(run) -> (node, term, client) of the coordinator now in charge, or None (studio_failover); where: the (node, term) this member
         # last rebound to; ended: this attempt of train() is over but the job is not (the member may rebind); holding: (round, rank) it keeps
         self.locate, self.where, self.ended, self.holding, self.moved = locate, None, threading.Event(), None, False
@@ -2778,6 +2782,7 @@ class Member:
             params["seconds"] = self._work_seconds(step - self.first_step)
         if self.loss is not None:
             params["loss"] = self.loss
+        self.pending_round = number
         self.pending = self.spawn(lambda: self._exchange(number, delta, params))
         if number + 1 >= self.rounds:  # the last round: nothing to train after it, so wait for the run's end
             self._phase("waiting")
@@ -2801,11 +2806,20 @@ class Member:
     def _join(self):
         """The result of the exchange in flight (an Entered, or None when the run finished, the member was fenced out or stop was set)."""
         pending, self.pending = self.pending, None
-        return pending.result()
+        number, self.pending_round = self.pending_round, None
+        began = self.clock()
+        self.exchange_waiting.set()
+        try:
+            return pending.result()
+        finally:
+            self.exchange_waiting.clear()
+            self._network_event("exchange_join", began, exchange_round=number, exposed_wait_s=max(0., self.clock() - began))
 
     def _exchange(self, number, delta, params):
         """On the background thread: send round `number`'s delta, then take round number + 1."""
+        began = self.clock()
         body = self._encode(delta)
+        self._network_event("encode", began, exchange_round=number, bytes=len(body))
         self._post(number, body, params, overlapped=True)
         if self.fenced:
             return None
@@ -2887,7 +2901,7 @@ class Member:
         empty gateway answer counts as not reached: it is `tailscale serve` saying the app behind it is down, as while it restarts.
         Once a higher term has been seen it sends nothing: the call is a 409 without leaving this process."""
         from studio_cluster import gateway_down
-        from studio_peer import PeerError
+        from studio_peer import Cancelled, PeerError
         end = self.clock() + self.patience
         while True:
             if self.superseded:
@@ -2895,6 +2909,8 @@ class Member:
                                 detail=f"{TERM_STALE} {self.term}: the run is at term {self.superseded}.")
             try:
                 return self._seen(call())
+            except Cancelled:
+                raise
             except PeerError as exc:
                 self._refused(exc)
                 if exc.status == 404 and exc.detail.startswith(GONE_RUN):
@@ -2955,6 +2971,9 @@ class Member:
         self.emit({"type": "info", "text": f"The run is coordinated on {node} at term {term} now; rejoining there."})
         self.pending = None
         self.client, self.where = client, (node, term)
+        if hasattr(client, "receiver_grants"):
+            client.receiver_grants = self.receiver_grants
+            client.receiver_downloads = self.receiver_grants
         self.term, self.superseded = 0, 0
         self.fenced = self.finished = self.started = self.moved = False
         self.entered = self.anchor = None
@@ -3032,8 +3051,10 @@ class Member:
                     base, base_round = self.theta, self.theta_round  # read once: the training thread replaces them when it applies the round before
                     asking = {"round": want, "node": self.node, **({"since": base_round} if base and base_round is not None else {})}
                     began = self.clock()
-                    body = self._download(f"{self.base}/params", self._q(asking))
+                    priority = self.exchange_waiting.is_set if quiet else True
+                    body = self._download(f"{self.base}/params", self._q(asking), priority=priority)
                     self.down_bps = len(body) / max(1e-6, self.clock() - began)
+                    decoded = self.clock()
                     origin = update_origin(body)
                     if origin is None:
                         theta = decode_arrays(body)
@@ -3041,15 +3062,16 @@ class Member:
                         theta = add_update(base, decode_arrays(body))
                     else:
                         raise ValueError(f"Round {want}'s weights came as an update from round {origin}, but this member holds round {base_round}.")
+                    self._network_event("decode_weights", decoded, exchange_round=want, bytes=len(body))
                     replica = bool(view.get("replica") and self.replica_dir is not None)
                     if replica:
-                        self._replicate(want, body if origin is None else encode_arrays(theta, "float32"), view["rank"])
+                        self._replicate(want, body if origin is None else encode_arrays(theta, "float32"), view["rank"], priority=priority)
                     elif self.replica_dir is not None:
                         self._drop_replica()  # no longer a replica: a stale copy would pass for a round it is not
                     dealt = [int(s) for s in view["shards"]]
                     if not quiet and dealt and round_order(self.info["seed"], view["rank"], want, dealt)[0] not in self.shards:
                         self._phase("loading")  # θ is in; the text it has not held yet comes next
-                    shards = self._gather(dealt, want, view["rank"], int(view.get("steps", 0)))
+                    shards = self._gather(dealt, want, view["rank"], int(view.get("steps", 0)), priority=priority)
                     if self.stop.is_set() or self.finished:
                         return None
                     if replica:
@@ -3057,7 +3079,7 @@ class Member:
                 except PeerError as exc:
                     if self.stop.is_set():
                         return None
-                    if exc.status == 409:  # the round moved on while this member was downloading
+                    if exc.status in (409, 412):  # the round or pinned body changed while downloading
                         want = self.info["round"]
                         continue
                     if exc.status == 410:  # the run ended (stopped, finished) while this member was downloading
@@ -3070,13 +3092,31 @@ class Member:
                                int(view.get("rounds") or 0), view.get("plan"))
         return None
 
-    def _download(self, path, params):
-        """GET a binary body that ends early (Cancelled) when this member is stopped, where the client can (studio_peer.PeerClient)."""
-        if getattr(self.client, "interruptible", False):
-            return self._call(lambda: self.client.get_bytes(path, params, cancel=self.stop.is_set))
-        return self._call(lambda: self.client.get_bytes(path, params))
+    def _network_event(self, stage, began, **fields):
+        try:
+            self.emit({"type": "diloco_transfer", "run": self.run, "node": self.node, "term": self.term,
+                       "compute_round": self.round, "stage": stage, "seconds": max(0., self.clock() - began), **fields})
+        except Exception:  # measurement must never change training or admission
+            pass
 
-    def _gather(self, dealt, number, rank, steps):
+    def _download(self, path, params, priority=True, cancel=None):
+        """Required weights/shards and optional replica traffic use the same transport budgets."""
+        options = {}
+        if getattr(self.client, "interruptible", False):
+            options["cancel"] = lambda: (self.stop.is_set() or self.halt.is_set() or bool(self.superseded) or
+                                          (cancel is not None and cancel()))
+        if getattr(self.client, "supports_admission_priority", False):
+            options["priority"] = priority
+        began, outcome, size = self.clock(), "failed", 0
+        try:
+            body = self._call(lambda: self.client.get_bytes(path, params, **options))
+            size, outcome = len(body), "received"
+            return body
+        finally:
+            self._network_event("download", began, exchange_round=params.get("round"), path=path, bytes=size,
+                                outcome=outcome, required=bool(priority() if callable(priority) else priority))
+
+    def _gather(self, dealt, number, rank, steps, priority=True):
         """The shards round `number` trains on, fetched in order: the dealt ones shuffled by (seed, rank, round), taken until their
         windows cover what the round draws (its steps * batch size * accumulation). The rest are not fetched (a replica gets them in
         the background), so a round's download follows its steps, not the corpus, and the first steps start after the first shard.
@@ -3088,14 +3128,32 @@ class Member:
         for shard in order:
             if self.stop.is_set() or self.finished:
                 break
-            self._shard(shard)
+            self._shard(shard, priority=priority)
             chosen.append(shard)
             have += len(self.shards[shard])
             if have >= need:
                 break
         return chosen
 
-    def _shard(self, shard):
+    def _shard(self, shard, priority=True, cancel=None):
+        owner = object()
+        with self.replica_lock:
+            self.shard_demands.setdefault(shard, {})[owner] = priority
+
+        def required():
+            with self.replica_lock:
+                demands = tuple(self.shard_demands.get(shard, {}).values())
+            return any(demand() if callable(demand) else demand for demand in demands)
+
+        try:
+            self._hold_shard(shard, required, cancel)
+        finally:
+            with self.replica_lock:
+                self.shard_demands[shard].pop(owner)
+                if not self.shard_demands[shard]:
+                    del self.shard_demands[shard]
+
+    def _hold_shard(self, shard, priority=True, cancel=None):
         """Install one shard unless it is held; the training thread and a replica's prefetch may both want it. With a `cache_dir`, the
         coordinator is asked for the shard's content hash first, and a shard this node already holds under that hash (from an earlier
         run) is used without downloading it."""
@@ -3118,7 +3176,7 @@ class Member:
                     self.shards[shard] = held
                     self._keep_for_failover(digest, shard)
                     return
-            blob = self._download(f"{self.base}/shards/{shard}", self._q())
+            blob = self._download(f"{self.base}/shards/{shard}", self._q(), priority=priority, cancel=cancel)
             self.downloaded += len(blob)
             if self.cache_dir is not None:
                 digest = hashlib.sha256(blob).hexdigest()
@@ -3143,19 +3201,24 @@ class Member:
             self.prefetch = threading.Thread(target=self._prefetch, args=(self.replica_epoch,), name=f"diloco-replica-{self.node}", daemon=True)
             self.prefetch.start()
 
-    def _replicate(self, number, theta, rank=0):
+    def _replicate(self, number, theta, rank=0, priority=False):
         """Keep theta (the bytes just downloaded) of round `number` with the outer momentum and diloco.json that go with it, replacing
         the round before; then, once, start fetching the validation windows and the shards this member lacks in the background. A round
         that moved on while the state downloaded (409) or one before any closed (404) leaves the folder as it was."""
-        from studio_peer import PeerError
+        from studio_peer import Cancelled, PeerError
+        epoch = self.replica_epoch
         if number > 0:
             try:
-                momentum, record = decode_state(self._call(lambda: self.client.get_bytes(f"{self.base}/state", self._q({"round": number}))))
+                momentum, record = decode_state(self._download(f"{self.base}/state", self._q({"round": number}), priority=priority,
+                                                             cancel=lambda: epoch != self.replica_epoch))
+            except Cancelled:
+                return
             except PeerError as exc:
-                if exc.status not in (404, 409):
+                if exc.status not in (404, 409, 412):
                     raise
                 return
-            epoch = self.replica_epoch
+            if epoch != self.replica_epoch:
+                return
             for name, data in (("theta.npz", theta), ("momentum.npz", encode_arrays(momentum)), (STATE_FILE, record),
                                ("info.json", json.dumps(self.info).encode("utf-8"))):  # info.json: what a coordinator made from this needs
                 self._write_replica(epoch, name, data)
@@ -3231,12 +3294,13 @@ class Member:
         from studio_peer import PeerError
         try:
             if not (self.replica_dir / "validation.npz").is_file():
-                if not self._write_replica(epoch, "validation.npz", self._call(lambda: self.client.get_bytes(f"{self.base}/validation", self._q()))):
+                if not self._write_replica(epoch, "validation.npz", self._download(f"{self.base}/validation", self._q(), priority=False,
+                                                                                         cancel=lambda: epoch != self.replica_epoch)):
                     return
             for shard in range(self.info["shard_count"]):
                 if self.stop.is_set() or self.halt.is_set() or self.finished or epoch != self.replica_epoch:
                     return
-                self._shard(shard)
+                self._shard(shard, priority=False, cancel=lambda: epoch != self.replica_epoch)
             with self.replica_guard:
                 if epoch != self.replica_epoch:
                     return
@@ -3251,7 +3315,9 @@ class Member:
         self._phase("uploading")
         weights = model.state_arrays()
         delta = {name: self.theta[name] - weights[name].astype(np.float32) for name in self.theta}
+        encoded = self.clock()
         body = self._encode(delta)
+        self._network_event("encode", encoded, exchange_round=self.round, bytes=len(body))
         params = {"term": self.term, "node": self.node, "generation": self.generation, "epoch": self.epoch, "tokens": trained_tokens - self.first_tokens,
                   "steps": step - self.first_step}
         if self.timed:  # none timed (a round of a step or two): no seconds, and the coordinator keeps the member's speed as it was
@@ -3276,15 +3342,19 @@ class Member:
         began = self.clock()
         try:
             options = {"timeout": self.wait + 120}
+            if getattr(self.client, "supports_admission_priority", False):
+                options["priority"] = self.exchange_waiting.is_set if overlapped else True
             if getattr(self.client, "receiver_grants", False):
                 options["cancel"] = lambda: self.stop.is_set() or self.fenced or self.superseded
             self._call(lambda: self.client.post_bytes(f"{self.base}/rounds/{number}/delta", body, params, **options))
             upload, trained = self.clock() - began, params.get("seconds", 0.)
+            self._network_event("upload", began, exchange_round=number, bytes=len(body), outcome="accepted")
             sparse = f" (top {self.info['delta_sparsity']:.1%})" if self.info.get("delta_sparsity") else ""
             text = (f"in {upload:.2f} s, while the next round trained." if overlapped
                     else f"in {upload:.2f} s ({upload / max(1e-9, trained + upload):.0%} of the member's {trained + upload:.2f} s round).")
             self.emit({"type": "info", "text": f"Round {number}: sent {len(body)} bytes of {self.info['delta_dtype']}{sparse} delta {text}"})
         except PeerError as exc:
+            self._network_event("upload", began, exchange_round=number, bytes=len(body), outcome="failed", status=exc.status)
             if exc.status != 409:
                 raise
             if "lease epoch" in exc.detail or self.superseded:
@@ -3430,7 +3500,7 @@ def main(argv=None):
                         help="train the next round while this round's delta uploads and the next weights download (applied a round late)")
     member.add_argument("--streams", type=int, default=None,
                         help="parallel streams per transfer of weights, shards and changes (default: studio_peer.STREAMS; 1 is one stream)")
-    member.add_argument("--receiver-grants", action="store_true", help="opt in to experimental receiver-granted delta uploads")
+    member.add_argument("--receiver-grants", action="store_true", help="opt in to experimental shared admission for delta uploads and versioned downloads")
     member.add_argument("--root", default="", help="folder that holds data/remote_shards (default: the workspace root)")
     args = parser.parse_args(argv)
     import socket
