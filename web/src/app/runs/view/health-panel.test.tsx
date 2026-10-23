@@ -14,7 +14,7 @@ const recorded = (JSON.parse(readFileSync(join(__dirname, "../../../contract/fix
 
 const member = (loss: number, rate: number, compute: number, wait: number) => ({ loss, steps: 100, tokens: rate * compute, compute_s: compute, tokens_per_s: rate, wait_s: wait, idle_s: wait, sync_s: 10 - compute - wait });
 const round = (n: number) => ({
-  round: n, seconds: 10, tokens: 6400, slowest: "mac-mini", val_loss: 4 - n * 0.2, loss: 4, lr: 0.7, update_norm: 0.05, bytes_up: 2 ** 21, bytes_down: 2 ** 22, dtype: "float16", compression: 2, sync_s: 2,
+  round: n, seconds: 10, tokens: 6400, slowest: "mac-mini", val_loss: 4 - n * 0.2, loss: 4, lr: 0.7, update_norm: 0.05, bytes_up: 2 ** 21, bytes_down: 2 ** 22, dtype: "float16", sparsity_up: 0.05, sparsity_down: 0, compression: 2, sync_s: 2,
   members: { "mac-mini": member(4 - n * 0.2, 400, 8, 0), "gpu-box": member(3.8 - n * 0.2, 400, 8, 1) },
 });
 const measured: RunHealth = {
@@ -50,6 +50,7 @@ describe("the health panel", () => {
     for (const id of ["health-loss", "health-throughput", "health-split", "health-bytes"]) expect(screen.getByTestId(id)).toBeInTheDocument();
     expect(within(screen.getByTestId("health-split")).getAllByRole("listitem").length).toBeGreaterThanOrEqual(3);
     expect(screen.getByTestId("health-bytes")).toHaveTextContent("2.0× smaller");
+    expect(screen.getByTestId("health-sparsity")).toHaveTextContent("Sent up: the largest 5% of each tensor's entries. Down: all entries.");
   });
 
   test("a diverging verdict is marked", () => {

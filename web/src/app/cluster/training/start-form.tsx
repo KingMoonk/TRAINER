@@ -19,7 +19,7 @@ import { JOIN } from "@/lib/copy/join";
 import { fill } from "@/lib/members";
 import { deviceText } from "../machines/logic";
 import { TRAINING as T } from "@/lib/copy/training";
-import { DELTA_DTYPES, defaultInnerSteps, deltaDtypeOf, initialForm, otherMachines, startBody, stepsProblem, teacherProblem, toggled, type Defaults, type Form, type Run, type TextSet } from "./logic";
+import { DELTA_DTYPES, defaultInnerSteps, deltaDtypeOf, initialForm, otherMachines, sparsityProblem, startBody, stepsProblem, teacherProblem, toggled, type Defaults, type Form, type Run, type TextSet } from "./logic";
 import { allReady, readiness, waitForAll } from "./readiness";
 import { Limits } from "./limits";
 import { Roster } from "./roster";
@@ -178,6 +178,12 @@ function Fields({ defaults, sets, onStarted }: { defaults: Defaults; sets: TextS
             {DELTA_DTYPES.map((dtype) => <option key={dtype} value={dtype}>{dtype}</option>)}
           </select>
           <p className="max-w-prose text-xs text-muted-foreground">{T.deltaDtypeHelp}</p>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label htmlFor="training-sparsity" className="text-sm font-medium">{T.deltaSparsity}</label>
+          <input id="training-sparsity" inputMode="decimal" value={form.deltaSparsity} onChange={(e) => set({ deltaSparsity: e.target.value })} aria-describedby="training-sparsity-help" className={`${FIELD} w-24`} />
+          <p id="training-sparsity-help" className="max-w-prose text-xs text-muted-foreground">{T.deltaSparsityHelp}</p>
+          {sparsityProblem(form) && <p role="status" className="max-w-prose text-sm text-destructive">{sparsityProblem(form)}</p>}
         </div>
       </fieldset>
 

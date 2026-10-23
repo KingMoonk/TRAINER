@@ -333,6 +333,21 @@ dtype each way and each member's idle GPU seconds. Streaming fragments come late
   (the update is dropped), and for `float32` runs. `/state` (a replica's copy) is always full.
 - A replica needs `θ` as fp32 too: a member that received an update re-encodes its `θ` as fp32 when it copies it.
 
+### Sparse top-k changes (#593)
+
+`delta_sparsity` (`StartRun`, `Settings`; default 0 = off; int8 only; at most 0.2) makes each member send only the largest entries of
+every tensor. Per round, per tensor, the member adds its residual to the change, keeps the `ceil(delta_sparsity * size)` entries of
+largest magnitude, quantizes those to int8 and holds everything else (the entries not sent, plus the int8 rounding of the ones sent)
+as the new residual: residual first, then top-k, then int8.
+
+- **Wire.** A sparse tensor is `name` (int8 values), `name::scale` (float32, one per 256 kept values), `name::idx` (int32 flat
+  indices, sorted) and `name::shape`. A tensor too small for that to pay (5 bytes per kept entry against about 1 dense) is sent dense in
+  the same body. With `delta_sparsity` 0 the body is byte-for-byte the dense int8 one.
+- **Average.** The coordinator rebuilds each change as a dense array with zeros where nothing was sent, then takes the same token-weighted
+  average as ever, so an entry is the weighted sum over the members that sent it divided by all the tokens.
+- **Down.** The outer update stays dense int8 and bit-identical on every node.
+- **Health.** Each round carries `sparsity_up` (the setting) and `sparsity_down` (always 0) next to the bytes each way.
+
 ### Time-boxed rounds (#576)
 
 `time_box` is on by default for a run across more than one machine (`StartRun.time_box: null`; the form has a checkbox). Machines

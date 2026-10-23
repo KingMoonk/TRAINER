@@ -67,6 +67,7 @@ def record(row, losses, arrivals, theta_nbytes):
     return {"round": row["round"], "seconds": seconds, "tokens": int(row.get("tokens") or 0), "members": members, "slowest": slowest,
             "val_loss": row.get("val_loss"), "loss": row.get("loss"), "lr": row.get("lr"), "update_norm": row.get("outer_step_norm"),
             "bytes_up": int(row.get("delta_bytes") or 0), "bytes_down": int(row.get("theta_bytes") or 0), "dtype": row.get("delta_dtype", ""),
+            "sparsity_up": float(row.get("delta_sparsity") or 0.), "sparsity_down": 0.,  # share of each tensor's entries sent: the changes may be sparse, the outer update members download is always dense
             "compression": full / (sum(up) / len(up)) if full and up and sum(up) > 0 else None,
             "sync_s": max(0., seconds - max((m["compute_s"] for m in members.values()), default=0.))}
 

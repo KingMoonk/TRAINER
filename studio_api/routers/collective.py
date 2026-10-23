@@ -74,6 +74,7 @@ class JoinInfo(Versioned):
     total_steps: int
     plan: list[dict[str, Any]] | None = None  # the run's changes of length and H (studio_diloco.plan_h); none from an older coordinator
     delta_dtype: str
+    delta_sparsity: float = 0.  # the share of each tensor's entries a member's change carries (top-k by magnitude); 0: all of them
     shard_count: int
     seed: int
     vocab_size: int

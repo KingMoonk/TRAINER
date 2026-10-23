@@ -35,7 +35,7 @@ export function deltaDtypeOf(text: string | undefined): DeltaDtype {
 }
 
 /** The form as typed: numbers stay text so a half-typed "0." is not rewritten under the cursor. */
-export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; chats: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; timeBox: boolean; deltaDtype: DeltaDtype; reviewedOnly: boolean; coordinator: string; teacher: string; polishEvery: string; targetWinRate: string; rules: RulesForm; maxSteps: number };
+export type Form = { rounds: string; innerSteps: string; outerLr: string; outerMomentum: string; version: string; datasets: string[]; chats: string[]; machines: string[]; minMachines: string; maxMachines: string; overlap: boolean; timeBox: boolean; deltaDtype: DeltaDtype; deltaSparsity: string; reviewedOnly: boolean; coordinator: string; teacher: string; polishEvery: string; targetWinRate: string; rules: RulesForm; maxSteps: number };
 
 /** A run that is still going: the list is re-read every couple of seconds while one is. */
 export function isActive(run: Run): boolean {
@@ -58,6 +58,7 @@ export function initialForm(defaults: Defaults | undefined, sets: TextSet[] | un
     overlap: true,
     timeBox: true,
     deltaDtype: deltaDtypeOf(defaults?.delta_dtype),
+    deltaSparsity: "",
     reviewedOnly: false,
     coordinator: "",
     teacher: "",
@@ -121,6 +122,25 @@ export function stepsProblem(form: Form): string {
   return fill(T.tooManySteps, { rounds: n(rounds), steps: n(steps), total: n(rounds * steps), max: n(form.maxSteps) });
 }
 
+/** The most of each tensor a change may carry, in percent (the server's limit). */
+export const MAX_SPARSITY_PERCENT = 20;
+
+/** The share of entries to send as a fraction, or null while the box is empty (send everything). NaN when it is not a usable number. */
+export function sparsityOf(form: Form): number | null {
+  const text = form.deltaSparsity.trim();
+  if (text === "") return null;
+  const percent = Number(text);
+  return Number.isFinite(percent) && percent > 0 && percent <= MAX_SPARSITY_PERCENT ? percent / 100 : Number.NaN;
+}
+
+/** Why the sparse-change box cannot be sent, or "" when it can (empty is fine: off). */
+export function sparsityProblem(form: Form): string {
+  const share = sparsityOf(form);
+  if (share === null) return "";
+  if (Number.isNaN(share)) return fill(T.sparsityRange, { max: MAX_SPARSITY_PERCENT });
+  return form.deltaDtype === "int8" ? "" : T.sparsityNeedsInt8;
+}
+
 /** The teacher's part of the request: nothing while the options are blank. Only called when `teacherProblem` is empty. */
 function teaching(form: Form): Pick<StartRun, "teacher" | "polish_every" | "target_win_rate"> | undefined {
   const polish = whole(form.polishEvery);
@@ -142,6 +162,7 @@ export function startBody(form: Form): StartRun | null {
   const most = limit(form.maxMachines);
   if (least === null || most === null) return null;
   if (least !== undefined && most !== undefined && least > most) return null;
+  if (sparsityProblem(form) !== "") return null;
   if (stepsProblem(form) !== "" || teacherProblem(form) !== "" || rulesProblem(form.rules, form.polishEvery, form.rounds) !== "") return null;
   const teacher = teaching(form);
   return {
@@ -158,6 +179,7 @@ export function startBody(form: Form): StartRun | null {
     overlap: form.overlap ? null : false, // null lets the server turn it on for a run that spans machines
     time_box: form.timeBox ? null : false, // null lets the server turn it on for a run that spans machines
     delta_dtype: form.deltaDtype,
+    delta_sparsity: sparsityOf(form) ?? 0, // 0: send every entry
     reviewed_only: form.reviewedOnly,
     ...teacher,
     ...rulesParams(form.rules),

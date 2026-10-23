@@ -5000,6 +5000,11 @@ export interface components {
             };
             /** Delta Dtype */
             delta_dtype: string;
+            /**
+             * Delta Sparsity
+             * @default 0
+             */
+            delta_sparsity: number;
             /** Generation */
             generation: number;
             /** Inner Steps */
@@ -7103,6 +7108,16 @@ export interface components {
             seconds: number;
             /** Slowest */
             slowest: string | null;
+            /**
+             * Sparsity Down
+             * @default 0
+             */
+            sparsity_down: number;
+            /**
+             * Sparsity Up
+             * @default 0
+             */
+            sparsity_up: number;
             /** Sync S */
             sync_s: number;
             /** Tokens */
@@ -7997,6 +8012,11 @@ export interface components {
              * @enum {string}
              */
             delta_dtype: "int8" | "float16" | "float32";
+            /**
+             * Delta Sparsity
+             * @default 0
+             */
+            delta_sparsity: number;
             /**
              * Inner Steps
              * @default 100

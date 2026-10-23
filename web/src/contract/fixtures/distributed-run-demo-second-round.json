@@ -95,6 +95,8 @@
           "round": 0,
           "seconds": 6.0,
           "slowest": "mac-mini",
+          "sparsity_down": 0.0,
+          "sparsity_up": 0.0,
           "sync_s": 2.4,
           "tokens": 31670,
           "update_norm": 0.2,

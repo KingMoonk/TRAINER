@@ -67,6 +67,7 @@ class StartRun(BaseModel):
     coordinator: str | None = None  # a machine from the Machines list to coordinate the run (it must be one of the machines invited and answer); "" (the default): this computer
     reviewed_only: bool = False  # train only on the examples marked Good (the validation text is cut from those too); 400 when the sets hold none
     overlap: bool | None = None  # every member (this one and the invited) overlaps its communication with its compute: it trains on while the exchange runs. None (the default): on when another machine takes part, off for a run on this computer alone; false turns it off
+    delta_sparsity: float = Field(0., ge=0, le=studio_diloco.MAX_SPARSITY)  # int8 only: each member sends just this share of every tensor's entries (the largest changes), keeping the rest for its next change; 0 (the default): all of them
     delta_dtype: Literal["int8", "float16", "float32"] = DEFAULTS.delta_dtype  # the precision of a member's change and of the outer update members download; int8 keeps what it loses for the next change, float32 downloads the whole weights
     time_box: bool | None = None  # members train until the round's deadline (set from the fastest member's time for H steps) instead of H steps each, and the outer step weights each change by the tokens it trained. None (the default): on when more than one machine takes part, off for a run on this computer alone.
     teacher: str | None = Field(None, max_length=200)  # an Ollama model that polishes the weights and judges the win-rate; needed by polish_every and target_win_rate
@@ -217,6 +218,8 @@ class RoundHealth(BaseModel):
     bytes_up: int
     bytes_down: int
     dtype: str
+    sparsity_up: float = 0.  # the share of each tensor's entries the members' changes carried (0: all of them)
+    sparsity_down: float = 0.  # the same for the outer update members download (always 0: dense)
     compression: float | None  # full-precision size of the weights over the size of one change as sent
     sync_s: float  # seconds of the round the slowest member was not computing
 
@@ -579,7 +582,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     teaching, teaching_params = _teacher_options(body, services, dataset_ids)
     rules = _rule_options(body)
     settings = studio_diloco.Settings(rounds=body.rounds, inner_steps=body.inner_steps, outer_lr=body.outer_lr,
-                                      outer_momentum=body.outer_momentum, delta_dtype=body.delta_dtype, **shape, **teaching, **rules["settings"])  # ValueError -> 400
+                                      outer_momentum=body.outer_momentum, delta_dtype=body.delta_dtype, delta_sparsity=body.delta_sparsity, **shape, **teaching, **rules["settings"])  # ValueError -> 400
     own = studio_cluster.own_info(busy=services.queue().job is not None, version=app_version())
     listed = studio_cluster.configured_nodes({"studioConfig": {"nodes": services.setting("nodes", [])}})
     for address in body.machines:
@@ -608,7 +611,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
         "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
         "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")},
-        "delta_dtype": settings.delta_dtype, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **rules["settings"], **rules["params"], **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": {"overlap": True}} if overlap else {}), "machines": machines, "owner": own.hostname,
+        "delta_dtype": settings.delta_dtype, "delta_sparsity": settings.delta_sparsity, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **rules["settings"], **rules["params"], **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": {"overlap": True}} if overlap else {}), "machines": machines, "owner": own.hostname,
         **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
         **({"left_out": left_out} if body.all_machines else {})})
     runs.open_run(job)
