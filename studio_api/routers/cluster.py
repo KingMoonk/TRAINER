@@ -202,6 +202,20 @@ class Stop(BaseModel):
     epoch: int
 
 
+def _survey(services, state, own):
+    """`studio_cluster.survey` as a busy task (the loading bar): one step for each peer that answers, fails or is given up on."""
+    peers = studio_cluster.configured_nodes(state)
+    if not peers:
+        return studio_cluster.survey(state, own, timeout=studio_cluster.POLL_TIMEOUT)
+    with services.busy("Checking the other computers", total=len(peers)) as task:
+        def ask(url, timeout):
+            try:
+                return studio_cluster.fetch_json(url, timeout)
+            finally:
+                task.step()
+        return studio_cluster.survey(state, own, ask, timeout=studio_cluster.POLL_TIMEOUT)
+
+
 @router.get("/nodes")
 def nodes(request: Request, services=Depends(get_services)) -> list[ClusterNode]:
     """This node first, then every listed peer, in list order. A peer that does not answer within two seconds is listed offline with
@@ -212,7 +226,7 @@ def nodes(request: Request, services=Depends(get_services)) -> list[ClusterNode]
     tailnet = getattr(getattr(request.app.state, "hosts", None), "tailnet_name", "")
     cluster = getattr(getattr(services, "runner", None), "cluster", None)
     rows = []
-    for info in studio_cluster.survey(state, own, timeout=studio_cluster.POLL_TIMEOUT):
+    for info in _survey(services, state, own):
         local = info.address == studio_cluster.LOCAL
         name = cluster.hostname if cluster is not None and local else (info.hostname or (cluster._names.get(info.address, "") if cluster is not None else ""))
         facts = studio_facts.node_facts(cluster, name) if cluster is not None else None
