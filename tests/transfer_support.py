@@ -14,8 +14,12 @@ import studio_parts
 
 
 class Peer:
-    def __init__(self, blob=b"", latency=0., rate=None, ranges=True, parts=True, dev=False):
+    def __init__(self, blob=b"", latency=0., rate=None, ranges=True, parts=True, dev=False, rendezvous=0):
         self.blob, self.latency, self.rate, self.ranges, self.parts, self.dev = blob, latency, rate, ranges, parts, dev
+        # rendezvous=N: a part request (not part 0 of a download) is held until N part requests are in flight at once, so N
+        # connections open together exactly when the client really runs N streams, however loaded the machine is. `peak` is the
+        # most part requests ever in flight; `met` says whether N was reached (a client that serialises them waits out `patience`).
+        self.rendezvous, self.patience, self.inflight, self.peak, self.met = rendezvous, 10., 0, 0, threading.Event()
         self.requests, self.uploads, self.fail = [], [], {}  # fail: a Range header -> how many times to cut that answer short
         self.assembler, self.lock = studio_parts.Assembler(), threading.Lock()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self.handler())
@@ -34,6 +38,20 @@ class Peer:
     def __exit__(self, *exc):
         self.server.shutdown()
         self.server.server_close()
+
+    def track(self, held):
+        """Count a part request as in flight; when `held`, wait for the rendezvous first."""
+        with self.lock:
+            self.inflight += 1
+            self.peak = max(self.peak, self.inflight)
+            if self.rendezvous and self.inflight >= self.rendezvous:
+                self.met.set()
+        if held and self.rendezvous and not self.met.wait(self.patience):
+            self.met.set()  # never reached: let the rest through at once, the test fails on `peak`
+
+    def untrack(self):
+        with self.lock:
+            self.inflight -= 1
 
     def pace(self, size):
         if self.rate:
@@ -75,8 +93,15 @@ class Peer:
                 if found is None:
                     return
                 path, _ = found
-                time.sleep(peer.latency)
                 header = self.headers.get("Range")
+                peer.track(held=bool(header) and not header.startswith("bytes=0-"))
+                try:
+                    self.get(path, header)
+                finally:
+                    peer.untrack()
+
+            def get(self, path, header):
+                time.sleep(peer.latency)
                 with peer.lock:
                     peer.requests.append(("GET", path, header))
                     cut = peer.fail.get(header, 0)
@@ -107,6 +132,16 @@ class Peer:
                 if found is None:
                     return
                 path, query = found
+                counted = path == "/up/parts" and query.get("count") != "0"
+                if counted:
+                    peer.track(held=True)
+                try:
+                    self.post(path, query)
+                finally:
+                    if counted:
+                        peer.untrack()
+
+            def post(self, path, query):
                 time.sleep(peer.latency)
                 size = int(self.headers.get("Content-Length") or 0)
                 body = bytearray()

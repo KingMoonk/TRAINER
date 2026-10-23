@@ -13,6 +13,7 @@ from tests.transfer_support import Peer, blob
 
 PART = 100_000
 BODY = blob(1_000_003)  # ten full parts and a short one
+BODY_16 = blob(1 << 20)  # sixteen parts of 64 KiB
 
 
 def client(peer, **options):
@@ -219,11 +220,27 @@ def measure(size=4 << 20, part=256 << 10, streams=8, rate=512 << 10, latency=.12
     return out
 
 
-class Throughput(unittest.TestCase):
-    def test_eight_streams_move_a_body_several_times_faster_than_one_when_each_connection_is_slow(self):
-        result = measure(size=1 << 20, part=128 << 10, streams=8, rate=2 << 20, latency=.02)
-        self.assertGreater(result["parallel"]["down_mb_s"], 2.5 * result["single"]["down_mb_s"], result)
-        self.assertGreater(result["parallel"]["up_mb_s"], 2.5 * result["single"]["up_mb_s"], result)
+class Concurrency(unittest.TestCase):
+    """The speed-up is the number of streams in flight at once (the bench below measures the seconds): a peer that holds each part
+    request until `streams` of them are open together shows it however busy the machine is, and a client that serialises its parts
+    never gets there."""
+
+    def test_a_download_has_eight_part_requests_open_at_once(self):
+        with Peer(BODY_16, rendezvous=8) as peer:
+            self.assertEqual(client(peer, streams=8, part=64 << 10).get_bytes("/blob"), BODY_16)
+            self.assertTrue(peer.met.is_set())
+            self.assertEqual(peer.peak, 8)
+
+    def test_an_upload_has_eight_part_requests_open_at_once(self):
+        with Peer(rendezvous=8) as peer:
+            client(peer, streams=8, part=64 << 10).post_bytes("/up", BODY_16)
+            self.assertEqual(peer.uploads, [BODY_16])
+            self.assertEqual(peer.peak, 8)
+
+    def test_one_stream_never_has_two_open(self):
+        with Peer(BODY_16, latency=.01) as peer:
+            self.assertEqual(client(peer, streams=1).get_bytes("/blob"), BODY_16)
+            self.assertEqual(peer.peak, 1)
 
 
 if __name__ == "__main__":
