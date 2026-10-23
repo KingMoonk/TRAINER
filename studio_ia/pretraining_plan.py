@@ -2,8 +2,71 @@
 expectation and the params of the job "Add to the queue" makes. The Tk page and the API (studio_api.routers.pretraining) both use them."""
 from __future__ import annotations
 
-from studio_ia.copy import PRETRAINING as T
 from studio_ia.expectation import expectation, table_params
+
+
+T = {
+    "h1": "Pretraining",
+    "lead": "Feed it text. It learns by predicting the next word, over and over.",
+    "model_label": "MODEL BEING TRAINED",
+    "version_source": "Version 5 · from the Network designer",
+    "data": "Data",
+    "what_reads": "what it reads",
+    "data_status_format": "{count}% · {mb} MB of {total} MB",
+    "enough_text": "ENOUGH TEXT?",
+    "text_estimate": "This model could use about {times}× more text than you have",
+    "text_about_right": "You have about as much text as the rule of thumb asks for",
+    "text_plenty": "You have plenty of text: about {times}× what the rule of thumb asks for",
+    "text_unknown": "Choose some text to see whether it is enough for this model",
+    "estimating": "Estimating how much text you have…",
+    "reading_text": "Reading your text…",
+    "steps_estimating": "Estimating steps and time…",
+    "word_pieces_plain": "A common rule of thumb for the best use of compute is about 20 word pieces per parameter. Repeating your text helps less with each pass, and after a few passes it starts memorising; the run page marks the passes.",
+    "word_pieces_rule": "{ratio} word pieces per parameter; a common rule of thumb for the best use of compute is about 20. Repeating your text helps less with each pass, and after a few passes it starts memorising; the run page marks the passes.",
+    "word_pieces_plenty": "{ratio} word pieces per parameter; a common rule of thumb for the best use of compute is about 20. One pass over your text is already more than that, so repeating it is not needed.",
+    "text_only": "Plain text only. Conversations such as Dolly 15K and Alpaca belong to",
+    "post_training_r1": "Post-training round 1",
+    "post_training_r1_end": "; problems with a checkable answer to round 2. A model learns the language from plain text first.",
+    "batches": "Batches",
+    "batches_desc": "how the text is fed in",
+    "rebuilt_auto": "rebuilt automatically when the word list changes",
+    "one_step": "One step: {rows} rows × 256 pieces. Each colour is a different example; the dark square marks where one ends.",
+    "layout_note": "Layout shown with an example; real rows come from your data.",
+    "rows_per_step": "Rows per step",
+    "rows_desc": "more rows: steadier learning, more memory",
+    "held_back": "Held back for testing",
+    "held_back_desc": "split by example, exact duplicates removed, never trained on",
+    "per_step_pieces": "{pieces} pieces per step · one pass over your data ≈ {passes} steps",
+    "per_step_only": "{pieces} pieces per step",
+    "train_label": "Train",
+    "continue_start": "continue or start over",
+    "version_needs": "version 5 needs catch-up training",
+    "how_long": "How long",
+    "steps_time": "{steps} steps · about {minutes} min on this computer",
+    "steps_only": "{steps} steps · the time shows after the first run on this computer",
+    "steps_none": "Choose some text to see how many steps this takes",
+    "learning_rate": "Learning rate:",
+    "lr_auto": "auto",
+    "lr_info": "({lr}, set with width-scaled setup)",
+    "schedule_label": "Schedule:",
+    "schedule_value": "warm up, then steady",
+    "schedule_note": "· a short cool-down makes each checkpoint",
+    "schedule_desc": "A steady schedule means training can keep going for as long as you like, and runs of different lengths stay comparable at any point.",
+    "add_queue": "Add to the queue",
+    "queue_note": "Runs after the current job on this computer, or right away if nothing is running. Chat keeps {parent} until {version} beats it on held-back text.",
+    "collection": "Recommended collection",
+    "collection_desc": "plain text to download, checked, then added to your sources",
+    "download_all": "Download and add all",
+    "download": "Download and add",
+    "import": "Add to my sources",
+    "state_not downloaded": "Not downloaded",
+    "state_downloading": "Downloading",
+    "state_downloaded": "Downloaded",
+    "state_imported": "In your sources",
+    "held_out": "held-out: kept for testing, not trained on",
+    "failed": "Could not finish: {error} Nothing was added; try again.",
+}
+
 
 ROWS = ("8", "16", "32")
 HOLD = ("2%", "5%", "10%")
@@ -123,12 +186,12 @@ def held_out(dataset_id):
 
 
 def collection_items(rows, notes):
-    """(key, data) for KeyedRows: each collection row with its latest progress line."""
+    """(key, data): each collection row with its latest progress line."""
     return [(r["id"], (dict(r), notes.get(r["id"], ""))) for r in rows]  # a copy: the services may change a row in place
 
 
 def tile_items(sets, use):
-    """(key, data) for KeyedRows: one tile per text set, ticked when it is used."""
+    """(key, data): one tile per text set, ticked when it is used."""
     return [(s["id"], {"id": s["id"], "name": s["name"], "count": s["count"], "held": held_out(s["id"]), "on": bool(use.get(s["id"]))})
             for s in sets]
 

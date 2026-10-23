@@ -2,7 +2,7 @@
 
 No Panda3D, no Tk. `scene_payload` is the whole scene to draw from scratch, `scene_frame` only what changed since the
 client's last cursor, `scene_binary` the same arrays packed as float32 for typed arrays. Geometry mirrors
-studio_brain3d.py: the same coordinates (x right, y into the screen, z up), the same limits, the same colour per meaning.
+The removed Panda3D viewer used the same coordinates (x right, y into the screen, z up), the same limits, the same colour per meaning.
 
 Shape of a payload (a frame has the same keys, only for what changed, plus `removed_groups`):
     view      level, mode, head stage, tile kind, toggles, which controls show, camera target and distance
@@ -43,10 +43,10 @@ STACK_HEADS = 16  # a layer's head stack draws at most this many query heads
 STACK_X, STACK_WIDTH = 7.2, 7.  # where the Model level's head stacks start (beside a block, which spans x -6..6), and how wide they may be
 POSTER_TOKENS = 16  # token labels per tile axis: more are thinned to every n-th
 
-# the theme colours the scene uses (studio_viewer_ui.C; a test keeps them equal)
+# the theme colours the scene uses
 THEME = {'bg': '#0e1014', 'panel': '#15181e', 'panel2': '#1b1f27', 'border': '#2a2f3a', 'text': '#e6e8ec', 'text2': '#c3c8d1',
          'violet': '#9f8cff', 'amber': '#e5b567', 'blue': '#6cb4ee', 'pink': '#e58fb0', 'violet_bg': '#1a1730'}
-# kind id -> (theme colour, alpha): one colour per meaning (studio_viewer_ui.SCENE; a test keeps them equal)
+# kind id -> (theme colour, alpha): one colour per meaning
 KINDS = {'activation': ('blue', .85), 'mixer': ('pink', .85), 'channel': ('violet', .7), 'token': ('amber', 1.),
          'lane': ('border', 1.), 'gate': ('border', 1.), 'positive': ('amber', .95), 'negative': ('blue', .95),
          'masked': ('panel2', 1.), 'picked': ('text', 1.), 'update': ('violet', .8),  # update: colour is per box
@@ -193,7 +193,7 @@ class _Group:
         return out
 
 
-# --- the controls' decisions (tests keep these equal to studio_viewer_ui) -------------
+# --- the controls' decisions ---
 
 def block_matrices(names, layer):
     """The matrices the menu offers: the selected block's, plus the ones outside any block (token, position embeddings)."""
@@ -288,7 +288,7 @@ def pulse_pose(blocks, elapsed, reduce_motion=False):
 # --- the scene ----------------------------------------------------------------------------------------------------------
 
 def _gate_group(model, frame, gate, view=None):
-    """One block at Model or Window (studio_brain3d.draw_gate), in coordinates local to the block."""
+    """One block at Model or Window, in coordinates local to the block."""
     index, selected = gate['index'], gate['index'] == model.selection.layer
     entry = gate['entry']
     group = _Group((0., -index * GATE_SPACING, 0.), index=index, selected=selected)
@@ -354,7 +354,7 @@ def _gate_group(model, frame, gate, view=None):
 
 
 def _matrix_values(model, frame, view):
-    """The matrix the Head or Weights level draws (studio_brain3d.rebuild) and the mask over it, or (empty, None)."""
+    """The matrix the Head or Weights level draws and the mask over it, or (empty, None)."""
     if frame['level'] == 'Weights':
         return np.asarray(frame.get(view.tile_kind, []), dtype=float), None
     matrix = np.asarray(frame.get(view.head_stage, []), dtype=float)
@@ -777,7 +777,7 @@ def scene_binary(model: SceneModel, view: ViewState | None = None, since: dict |
     return b''.join(chunks), manifest
 
 
-# --- the viewer's actions as SceneModel / ViewState calls (what studio_brain3d does on a key, a menu or a studio message) ---
+# --- the viewer's actions as SceneModel / ViewState calls ---
 
 def _load_snapshot(path):
     from studio_snapshot import load

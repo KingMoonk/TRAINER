@@ -37,7 +37,6 @@ for _variable in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "OMP_NUM_THREADS"):
 import numpy as np
 import torch
 
-from studio_ui_guard import slow
 import studio_shards
 import studio_dataset_snapshot
 from studio_arch import parameter_breakdown, validate_spec
@@ -340,7 +339,6 @@ def _anchored_windows(builder, tokens, mask, positions, roles, units, context):
             c = d
 
 
-@slow("encode a corpus into windows")
 def cut_windows(examples, tokenizer, cfg, builder):
     """Cut examples into training windows and hand each to builder.add(segment, flags): the cut samples_from() and the shards share."""
     context = cfg["context"]
@@ -398,7 +396,6 @@ def shard_key(tokenizer, cfg, split_hash):
                                  cfg["windowing"], cfg["context"], cfg["objective"])
 
 
-@slow("encode a corpus into windows")
 def shard_windows(training, validation, tokenizer, cfg, split_hash, root):
     """(train windows, validation windows, reused) read from token shards under root, tokenizing into them first when this data,
     tokenizer and windowing have none yet. The key is the data split (split_hash) with the tokenizer and the cut."""
@@ -486,7 +483,6 @@ class BatchPrefetcher:
         return self.ahead[0] if self.ahead else self.rng.getstate()
 
 
-@slow("load a checkpoint")
 def load_checkpoint(path, weights_only=False, merged=True):
     """The checkpoint's metadata and arrays; weights_only skips the optimizer state (m/v), which inference never reads.
 
@@ -661,7 +657,6 @@ def _initialize_from(model, tokenizer, path):
     return transplant(old, model)
 
 
-@slow("train a model")
 def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume=None, init_from=None, telemetry_every=5,
           snapshot_every=0, snapshot_keep=20, token_budget=None, wall_seconds=None, shard_dir=None, stream_chars=STREAM_CHARS,
           schedule_window=None, offload_optimizer=False, distributed=None, rebase=False, snapshot_dir=None):
@@ -1083,7 +1078,6 @@ def unsayable(tokenizer):
     return ids if end is None else ids + [OFFSET + end]
 
 
-@slow("run a model forward")
 def complete(model, tokenizer, prompt, max_tokens=48, reduced_cache=False):
     """Raw-text continuation (no chat template) of `prompt` from the model's current weights: greedy, a few dozen pieces.
     reduced_cache: keep the KV cache in half precision (see new_cache); the default float32 cache reproduces the uncached maths."""
@@ -1108,7 +1102,6 @@ class LocalModel:
     # up costs about a tenth of the tokens/s for memory those devices have to spare.
     reduced_kv_cache = None
 
-    @slow("build a model from a checkpoint")
     def __init__(self, path, seed=42, device="auto", data=None):
         data = data or load_checkpoint(path, weights_only=True)   # `data`: the same checkpoint, already loaded by the caller
         self.config = validate_config(data["config"])
@@ -1159,7 +1152,6 @@ class LocalModel:
             cut = [owner[-1]] + cut[1:]  # cut mid-message: the first token becomes that message's role token, as in training
         return cut
 
-    @slow("generate with a model")
     def generate(self, messages, max_tokens=160, temperature=.8, top_k=40, stop=None, on_text=None, ablate=None):
         """ablate: optional [(block, head), ...] mean-ablated (causal running mean, as the Head lab's) for this reply only.
         The patched pass needs every position, so an ablated reply runs without the KV cache."""
@@ -1202,7 +1194,6 @@ class LocalModel:
             on_text(text)
         return text
 
-    @slow("generate with a model")
     def generate_group(self, messages, n, max_tokens=160, temperature=.8, top_k=40, stop=None):
         """`n` replies to one prompt, as a list of texts: the same replies, for the same seeds, as `n` calls of generate().
 

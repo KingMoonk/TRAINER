@@ -1,4 +1,4 @@
-// The strings the Chat page shows, moved from the CHAT table in studio_ia/copy.py (which stays while the Tk page uses it).
+// The strings the Chat page shows,.
 export const CHAT = {
   noTrained: "No trained version yet.",
   noTrainedLink: "Train one from Build your model.",

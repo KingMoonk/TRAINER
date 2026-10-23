@@ -21,7 +21,6 @@ from pathlib import Path
 
 import orjson
 import pandas as pd
-from studio_ui_guard import slow
 
 SCHEMA_VERSION = 4   # PRAGMA user_version of records.sqlite; 0 = made before the version was recorded (no kind/holdout columns), 2 = before the kind_stats index, 3 = before set_counts
 MIGRATE_BATCH = 5000
@@ -369,11 +368,6 @@ class Workspace:
             except (ValueError, TypeError, AttributeError):
                 pass
 
-    SMALL_STORE = 5000  # records: a store this small is read in place on the Tk thread (WorkspaceServices.ready), a larger one on a worker
-
-    def is_small(self):
-        return len(self.state["examples"]) + sum(d.get("recordCount") or 0 for d in self.state["datasets"]) <= self.SMALL_STORE
-
     def save(self):
         with self.lock:
             atomic_json(self.path, self.state)
@@ -612,7 +606,6 @@ class Workspace:
                 return connection.execute(f"SELECT COUNT(*) FROM records WHERE {where}", parameters).fetchone()[0]
         return len(self.examples(dataset_id, query=query))
 
-    @slow("read a whole dataset from disk", when=lambda self, *args, **kwargs: not self.is_small())
     def iter_examples(self, dataset_id):
         if (self._dataset(dataset_id) or {}).get("storage") == "sqlite":
             with self._connect() as connection:
@@ -623,7 +616,6 @@ class Workspace:
         else:
             yield from self.examples(dataset_id)
 
-    @slow("read a whole dataset from disk", when=lambda self, *args, **kwargs: not self.is_small())
     def iter_kind(self, dataset_id, kind):
         """The examples of one dataset that are of `kind`, in storage order (disk datasets read the kind column; others filter in memory)."""
         import studio_data_kinds as dk
@@ -659,7 +651,6 @@ class Workspace:
             return None
         return {kind: tuple(rest) for kind, *rest in groups}
 
-    @slow("read whole datasets from disk", when=lambda self, *args, **kwargs: not self.is_small())
     def pick(self, kind, holdout, dataset_ids):
         """{dataset_id: examples in storage order} of one kind and holdout flag among SQLite datasets: one query on the records_pick index."""
         found = {dataset_id: [] for dataset_id in dataset_ids}
@@ -680,7 +671,6 @@ class Workspace:
                 return connection.execute("SELECT COUNT(*) FROM records WHERE dataset_id=? AND quality='Review'", (dataset_id,)).fetchone()[0]
         return sum(1 for e in self.examples(dataset_id) if e.get("quality") == "Review")
 
-    @slow("read a whole dataset from disk", when=lambda self, *args, **kwargs: not self.is_small())
     def sample(self, dataset_id, limit=20000, seed=42, reviewed_only=False, kind=None):
         """Uniform deterministic sampling with O(limit) record memory, including disk datasets. `kind` keeps one kind of example."""
         limit = max(0, int(limit))

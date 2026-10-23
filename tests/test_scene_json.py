@@ -8,7 +8,6 @@ import unittest
 import numpy as np
 
 import studio_scene_json as sj
-import studio_viewer_ui as ui
 from studio_compile import CompiledModel
 from studio_scene import MODES, SceneModel
 from studio_snapshot import one_step
@@ -119,7 +118,7 @@ class Payload(Scenes):
         self.assertTrue(payload['stats']['info'].startswith(f"{scene.spec['name']} | Window | Build | block 1"))
         self.assertEqual(payload['selection']['layer'], 0)
         self.assertEqual(payload['selection']['block_id'], scene.gates[0]['id'])
-        self.assertEqual(payload['view']['levels'], list(ui.LEVELS))
+        self.assertEqual(payload['view']['levels'], list(sj.VIEWER_LEVELS))
 
     def test_model_level_has_a_group_per_block_and_a_box_per_bin(self):
         scene = self.scene('Model')
@@ -127,7 +126,7 @@ class Payload(Scenes):
         self.assertEqual(sorted(payload['groups']), [f'gate:{i}' for i in range(len(scene.gates))])
         for index in range(len(scene.gates)):
             group = payload['groups'][f'gate:{index}']
-            self.assertEqual(group['origin'], [0., -index * 3., 0.])  # studio_brain3d.draw_gate: root.setY(-index * 3)
+            self.assertEqual(group['origin'], [0., -index * 3., 0.])
             self.assertEqual(group['selected'], index == 0)
             bins = entry(group['boxes'], 'activation')
             self.assertEqual(bins['count'], len(frame['edges']) - 1)
@@ -263,19 +262,17 @@ class Payload(Scenes):
                     self.assertAlmostEqual(size[2], expected, places=5, msg=(level, row, column))
             self.assertEqual(sj.scene_payload(scene)['groups']['matrix']['pitch'], .4)
 
-    def test_labels_and_the_palette_are_the_viewers(self):
+    def test_a_payload_owns_its_palette(self):
         note = sj.PALETTE['note']['color']
-        for got, wanted in zip(ui.rgba(note), (.88, .92, 1., 1.)):  # studio_brain3d.label_at's text colour
-            self.assertAlmostEqual(got, wanted, delta=.005)
         payload = sj.scene_payload(self.scene('Window'))
         payload['palette']['note']['color'] = '#000000'
-        self.assertEqual(sj.PALETTE['note']['color'], note)  # a payload owns its palette
+        self.assertEqual(sj.PALETTE['note']['color'], note)
 
-    def test_camera_frames_the_level_like_the_viewer(self):
+    def test_camera_frames_the_level(self):
         for level in sj.VIEWER_LEVELS:
             scene = self.scene(level)
             rows = len(scene.frame()['pattern']) if level == 'Head' else 16
-            target, distance = ui.camera_view(level, len(scene.gates), rows)
+            target, distance = sj.camera_view(level, len(scene.gates), rows)
             self.assertEqual(sj.scene_payload(scene)['camera'], {'target': list(target), 'distance': distance, 'level': level})
 
 
@@ -594,7 +591,7 @@ class Actions(Scenes):
         self.assertTrue(sj.apply_action(scene, view, {'type': 'probe_step'}))
         self.assertFalse(sj.apply_action(scene, view, {'type': 'probe_step'}))  # one at a time
         self.assertFalse(sj.begin_probe(sj.ViewState(linked=False)))  # a demo has no studio to run it
-        self.assertEqual(sj.scene_payload(scene, view)['view']['controls']['snapshots'], ui.snapshot_buttons(True, True))
+        self.assertEqual(sj.scene_payload(scene, view)['view']['controls']['snapshots'], sj.snapshot_buttons(True, True))
         sj.apply_action(scene, view, {'type': 'notice', 'message': 'Still running.'})
         self.assertTrue(view.probing)
         sj.apply_action(scene, view, {'type': 'snapshot', 'path': 'probe.npz'}, self.load(step=1))
@@ -652,14 +649,8 @@ class Actions(Scenes):
         self.assertEqual((pulse['follow'], pulse['token_x']), (True, 0.))
 
 
-class ViewerParity(Scenes):
-    def test_palette_is_the_viewers(self):
-        self.assertEqual(sj.VIEWER_LEVELS, ui.LEVELS)
-        for name, value in sj.THEME.items():
-            self.assertEqual(value, ui.C[name], name)
-        self.assertEqual(set(ui.SCENE) - set(sj.KINDS), set())
-        for kind, colour in ui.SCENE.items():
-            self.assertEqual(ui.rgba(sj.PALETTE[kind]['color'], sj.PALETTE[kind]['alpha']), colour, kind)
+class ScenePalette(Scenes):
+    def test_every_kind_has_a_palette_entry(self):
         for kind in sj.KINDS:
             self.assertIn(kind, sj.PALETTE)
 
@@ -672,35 +663,13 @@ class ViewerParity(Scenes):
                 for label in group['labels']:
                     self.assertIn(label['kind'], payload['palette'])
 
-    def test_control_decisions_equal_the_viewers(self):
-        for level, mode, matrices in itertools.product(ui.LEVELS, MODES, ([], ['x'])):
-            self.assertEqual(sj.view_rows(level, mode, matrices), ui.view_rows(level, mode, matrices))
-        for count, index, playing in ((0, -1, False), (3, 0, False), (3, 1, True), (3, 2, True)):
-            self.assertEqual(sj.playback_state(count, index, playing), ui.playback(count, index, playing))
-        for linked, probing in itertools.product((False, True), repeat=2):
-            self.assertEqual(sj.snapshot_buttons(linked, probing), ui.snapshot_buttons(linked, probing))
-        for level, snapshots, orbit in itertools.product(ui.LEVELS, ([], ['a']), (False, True)):
-            self.assertEqual(sj.toggle_names(level, snapshots, orbit), ui.toggles(level, snapshots, orbit))
-        for level in ui.LEVELS:
-            self.assertEqual(sj.matrix_legend(level), ui.matrix_legend(level))
-            self.assertEqual(sj.camera_view(level, 6, 16), ui.camera_view(level, 6, 16))
-            for snapshot, heads in itertools.product((False, True), repeat=2):
-                self.assertEqual(sj.empty_matrix_note(level, snapshot, 1, 'gru', heads), ui.empty_matrix_note(level, snapshot, 1, 'gru', heads))
-        names = ['block0.f1.w', 'block0.qkv.w', 'block1.f1.w', 'block10.f1.w', 'position', 'token']
-        for layer, current in itertools.product((0, 1, 10, 3), (None, 'token', 'block0.qkv.w', 'block1.f1.w')):
-            self.assertEqual(sj.block_matrices(names, layer), ui.block_matrices(names, layer))
-            self.assertEqual(sj.pick_matrix(names, layer, current), ui.pick_matrix(names, layer, current))
-        self.assertIsNone(sj.pick_matrix([], 0, None))
-        for blocks in (0, 1, 12):
-            self.assertEqual(sj.pass_seconds(blocks), ui.pass_seconds(blocks))
-
     def test_the_controls_in_the_payload_follow_the_level(self):
         for level, mode in itertools.product(sj.VIEWER_LEVELS, MODES):
             scene = self.scene(level)
             scene.mode = mode
             controls = sj.scene_payload(scene, sj.ViewState(snapshot_paths=['a.npz']))['view']['controls']
-            self.assertEqual(controls['rows'], ui.view_rows(level, mode, controls['matrices']))
-            self.assertEqual(controls['toggles'], ui.toggles(level, ['a.npz'], False))
+            self.assertEqual(controls['rows'], sj.view_rows(level, mode, controls['matrices']))
+            self.assertEqual(controls['toggles'], sj.toggle_names(level, ['a.npz'], False))
         self.assertEqual(sj.scene_payload(self.scene('Weights', False))['view']['controls']['rows'], ['level', 'mode', 'mixer', 'tile'])
 
 

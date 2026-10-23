@@ -1,7 +1,7 @@
 """The expectation line: tiers, word-list effects and the pages' use of it. No Tk window is created."""
 import unittest
 
-from studio_ia.copy import EXPECTATION as T
+from studio_ia.expectation import T
 from studio_ia.expectation import expectation as both, table_params
 from studio_ia import design as D
 from studio_ia.pretraining_plan import version_expectation

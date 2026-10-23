@@ -116,7 +116,7 @@ Done: every route in the Tk shell has a web page with the same capabilities; the
 - [ ] `viewer` router returns scene geometry and stats from `studio_scene.SceneModel` as JSON (plus a binary endpoint
       for large tensors if JSON is too slow).
 - [ ] `web/` Inside 3D page in react-three-fiber: modes, head stages, tile kinds, play/step, probe step.
-- [ ] Delete `studio_brain3d.py`, `studio_viewer_ui.py`, `studio_vizbridge.py`'s process plumbing, the `panda3d` dependency
+- [x] Delete `studio_brain3d.py`, `studio_viewer_ui.py`, `studio_vizbridge.py`'s process plumbing, the `panda3d` dependency
       and the headless-display step in CI.
 
 Done: the viewer works in Safari and Chrome against a live run; CI no longer needs Mesa.
@@ -126,7 +126,7 @@ Done: the viewer works in Safari and Chrome against a live run; CI no longer nee
 - [ ] Delete `studio_ia/shell.py`, `widgets.py`, `theme.py`, `pages/`, `studio_widgets.py`, `studio_ux.py`,
       `studio_ui_guard.py`'s Tk parts, `tests/gui_*.py`, `packaging/`, `start_studio.bat`, the `--run-module` trick in
       `app.py`. `app.py` starts the API and opens the browser.
-- [ ] `Services` loses `bind_ui`/`pump`/`ready`; `copy.py` is gone; `tasks.py test:ci` drops the window level.
+- [x] `Services` loses `bind_ui`/`pump`/`ready`; `copy.py` is gone; `tasks.py test:ci` drops the window level.
 - [ ] Optional: move the Python package under `server/`.
 - [ ] Merge the branch to `master`; `master` CI runs the Python matrix plus the `web` job.
 

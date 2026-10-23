@@ -4,7 +4,6 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 
-from studio_ui_guard import slow
 from studio_core import messages_of
 from studio_registry import ModuleSpec, register
 from studio_slots import OFFSET
@@ -51,7 +50,6 @@ class CustomBPETokenizer:
         self._cache = {}
 
     @classmethod
-    @slow("train a tokenizer")
     def fit(cls, examples, vocab_size):
         """Learn merges on the table of distinct whitespace-delimited words with their counts.
 

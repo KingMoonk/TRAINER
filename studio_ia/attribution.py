@@ -3,9 +3,25 @@ versions, and whether the pair is a fair comparison (only the block count differ
 import copy
 import math
 
-from studio_ia.copy import ATTRIBUTION as T
 from studio_slots import BLOCK_SLOTS
 from studio_spec import block_at, structure_key, validate_spec
+
+
+T = {  # what the last change in blocks did, for Build your model (studio_ia.attribution)
+    "head": "Last time blocks changed ({a} → {b}, version {v_from} → {v_to}): ",
+    "fell": "error fell {n} bits per character (lower is better)",
+    "rose": "error rose {n} bits per character (lower is better)",
+    "flat": "error did not move",
+    "no_score": "one of them has no held-back score yet.",
+    "clean": "{move}. Only the blocks differed, so this is the effect of the change (one run each, so a small move could be luck).",
+    "unfair": "{move}. That is not a fair comparison: {why}.",
+    "also": "also changed: {names}",
+    "unchecked": "could not check: {names}",
+    "compare": "in a matched Compare run of {seeds}, {move}.",
+    "checking": "{move}; checking what else changed…",
+    "inside": " That is within the spread across seeds, so it could be luck.",
+}
+
 
 MIN_SEEDS = 2  # a Compare run on one seed is one run each, no better than the two versions themselves
 FAIR_MODES = ("tokens", "wall-clock")  # Compare modes that leave both designs as they are (the others adjust the thinking room)

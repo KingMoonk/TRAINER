@@ -1,5 +1,4 @@
-// The strings the Your data page and the collection card show, moved from the YOURDATA and PRETRAINING tables in studio_ia/copy.py
-// (which stay while the Tk pages use them).
+// The strings the Your data page and the collection card show.
 
 export type Kind = "text" | "conversations" | "problems";
 export const KINDS: Kind[] = ["text", "conversations", "problems"];
@@ -134,7 +133,7 @@ export const IMPORT = {
   close: "Close",
 } as const;
 
-/** The collection card: studio_ia/copy.py PRETRAINING. */
+/** The collection card. */
 export const COLLECTION = {
   title: "Recommended collection",
   downloadAll: "Download and add all",

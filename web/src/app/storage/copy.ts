@@ -1,4 +1,4 @@
-// The strings the Storage page shows, moved from the STORAGE and EXPORT tables in studio_ia/copy.py (which stay while the Tk page uses them).
+// The strings the Storage page shows.
 export const STORAGE = {
   kicker: "STORAGE",
   desc: "History is run folders, checkpoints, saved versions, logs, exports and backups. Settings and chat ratings are never deleted.",

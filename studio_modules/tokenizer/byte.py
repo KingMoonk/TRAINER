@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import numpy as np
 
-from studio_ui_guard import slow
 from studio_core import messages_of
 from studio_registry import ModuleSpec, register
 from studio_slots import OFFSET, UNK
@@ -17,7 +16,6 @@ class Tokenizer:
         self.vocab_size = (256 if kind == "byte" else len(self.characters)) + OFFSET
 
     @classmethod
-    @slow("train a tokenizer")
     def fit(cls, kind, examples):
         if kind == "byte":
             return cls("byte")
