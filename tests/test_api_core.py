@@ -263,7 +263,13 @@ class AuthTest(unittest.TestCase):
         self.assertEqual(seen, {False: "me@example.com", True: "local"})
 
     def test_main_opens_the_server_for_loopback_and_fake_only(self):
+        import studio_diloco
+        import studio_distributed
         from studio_api.__main__ import make
+        from studio_ia.services import DEMO_RUN
+
+        self.addCleanup(studio_diloco.COORDINATORS.pop, DEMO_RUN, None)  # --fake starts the demo run in the process's registries: leave them as found
+        self.addCleanup(studio_distributed.RUNS.pop, DEMO_RUN, None)
 
         def workspace_like():  # FakeServices standing in for WorkspaceServices, with the runner whose cluster build() tells its port
             services = FakeServices()

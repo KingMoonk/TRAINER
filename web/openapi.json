@@ -7067,6 +7067,33 @@
         "title": "ProgressRequest",
         "type": "object"
       },
+      "Progressed": {
+        "properties": {
+          "accepted": {
+            "default": true,
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "plan": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Plan",
+            "type": "array"
+          },
+          "term": {
+            "default": 1,
+            "title": "Term",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "title": "Progressed",
+        "type": "object"
+      },
       "PublishedVersion": {
         "description": "One version in the version store: what its machine published, and whether this workspace has it.",
         "properties": {
@@ -14585,7 +14612,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/studio_api__routers__collective__Accepted"
+                  "$ref": "#/components/schemas/Progressed"
                 }
               }
             },

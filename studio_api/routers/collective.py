@@ -105,6 +105,10 @@ class Accepted(Versioned):
     accepted: bool = True
 
 
+class Progressed(Accepted):
+    plan: list[dict]  # the run's plan (studio_diloco.plan_h): a member training a round learns of an extension from it, for its replica
+
+
 def coordinator(run: str, request: Request) -> "studio_diloco.Coordinator":
     """The run's coordinator in this app's registry: the app's own `state.coordinators` when it has one (an in-process cluster of several
     nodes in the tests gives each its own), else the process's (studio_diloco.COORDINATORS)."""
@@ -276,12 +280,12 @@ async def delta_part(request: Request, round: int, node: str, generation: int, e
     return Accepted(term=found.term)
 
 
-@router.post("/progress", response_model=Accepted)
+@router.post("/progress", response_model=Progressed)
 def progress(found: "studio_diloco.Coordinator" = Depends(member_call), body: ProgressRequest = ...):
     """A member's report of its phase, step in the round, inner loss and speed, about every 2 s. 409 when stale, as a delta is.
     `accepted` is false when the coordinator was busy closing a round and took nothing: the next report says it all again."""
-    return Accepted(term=found.term, accepted=found.progress(body.round, body.node, body.generation, body.epoch, body.phase, body.step,
-                                                             body.loss, body.tokens_per_second, found.term))
+    taken = found.progress(body.round, body.node, body.generation, body.epoch, body.phase, body.step, body.loss, body.tokens_per_second, found.term)
+    return Progressed(term=found.term, accepted=taken, plan=[dict(entry) for entry in found.plan])
 
 
 @router.get("/rounds/{round}", response_model=RoundView)

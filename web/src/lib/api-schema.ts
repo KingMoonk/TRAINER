@@ -6378,6 +6378,23 @@ export interface components {
             /** Tokens Per Second */
             tokens_per_second?: number | null;
         };
+        /** Progressed */
+        Progressed: {
+            /**
+             * Accepted
+             * @default true
+             */
+            accepted: boolean;
+            /** Plan */
+            plan: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Term
+             * @default 1
+             */
+            term: number;
+        };
         /**
          * PublishedVersion
          * @description One version in the version store: what its machine published, and whether this workspace has it.
@@ -9905,7 +9922,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["studio_api__routers__collective__Accepted"];
+                    "application/json": components["schemas"]["Progressed"];
                 };
             };
             /** @description Validation Error */
