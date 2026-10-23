@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import studio_queue
+from studio_ia.busy import Busy
 from studio_ia.services import FakeServices, NoCheckpoint, Version, WorkspaceServices
 from studio_queue import Job, Plan, Runner
 
@@ -24,11 +25,12 @@ class BackgroundTest(unittest.TestCase):
         entry = studio_catalog.CATALOG[0]
         services = object.__new__(WorkspaceServices)
         services._lock, services._busy, services._failed, events = threading.Lock(), {}, {}, []
+        services.busy = Busy(lambda kind, payload=None: None)
         services.emit = lambda kind, payload=None: events.append((kind, payload))
 
-        def work(cid):
+        def work(cid, task):
             raise urllib.error.HTTPError("http://x", 503, "Unavailable", {}, io.BytesIO())
-        self.assertTrue(services._background([entry["id"]], work, "download_done"))
+        self.assertTrue(services._background([entry["id"]], work, "download_done", "Downloading"))
         services._worker.join(5)
         message = f"The server returned 503 for {entry['name']}. The file may have moved; try again later."
         self.assertEqual(services._failed[entry["id"]], message)

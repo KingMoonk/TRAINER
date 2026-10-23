@@ -2925,7 +2925,13 @@ class WorkspaceServices(Services):
 
     def import_data(self, kind, paths):
         import studio_data_kinds as dk
-        report = self.workspace.import_files(list(paths), dk.ensure_dataset(self.workspace, self._OWN_SETS[kind]), describe=plain_error)
+        paths, report = list(paths), []
+        target = dk.ensure_dataset(self.workspace, self._OWN_SETS[kind])
+        with self.busy("Importing your files", total=len(paths)) as task:  # one step per file; a single file has no steps inside it
+            for path in paths:
+                task.set(task.done, label=f"Importing {Path(path).name}")
+                report += self.workspace.import_files([path], target, describe=plain_error)
+                task.step()
         self.emit("data", {"kind": kind})
         return report
 
@@ -2959,7 +2965,7 @@ class WorkspaceServices(Services):
         import studio_catalog as cat
         return next((e["name"] for e in cat.CATALOG if e["id"] == cid), cid)
 
-    def _background(self, ids, work, done):
+    def _background(self, ids, work, done, verb):
         with self._lock:
             if self._busy:
                 return False
@@ -2967,7 +2973,8 @@ class WorkspaceServices(Services):
         def run():
             for cid in ids:
                 try:
-                    work(cid)
+                    with self.busy(f"{verb} {self._source_name(cid)}") as task:  # the loading bar; progress sets the steps as they are known
+                        work(cid, task)
                     self._busy.pop(cid, None)
                     self.emit(done, {"id": cid})
                 except Exception as error:  # shown to the person in plain words; the rest of the list still runs
@@ -2982,14 +2989,15 @@ class WorkspaceServices(Services):
     def download_sources(self, ids=None, kind="text", install=False):
         import studio_catalog as cat
 
-        def work(cid):
+        def work(cid, task):
             def progress(info):
                 self._busy[cid] = {"completed": info["completed"], "total": info["total"]}
+                task.set(info["completed"], total=info["total"] or None)
                 self.emit("download", {"id": cid, **info})
             result = cat.download_dataset(cid, self.root, emit=progress)
             if install:
                 cat.register_download(self.workspace, result, emit=progress)
-        return self._background(list(ids or self.collection_ids(kind)), work, "download_done")
+        return self._background(list(ids or self.collection_ids(kind)), work, "download_done", "Downloading")
 
     def import_source(self, source_id):
         import studio_catalog as cat
@@ -2997,9 +3005,12 @@ class WorkspaceServices(Services):
         if result is None:
             return False
 
-        def work(cid):
-            cat.register_download(self.workspace, result, emit=lambda info: self.emit("download", {"id": cid, **info}))
-        return self._background([source_id], work, "import_done")
+        def work(cid, task):
+            def progress(info):
+                task.set(info["completed"], total=info["total"] or None)
+                self.emit("download", {"id": cid, **info})
+            cat.register_download(self.workspace, result, emit=progress)
+        return self._background([source_id], work, "import_done", "Adding")
 
     def generate_problems(self, rule, n, store=True, rng=None):
         import random
