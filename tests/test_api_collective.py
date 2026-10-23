@@ -128,7 +128,7 @@ class WireProtocol(Collective):
         generation = self.client.get("/collective/r1/rounds/0", params={"node": "a"}).json()["generation"]
         body = {"node": "a", "generation": generation, "epoch": 5, "round": 0, "phase": "training", "step": 1, "loss": 3.5, "tokens_per_second": 800.}
         taken = self.client.post("/collective/r1/progress", json=body)
-        self.assertEqual((taken.status_code, taken.json()), (200, {"accepted": True, "term": 1}))
+        self.assertEqual((taken.status_code, taken.json()), (200, {"accepted": True, "term": 1, "plan": coordinator.plan}))
         self.assertEqual((coordinator.reports["a"]["step"], coordinator.reports["a"]["loss"]), (1, 3.5))
         for why, change in {"generation": {"generation": generation + 1}, "epoch": {"epoch": 4}, "round": {"round": 1},
                             "stranger": {"node": "b"}}.items():

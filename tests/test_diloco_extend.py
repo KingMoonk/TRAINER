@@ -10,6 +10,9 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 import studio_diloco
+import studio_distributed as runs
+from studio_ia.fake_distributed import FakeCoordinator
+from studio_modules.schedule.cosine import Cosine, CosineConfig
 from tests import diloco_support as support
 
 PLAN = [{"round": 0, "q": 0., "h": 3, "rounds": 4}]
@@ -125,6 +128,24 @@ class Extending(unittest.TestCase):
             c.extend(rounds=100_001)
         self.assertEqual(c.plan, PLAN)
 
+    def rate_at(self, c, number, warmup):
+        return Cosine(CosineConfig(warmup=warmup)).rate(studio_diloco.plan_position(c.plan, number), studio_diloco.plan_frame(c.plan, number), 1.)
+
+    def test_the_learning_rate_is_continuous_when_the_extension_lands_inside_or_past_the_warmup(self):
+        for warmup in (8, 2, 0):  # round 2 starts at step 6: inside the first warmup, past the others
+            with self.subTest(warmup=warmup):
+                c = support.build(Path(self.tmp.name) / f"warmup{warmup}", clock=self.clock, inner_steps=3, rounds=4)
+                c.cfg = {**c.cfg, "warmup": warmup}
+                before = self.rate_at(c, 2, warmup)
+                self.assertEqual(c.extend(rounds=8)["from_round"], 2)
+                self.assertAlmostEqual(self.rate_at(c, 2, warmup), before)
+
+    def test_a_longer_run_keeps_the_end_of_the_warmup_where_it_is(self):
+        self.assertEqual(studio_diloco.plan_carry(5, 12, 24, 8), 5)  # inside the warmup: the same step
+        self.assertEqual(studio_diloco.plan_carry(8, 12, 24, 8), 8)  # its end
+        self.assertEqual(studio_diloco.plan_carry(10, 12, 24, 8), 8 + 2 * 16 / 4)  # past it: the same share of what is left
+        self.assertEqual(studio_diloco.plan_carry(6, 12, 24, 0), 12)  # no warmup: the same share
+
     def test_a_run_that_is_over_cannot_be_extended(self):
         c = self.coordinator()
         self.play(c, 4)
@@ -216,6 +237,54 @@ class ReplicaCarriesThePlan(unittest.TestCase):
             self.assertEqual(json.loads((replica / "diloco.json").read_text(encoding="utf-8")), record)
 
 
+class ProgressCarriesThePlan(unittest.TestCase):
+    def test_a_member_training_a_round_hands_its_replica_an_extension_made_meanwhile(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            c = support.build(root / "run", clock=Clock(), inner_steps=3, rounds=4)
+            c.join("a")
+            view = c.round_view(0, "a")
+            c.submit(0, "a", view["generation"], 0, 10, view["steps"], support.constant_delta(c, .01), 1.)
+            view = c.round_view(1, "a")  # the member has this round's view, which says nothing of the extension to come
+            replica = root / "replica"
+            replica.mkdir()
+            studio_diloco.COORDINATORS["progress-plan"] = c
+            self.addCleanup(studio_diloco.COORDINATORS.pop, "progress-plan", None)
+            with TestClient(support.app()) as client:
+                member = studio_diloco.Member(support.Peer(client), "progress-plan", "a", 0, root / "member", threading.Event(), replica_dir=replica)
+                member.term, member.report_round, member.info = c.term, 1, c.info()
+                member.generation, member.holding = view["generation"], (c.next_round, 0)
+                for name, data in (("diloco.json", (root / "run" / "diloco.json").read_bytes()), ("info.json", json.dumps(c.info()).encode())):
+                    (replica / name).write_bytes(data)
+                c.extend(rounds=8, inner_steps=4)  # while the member trains round 1
+                self.assertEqual(json.loads((replica / "diloco.json").read_text(encoding="utf-8"))["plan"], PLAN)
+                self.assertTrue(member.report())  # its next progress report
+            record = json.loads((replica / "diloco.json").read_text(encoding="utf-8"))
+            self.assertEqual((record["plan"], record["settings"]["rounds"], record["settings"]["inner_steps"]), (c.plan, 8, 4))
+
+
+class FakeExtending(unittest.TestCase):
+    def test_the_fake_coordinator_applies_a_new_h_two_rounds_ahead_as_the_real_one_does(self):
+        clock = Clock()
+        run = runs.Run("fake1", "label", 1, 0., {"rounds": 5, "inner_steps": 100}, "mac", [runs.Machine("mac", "local", device="mps", device_name="Apple M2")])
+        fake = FakeCoordinator(run, {"rounds": 5, "inner_steps": 100, "delta_dtype": "float16"}, clock=clock, unit=1.)
+        fake.start()
+        self.assertEqual(fake.extend(inner_steps=50), {"rounds": 5, "inner_steps": 50, "from_round": 2})
+        clock.now = 1000.
+        self.assertEqual([row["step"] for row in fake.snapshot()["history"]], [100, 200, 250, 300, 350])  # rounds 0 and 1 kept their 100 steps
+        self.assertTrue(fake.finished)
+
+    def test_the_fake_coordinator_refuses_what_the_real_one_refuses(self):
+        clock = Clock()
+        run = runs.Run("fake1", "label", 1, 0., {"rounds": 3, "inner_steps": 100}, "mac", [runs.Machine("mac", "local", device="mps", device_name="Apple M2")])
+        fake = FakeCoordinator(run, {"rounds": 3, "inner_steps": 100, "delta_dtype": "float16"}, clock=clock, unit=1.)
+        fake.start()
+        clock.now = 13.  # two rounds are closed, so the third is open and no round is left that another H could reach
+        with self.assertRaisesRegex(ValueError, "no round is left"):
+            fake.extend(inner_steps=50)
+        self.assertEqual(fake.extend(rounds=5, inner_steps=50)["from_round"], 3)
+
+
 class Member(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
@@ -233,7 +302,7 @@ class Member(unittest.TestCase):
             if member.round == 1 and not extended:  # the member is in round 1, as the run is: round 3 is the first the extension reaches
                 extended.append(coordinator.extend(rounds=8))
             position = original(member, number)
-            seen.append((member.round, position / member.total_steps, member.total_steps))
+            seen.append((member.round, position, member.total_steps))
             return position
 
         with TestClient(support.app()) as client, mock.patch.object(studio_diloco.Member, "rate_step", autospec=True, side_effect=watch):
@@ -245,10 +314,12 @@ class Member(unittest.TestCase):
         self.assertEqual({round_ for round_, _, _ in seen}, set(range(8)))
         self.assertEqual({total for round_, _, total in seen if round_ < 3}, {12})
         self.assertEqual({total for round_, _, total in seen if round_ >= 3}, {24})
-        shares = [share for _, share, _ in seen]
-        self.assertTrue(all(b >= a - 1e-9 for a, b in zip(shares, shares[1:])), shares)  # the rate never steps back
-        self.assertLess(max(b - a for a, b in zip(shares, shares[1:])), .15, shares)  # nor does it jump on at the extension
-        self.assertGreater(shares[-1], .9)
+        schedule = Cosine(CosineConfig(warmup=support.CONFIG["warmup"]))
+        rates = [schedule.rate(position, total, 1.) for _, position, total in seen]
+        after = rates[support.CONFIG["warmup"] + 1:]  # past the warmup
+        self.assertTrue(all(b <= a + 1e-9 for a, b in zip(after, after[1:])), rates)  # the rate never steps back up
+        self.assertLess(max(a - b for a, b in zip(rates, rates[1:])), .15, rates)  # nor does it jump down at the extension
+        self.assertAlmostEqual(rates[-1], .1)  # and it ends at the floor
 
 
 if __name__ == "__main__":

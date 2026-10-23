@@ -37,7 +37,8 @@ class FakeCoordinator:
     def __init__(self, run, settings, clock=time.monotonic, unit=1.):
         self.run, self.settings, self.clock, self.unit = run, dict(settings), clock, max(unit, 1e-6)
         self.rounds = int(self.settings.get("rounds", 10))
-        self.steps = int(self.settings.get("inner_steps", 100))
+        self.steps = int(self.settings.get("inner_steps", 100))  # H of the open round
+        self.later = None  # (first round, H): an extension's new H, which the real coordinator applies two rounds ahead
         self.dtype = self.settings.get("delta_dtype", "float16")
         self.finished = self.stopped = self.paused = False
         self.paused_at = None  # the clock reading when it was paused
@@ -146,6 +147,8 @@ class FakeCoordinator:
         arrived = {m: plan[m][3] * self.unit for m in counted}
         row["health"] = run_health.record(row, {m: loss_at(number, self.steps, self.steps, profiles[m]["index"]) for m in counted}, arrived, BYTES)
         self.history.append(row)
+        if self.later is not None and self.round >= self.later[0]:
+            self.steps, self.later = self.later[1], None
         self.opened += done
         self._keep_weights()
         self.logged.discard(("outer", number))
@@ -312,22 +315,30 @@ class FakeCoordinator:
             self._event(self._beat(), "resumed", "", self.round, "The run was resumed by you.")
 
     def extend(self, rounds=None, inner_steps=None):
-        """More rounds, and a new H for the rounds that open from now on (the real coordinator's reach is two rounds on)."""
+        """More rounds at once, and a new H from the first round that can still change: two rounds on, as the real coordinator's reach is
+        (the round after the open one is already dealt)."""
         with self.lock:
             self._catch_up(self._beat())
             if self.finished:
                 raise Stale("The run is over; it can no longer be extended.")
+            h = int(self.settings["inner_steps"])
             rounds = self.rounds if rounds is None else int(rounds)
-            steps = self.steps if inner_steps is None else int(inner_steps)
+            steps = h if inner_steps is None else int(inner_steps)
             if rounds < self.rounds:
                 raise ValueError(f"The run has {self.rounds} rounds; extending can only add rounds (Stop ends a run sooner).")
-            if rounds == self.rounds and steps == self.steps:
-                raise ValueError("Nothing changes: give more rounds than the run has.")
+            first = min(self.round + 2, self.rounds)
+            if rounds == self.rounds and (steps == h or first >= self.rounds):
+                raise ValueError("Nothing changes: give more rounds than the run has"
+                                 + ("." if steps == h else ", since no round is left that could run another number of steps."))
             said = f"Extended to {rounds} rounds at round {self.round}." if rounds != self.rounds else f"Changed the steps a round to {steps} at round {self.round}."
-            self.rounds, self.steps = rounds, steps
+            if steps != h and rounds != self.rounds:
+                said += f" From round {first} each runs {steps} steps."
+            elif steps != h:
+                said += f" It applies from round {first}."
+            self.rounds, self.later = rounds, (first, steps)
             self.settings["rounds"], self.settings["inner_steps"] = rounds, steps
             self._event(self._beat(), "extended", "", self.round, said)
-            return {"rounds": rounds, "inner_steps": steps, "from_round": self.round}
+            return {"rounds": rounds, "inner_steps": steps, "from_round": first}
 
     def stop(self):
         with self.lock:

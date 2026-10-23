@@ -293,6 +293,16 @@ def plan_position(plan, number, inside=0.):
     return (entry["q"] + (1 - entry["q"]) * min(1., done / max(1, total - start))) * total
 
 
+def plan_carry(position, old_frame, new_frame, warmup=0):
+    """Where a schedule that stood at `position` of a frame of `old_frame` steps stands on a frame of `new_frame` steps, so the rate
+    carries on: the warmup is a fixed number of steps, so a position inside it stays where it is, and past it the share of the
+    post-warmup span done stays the same (a plain share of the whole frame would move the warmup's end)."""
+    warmup = min(max(0, int(warmup)), old_frame - 1, new_frame - 1)
+    if position <= warmup:
+        return position
+    return warmup + (position - warmup) * (new_frame - warmup) / max(1, old_frame - warmup)
+
+
 # ---- pure rules -------------------------------------------------------------------------------------------------------
 
 def token_average(contributions):
@@ -1946,7 +1956,13 @@ class Coordinator:
             # where the schedule is at `first`, as a share of its frame; at most where the last old round starts (nothing of the schedule
             # is left past the end, and a run extended from there has no decay left to spread)
             share = min(plan_position(self.plan, number) / plan_frame(self.plan, number) for number in (first, old_rounds - 1))
-            self.plan = [entry for entry in self.plan if entry["round"] < first] + [{"round": first, "q": share, "h": inner_steps, "rounds": rounds}]
+            kept = [entry for entry in self.plan if entry["round"] < first]
+            entry = {"round": first, "q": share, "h": inner_steps, "rounds": rounds}
+            # the warmup is a count of steps, not a share: carry the position (not the share) over to the new frame, so the rate is
+            # continuous when the extension lands inside the warmup, or when a warmup makes the share not the same point of the decay
+            old_frame, new_frame = plan_frame(self.plan, first), plan_frame([*kept, entry], first)
+            entry["q"] = plan_carry(share * old_frame, old_frame, new_frame, self.cfg.get("warmup") or 0) / new_frame
+            self.plan = [*kept, entry]
             self.settings = replace(self.settings, rounds=rounds, inner_steps=inner_steps)
             self._state = (None, b"")  # a replica that fetched the state before this change must fetch it again
             said = f"Extended to {rounds} rounds at round {self.next_round}." if rounds != old_rounds else f"Changed the steps a round to {inner_steps} at round {self.next_round}."
@@ -2577,7 +2593,7 @@ class Member:
         self.cache_dir = Path(cache_dir) if cache_dir else None  # shards by content hash, kept across runs (None: per-run copies only)
         self.replica_dir = Path(replica_dir) if replica_dir else None  # where a replica keeps the latest round (None: it keeps none)
         self.prefetch, self.prefetched, self.shard_locks, self.replica_lock = None, False, {}, threading.Lock()
-        self.replica_epoch, self.replica_guard = 0, threading.Lock()  # a write to replica_dir is void once the epoch it began under is over
+        self.replica_epoch, self.replica_guard = 0, threading.RLock()  # a write to replica_dir is void once the epoch it began under is over
         self.clock, self.emit, self.wait, self.patience, self.sleep = clock, emit or (lambda event: None), wait, patience, sleep
         self.relocate = RELOCATE_SECONDS  # how long a coordinator that no longer has the run is given to be replaced before the member leaves
         self.base = f"/collective/{run}"
@@ -2773,7 +2789,9 @@ class Member:
                 "round": self.report_round, "phase": phase, "step": step, "loss": self.live["loss"],
                 "tokens_per_second": self.live["tokens_per_second"]}
         try:
-            self._seen(self.client.post_json(f"{self.base}/progress", body, self._q(), timeout=PROGRESS_TIMEOUT))
+            answer = self._seen(self.client.post_json(f"{self.base}/progress", body, self._q(), timeout=PROGRESS_TIMEOUT))
+            if isinstance(answer, dict):  # the plan: a member training a round learns of an extension now, not at its next view
+                self._replica_plan(answer)
         except Exception as exc:  # noqa: BLE001 - a stale 409, an unreachable coordinator, a timeout: the report is only a courtesy
             if hasattr(exc, "detail"):
                 self._refused(exc)
@@ -3114,14 +3132,15 @@ class Member:
         plan = view.get("plan")
         if self.replica_dir is None or self.holding is None or not plan:
             return
-        path = self.replica_dir / STATE_FILE
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return
-        if record.get("plan") != plan:
-            settings = {**record["settings"], "rounds": plan_rounds(plan), "inner_steps": plan[-1]["h"]}
-            self._write_replica(self.replica_epoch, STATE_FILE, json.dumps({**record, "settings": settings, "plan": plan}).encode("utf-8"))
+        with self.replica_guard:  # read and write as one step: _replicate writes this file too, from another thread
+            epoch = self.replica_epoch
+            try:
+                record = json.loads((self.replica_dir / STATE_FILE).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return
+            if record.get("plan") != plan:
+                settings = {**record["settings"], "rounds": plan_rounds(plan), "inner_steps": plan[-1]["h"]}
+                self._write_replica(epoch, STATE_FILE, json.dumps({**record, "settings": settings, "plan": plan}).encode("utf-8"))
 
     def _replica_paused(self):
         """The run is paused and no round is open, so the replica's copy of diloco.json (fetched when the round before opened) does not
