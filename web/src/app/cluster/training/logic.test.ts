@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
-  bytesText, deltaText, errorMarks, lessonsText, holdButtons, defaultInnerSteps, deltaDtypeOf, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, startBody, stepsProblem, stopReasonText, toggled, trafficSeries, trouble,
+  bytesText, deltaText, errorMarks, lessonsText, holdButtons, defaultInnerSteps, deltaDtypeOf, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, sparsityProblem, startBody, stepsProblem, stopReasonText, toggled, trafficSeries, trouble,
   type Form,
 } from "./logic";
 import { initialRules } from "./rules";
@@ -10,7 +10,7 @@ import { member as build, round, run } from "./test-data";
 // the shared member, with the numbers these tests were written around
 const member = (over: Partial<Parameters<typeof build>[1]> = {}) => build("gpu-box", { rounds_done: 2, steps: 200, tokens_per_second: 1234.4, last_delta_bytes: 4_000_000, last_delta_dtype: "float16", ...over });
 
-const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], chats: [], machines: [], minMachines: "", maxMachines: "", overlap: true, timeBox: true, deltaDtype: "float16", reviewedOnly: false, coordinator: "", teacher: "", polishEvery: "", targetWinRate: "", rules: initialRules(), maxSteps: 1_000_000, ...over });
+const form = (over: Partial<Form> = {}): Form => ({ rounds: "10", innerSteps: "100", outerLr: "0.7", outerMomentum: "0.9", version: "", datasets: ["a"], chats: [], machines: [], minMachines: "", maxMachines: "", overlap: true, timeBox: true, deltaDtype: "float16", deltaSparsity: "", reviewedOnly: false, coordinator: "", teacher: "", polishEvery: "", targetWinRate: "", rules: initialRules(), maxSteps: 1_000_000, ...over });
 
 describe("the form", () => {
   test("starts from the defaults, the newest design and the text sets that are on", () => {
@@ -34,7 +34,7 @@ describe("the form", () => {
 
   test("makes the request, with the latest design as null and the chosen one as a number", () => {
     expect(startBody(form({ machines: ["gpu-box"] }))).toEqual({
-      version: null, dataset_ids: ["a"], machines: ["gpu-box"], rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: null, time_box: null, delta_dtype: "float16", reviewed_only: false,
+      version: null, dataset_ids: ["a"], machines: ["gpu-box"], rounds: 10, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: null, time_box: null, delta_dtype: "float16", delta_sparsity: 0, reviewed_only: false,
     });
     expect(startBody(form({ version: "3" }))?.version).toBe(3);
   });
@@ -94,6 +94,15 @@ describe("the form", () => {
   test("overlap ticked is left to the server, unticked is sent as off", () => {
     expect(startBody(form({ overlap: true }))?.overlap).toBeNull();
     expect(startBody(form({ overlap: false }))?.overlap).toBe(false);
+  });
+  test("sending only the largest changes is off when empty, sent as a fraction, and needs int8 and a share up to the limit", () => {
+    expect(startBody(form({ deltaDtype: "int8" }))?.delta_sparsity).toBe(0);
+    expect(startBody(form({ deltaDtype: "int8", deltaSparsity: "5" }))?.delta_sparsity).toBe(0.05);
+    expect(startBody(form({ deltaDtype: "int8", deltaSparsity: "20" }))?.delta_sparsity).toBe(0.2);
+    for (const bad of ["0", "-1", "21", "x"]) expect(startBody(form({ deltaDtype: "int8", deltaSparsity: bad }))).toBeNull();
+    expect(startBody(form({ deltaDtype: "float16", deltaSparsity: "5" }))).toBeNull();
+    expect(sparsityProblem(form({ deltaDtype: "float16", deltaSparsity: "5" }))).not.toBe("");
+    expect(sparsityProblem(form({ deltaDtype: "float16" }))).toBe("");
   });
   test("the number format of the traffic is sent, and an unknown default falls back to int8", () => {
     expect(startBody(form({ deltaDtype: "int8" }))?.delta_dtype).toBe("int8");

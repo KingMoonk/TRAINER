@@ -3503,6 +3503,11 @@
             "title": "Delta Dtype",
             "type": "string"
           },
+          "delta_sparsity": {
+            "default": 0.0,
+            "title": "Delta Sparsity",
+            "type": "number"
+          },
           "generation": {
             "title": "Generation",
             "type": "integer"
@@ -8774,6 +8779,16 @@
             ],
             "title": "Slowest"
           },
+          "sparsity_down": {
+            "default": 0.0,
+            "title": "Sparsity Down",
+            "type": "number"
+          },
+          "sparsity_up": {
+            "default": 0.0,
+            "title": "Sparsity Up",
+            "type": "number"
+          },
           "sync_s": {
             "title": "Sync S",
             "type": "number"
@@ -11104,6 +11119,13 @@
             ],
             "title": "Delta Dtype",
             "type": "string"
+          },
+          "delta_sparsity": {
+            "default": 0.0,
+            "maximum": 0.2,
+            "minimum": 0.0,
+            "title": "Delta Sparsity",
+            "type": "number"
           },
           "inner_steps": {
             "default": 100,

@@ -5,7 +5,7 @@ import { Hint } from "@/app/runs/hint";
 import { cn } from "@/lib/utils";
 import type { Run } from "@/app/cluster/training/logic";
 import { T, fill } from "./copy";
-import { bytesSeries, compressionText, linkSeries, lossSeries, percentText, rateText, speedupText, splitRows, throughputSeries, verdictTone } from "./health";
+import { bytesSeries, compressionText, linkSeries, lossSeries, percentText, rateText, speedupText, sparsityText, splitRows, throughputSeries, verdictTone } from "./health";
 
 const PARTS = [
   { key: "compute", label: T.hCompute, colour: "var(--chart-1)" },
@@ -86,6 +86,7 @@ export function HealthPanel({ run }: { run: Run }) {
           <figure className="flex min-w-0 flex-col gap-2" data-testid="health-bytes">
             <figcaption className="text-sm font-medium">{T.hBytesTitle}</figcaption>
             <SeriesChart series={bytesSeries(health)} xLabel={T.hAxisRound} yLabel="MB" className="h-48 w-full" />
+            <p className="text-xs text-muted-foreground" data-testid="health-sparsity">{sparsityText(health)}</p>
             {compression && <p className="text-xs text-muted-foreground">{fill(T.hCompression, { ratio: compression })}</p>}
           </figure>
         </div>

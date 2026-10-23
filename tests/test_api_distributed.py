@@ -550,6 +550,18 @@ class Routes(unittest.TestCase):
         for run_id in (default, int8):
             self.client.post(f"/distributed/runs/{run_id}/stop")
 
+    def test_sparse_changes_are_a_field_of_the_start_off_by_default_and_int8_only(self):
+        default = self.start(rounds=2000).json()["id"]
+        sparse = self.start(rounds=2000, delta_sparsity=.05).json()["id"]
+        jobs = self.jobs()
+        self.assertEqual((jobs[default].params["delta_sparsity"], jobs[default].params["settings"]["delta_sparsity"]), (0., 0.))
+        self.assertEqual((jobs[sparse].params["delta_sparsity"], jobs[sparse].params["settings"]["delta_sparsity"]), (.05, .05))
+        self.assertEqual(self.start(delta_sparsity=.9).status_code, 422)
+        self.assertEqual(self.start(delta_sparsity=-.1).status_code, 422)
+        self.assertEqual(self.start(delta_sparsity=.05, delta_dtype="float16").status_code, 400)  # the setting needs int8
+        for run_id in (default, sparse):
+            self.client.post(f"/distributed/runs/{run_id}/stop")
+
     def test_time_boxed_rounds_are_on_for_a_run_across_machines_and_can_be_turned_off(self):
         self.services.set_setting("nodes", ["127.0.0.1:9"])
         plain = self.start(rounds=2000, machines=["127.0.0.1:9"], time_box=False).json()["id"]

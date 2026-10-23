@@ -49,6 +49,14 @@ export function linkSeries(health: RunHealth): Series[] {
   return [...way(T.hLinkDown, (m) => m.down_mb_s), ...way(T.hLinkUp, (m) => m.up_mb_s, "5 4")];
 }
 
+/** What share of the entries the latest round's changes carried each way ("Sent up: the largest 5% of each tensor's entries. Down: all entries."), or "" with no rounds. */
+export function sparsityText(health: RunHealth): string {
+  const last = health.rounds[health.rounds.length - 1];
+  if (!last) return "";
+  const way = (share: number | undefined) => (share && share > 0 && share < 1 ? T.hSparsityShare.replace("{pct}", `${+(share * 100).toFixed(2)}%`) : T.hSparsityAll);
+  return T.hSparsity.replace("{up}", way(last.sparsity_up)).replace("{down}", way(last.sparsity_down));
+}
+
 /** What went over the wire each round, in MB. */
 export function bytesSeries(health: RunHealth): Series[] {
   const mb = (pick: (r: RoundHealth) => number) => health.rounds.map((r) => ({ x: r.round + 1, y: round2(pick(r) / MB) }));

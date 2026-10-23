@@ -40,6 +40,7 @@ class FakeCoordinator:
         self.steps = int(self.settings.get("inner_steps", 100))  # H of the open round
         self.later = None  # (first round, H): an extension's new H, which the real coordinator applies two rounds ahead
         self.dtype = self.settings.get("delta_dtype", "float16")
+        self.sparsity = float(self.settings.get("delta_sparsity") or 0.)  # the share of entries a change carries (int8 only): a kept entry is 5 bytes against a dense one's 1
         self.finished = self.stopped = self.paused = False
         self.paused_at = None  # the clock reading when it was paused
         self.touched = time.monotonic()
@@ -48,6 +49,11 @@ class FakeCoordinator:
         self.begun, self.frozen = None, None  # the clock at start; the beat the run stopped or finished at
         self.opened, self.roster, self.drops, self.logged = 0., [], {}, set()
         self.lock = threading.Lock()
+
+    def delta_size(self):
+        """Bytes of one member's change: its dtype's share of the weights; sparse int8 sends `sparsity` of the entries at 5 bytes each."""
+        dense = BYTES * DELTA_SCALE.get(self.dtype, .5)
+        return min(dense, BYTES * self.sparsity * 5 / 4) if self.sparsity > 0 and self.dtype == "int8" else dense
 
     def start(self):
         """The machines that took their invitation (and this one) are the members; the others are not."""
@@ -133,14 +139,14 @@ class FakeCoordinator:
         profiles = {m: self._profile(m) for m in self.roster}
         node_tokens = {m: round(profiles[m]["tps"] * profiles[m]["train"] * self.unit) for m in counted}
         loss = loss_at(number, self.steps, self.steps)
-        size = BYTES * DELTA_SCALE.get(self.dtype, .5)
+        size = self.delta_size()
         self.timelines.append(self._timeline(number, plan, closes, True, math.inf))
         done = closes + OUTER + CHECK
         row = {
             "round": number, "step": (self.history[-1]["step"] if self.history else 0) + self.steps, "generation": 1, "members": list(self.roster), "contributed": counted,
             "dropped": dropped, "tokens": sum(node_tokens.values()), "steps": {m: self.steps for m in counted},
             "loss": loss, "val_loss": round(loss + .08, 4), "seconds": done * self.unit,
-            "delta_bytes": int(size) * len(counted), "theta_bytes": BYTES * len(self.roster), "delta_dtype": self.dtype,
+            "delta_bytes": int(size) * len(counted), "theta_bytes": BYTES * len(self.roster), "delta_dtype": self.dtype, "delta_sparsity": self.sparsity,
             "node_tokens": node_tokens, "node_seconds": {m: profiles[m]["train"] * self.unit for m in counted},
             "node_bytes": {m: int(size) for m in counted}, "outer_step_norm": round(.6 / (number + 3), 4),
             "tokens_per_second": sum(node_tokens.values()) / max(1e-9, done * self.unit), "lr": self.settings.get("outer_lr", 0.)}
@@ -178,7 +184,7 @@ class FakeCoordinator:
             lanes[node] = {"theta_taken": known(taken), "first_step": known(first), "delta_sent": known(sent), "delta_received": known(received),
                            "counted": (True if counted else False) if closed else (False if not counted else True if received <= offset else None),
                            "tokens": round(profile["tps"] * profile["train"] * self.unit) if delivered else 0, "steps": self.steps if delivered else 0,
-                           "delta_bytes": int(BYTES * DELTA_SCALE.get(self.dtype, .5)) if delivered else 0}
+                           "delta_bytes": int(self.delta_size()) if delivered else 0}
         window = self._window(plan)
         return {"round": number, "open": not closed, "deadline": window * self.unit, "window": window * self.unit,
                 "closed": closes * self.unit if closed or (closes is not None and offset >= closes) else None, "lanes": lanes}

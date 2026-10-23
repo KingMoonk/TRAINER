@@ -60,6 +60,9 @@ FINISHED = "The run is finished."  # the 409 detail of a join to a run that has 
 STATE_FILE = "diloco.json"  # the entry of a GET /state archive that holds diloco.json's bytes
 SCALE_SUFFIX = "::scale"  # an int8 array's float32 scales (one per INT8_BLOCK values) sit beside it in the archive under this suffix
 INT8_BLOCK = 256  # values that share one int8 scale
+INDEX_SUFFIX = "::idx"  # a sparse array's int32 flat indices (sorted) sit beside its int8 values and "::scale" under this suffix
+SHAPE_SUFFIX = "::shape"  # ... and its dense shape under this one
+MAX_SPARSITY = .2  # a kept entry costs 5 bytes (int8 + int32 index) against about 1 dense, so above this share sparse is no smaller
 UPDATE_KEY = "__update_from__"  # in a params body: the body is the outer update from this round's theta, not theta itself
 RUN_ID = r"^[A-Za-z0-9_.-]{1,64}$"
 PHASES = ("downloading", "loading", "training", "uploading", "waiting")  # what a member says it is doing (POST /progress)
@@ -192,6 +195,7 @@ class Settings:
     max_members: int = 8
     shards: int = 64                # S: fixed training shards, dealt to the live members each round
     delta_dtype: str = "int8"    # the precision of a member's change AND of the outer update members download (float32: members download theta itself)
+    delta_sparsity: float = 0.      # int8 only: the share of each tensor's entries (the largest by magnitude) a member sends; 0: all of them. The rest is kept for the next change. The outer update download stays dense
     time_box: bool = False          # members train until the round's training deadline (the fastest member's H-step time) instead of a fixed number of steps
     slack_ratio: float = .25        # round deadline = fastest member's step time * H * (1 + ratio) + slack_seconds
     slack_seconds: float = 30.
@@ -227,6 +231,10 @@ class Settings:
             raise ValueError("min_members must be between 1 and max_members.")
         if self.delta_dtype not in DELTA_DTYPES:
             raise ValueError(f"delta_dtype must be one of {', '.join(DELTA_DTYPES)}.")
+        if not 0 <= self.delta_sparsity <= MAX_SPARSITY:
+            raise ValueError(f"delta_sparsity must be between 0 (send everything) and {MAX_SPARSITY}.")
+        if self.delta_sparsity > 0 and self.delta_dtype != "int8":
+            raise ValueError("delta_sparsity needs delta_dtype int8.")
         if self.replicas < 0:
             raise ValueError("replicas must not be negative.")
         if self.outer_lr <= 0 or not 0 <= self.outer_momentum < 1:
@@ -439,9 +447,23 @@ def dequantize_int8(values, scale, block=INT8_BLOCK):
     return (flat.astype(np.float32) * scale[np.arange(flat.size) // block]).reshape(values.shape)
 
 
-def encode_arrays(arrays, dtype="float32", update_from=None):
+def top_k(value, sparsity):
+    """The sorted flat indices of the ceil(sparsity * size) entries of `value` with the largest magnitude, or None when keeping that
+    few is not smaller than sending the tensor whole. A non-finite entry ranks first, so it is sent and the coordinator refuses it."""
+    flat = np.asarray(value, dtype=np.float32).reshape(-1)
+    count = max(1, math.ceil(sparsity * flat.size))
+    if count * 5 >= flat.size:
+        return None
+    with np.errstate(invalid="ignore"):
+        magnitude = np.where(np.isfinite(flat), np.abs(flat), np.float32(np.inf))
+    return np.sort(np.argpartition(magnitude, flat.size - count)[flat.size - count:]).astype(np.int32)
+
+
+def encode_arrays(arrays, dtype="float32", update_from=None, sparsity=0.):
     """A {name: array} as an uncompressed .npz body; float16 is clipped to its range first; int8 stores each tensor as int8 values
-    plus one float32 scale per INT8_BLOCK values (name + "::scale"), a quarter of the fp32 size. `update_from` marks the body as an
+    plus one float32 scale per INT8_BLOCK values (name + "::scale"), a quarter of the fp32 size. With `sparsity` (int8 only) a tensor
+    keeps just its largest entries by magnitude: their int8 values and scales, their int32 flat indices (name + "::idx") and the dense
+    shape (name + "::shape"); a tensor too small for that to pay is sent dense. `update_from` marks the body as an
     outer update from that round's theta (see Coordinator.params_bytes)."""
     buffer = io.BytesIO()
     extra = {} if update_from is None else {UPDATE_KEY: np.array(update_from, dtype=np.int64)}
@@ -450,19 +472,25 @@ def encode_arrays(arrays, dtype="float32", update_from=None):
     elif dtype == "int8":
         out = {}
         for name, value in arrays.items():
-            out[name], out[name + SCALE_SUFFIX] = quantize_int8(value)
+            keep = top_k(value, sparsity) if sparsity > 0 else None
+            if keep is None:
+                out[name], out[name + SCALE_SUFFIX] = quantize_int8(value)
+            else:
+                out[name], out[name + SCALE_SUFFIX] = quantize_int8(np.asarray(value, dtype=np.float32).reshape(-1)[keep])
+                out[name + INDEX_SUFFIX], out[name + SHAPE_SUFFIX] = keep, np.asarray(np.shape(value), dtype=np.int64)
         np.savez(buffer, **out, **extra)
     else:
         np.savez(buffer, **{name: np.asarray(value, dtype=np.float32) for name, value in arrays.items()}, **extra)
     return buffer.getvalue()
 
 
-def encode_feedback(arrays, dtype, residual=None, update_from=None):
-    """(body, residual) of `arrays` plus the quantization residual of the last call, sent as `dtype`: the part of what was meant to
-    go that the encoding lost (non-finite entries are left out), to be added to the next call's arrays (error feedback)."""
+def encode_feedback(arrays, dtype, residual=None, update_from=None, sparsity=0.):
+    """(body, residual) of `arrays` plus the residual of the last call, sent as `dtype` (with `sparsity`: the top-k entries only): the
+    part of what was meant to go that the encoding lost (the entries not kept, then the quantization of the ones kept; non-finite
+    entries are left out), to be added to the next call's arrays (error feedback). The order is residual, then top-k, then int8."""
     if residual:
         arrays = {name: value + residual[name] for name, value in arrays.items()}
-    body = encode_arrays(arrays, dtype, update_from)
+    body = encode_arrays(arrays, dtype, update_from, sparsity)
     sent = decode_arrays(body)
     lost = {name: np.asarray(value, dtype=np.float32) - sent[name] for name, value in arrays.items()}
     return body, {name: np.where(np.isfinite(value), value, np.float32(0.)).astype(np.float32) for name, value in lost.items()}
@@ -474,11 +502,19 @@ def decode_arrays(data):
         with np.load(io.BytesIO(data), allow_pickle=False) as archive:
             out = {}
             for name in archive.files:
-                if name == UPDATE_KEY or (name.endswith(SCALE_SUFFIX) and name[:-len(SCALE_SUFFIX)] in archive.files):
+                if name == UPDATE_KEY or any(name.endswith(suffix) and name[:-len(suffix)] in archive.files
+                                             for suffix in (SCALE_SUFFIX, INDEX_SUFFIX, SHAPE_SUFFIX)):
                     continue
                 value = archive[name]
                 if value.dtype == np.int8:
                     value = dequantize_int8(value, archive[name + SCALE_SUFFIX])
+                if name + INDEX_SUFFIX in archive.files:  # sparse: the kept entries go back where they were, zero elsewhere
+                    index, shape = archive[name + INDEX_SUFFIX], archive[name + SHAPE_SUFFIX]
+                    dense = np.zeros(int(np.prod(shape)), dtype=np.float32)
+                    if index.shape != value.shape or (index.size and (index.min() < 0 or index.max() >= dense.size)):
+                        raise ValueError("A sparse tensor's indices do not match its values.")
+                    dense[index] = value
+                    value = dense.reshape(tuple(int(n) for n in shape))
                 out[name] = value.astype(np.float32)
             return out
     except Exception as exc:  # noqa: BLE001 - zip and numpy raise many types for a bad body
@@ -1143,7 +1179,7 @@ class Coordinator:
         """What a member needs to start: the config and tokenizer, and the run's shape."""
         return {"term": self.term, "generation": self.generation, "round": self.next_round, "config": self.cfg, "tokenizer": self.tokenizer.serialize(),
                 "inner_steps": self.settings.inner_steps, "rounds": self.settings.rounds, "plan": [dict(entry) for entry in self.plan],
-                "total_steps": plan_total(self.plan), "delta_dtype": self.settings.delta_dtype,
+                "total_steps": plan_total(self.plan), "delta_dtype": self.settings.delta_dtype, "delta_sparsity": self.settings.delta_sparsity,
                 "shard_count": self.shard_count, "seed": self.cfg["seed"], "vocab_size": self.tokenizer.vocab_size}
 
     # -- terms
@@ -1415,7 +1451,7 @@ class Coordinator:
                "steps": {node: value[1] for node, value in sent.items()}, "dealt": dict(current.steps),
                "loss": sum(t * loss for t, loss in losses) / sum(t for t, _ in losses) if losses else None,
                "val_loss": self.evaluate(self.theta), "seconds": now - current.opened,
-               "delta_bytes": sum(current.uploaded.get(node, 0) for node in sent), "delta_dtype": self.settings.delta_dtype, "deadline_seconds": current.window,
+               "delta_bytes": sum(current.uploaded.get(node, 0) for node in sent), "delta_dtype": self.settings.delta_dtype, "delta_sparsity": self.settings.delta_sparsity, "deadline_seconds": current.window,
                "theta_bytes": sum(current.downloaded.get(node, self.theta_nbytes) for node in current.members),  # what the members downloaded for the round (theta, or the outer update that led to it; full theta for one that has not yet)
                "node_tokens": {node: value[0] for node, value in sent.items()}, "node_seconds": {node: value[2] for node, value in sent.items()},
                "node_bytes": {node: current.uploaded.get(node, 0) for node in sent},
@@ -3230,7 +3266,7 @@ class Member:
         dtype = self.info["delta_dtype"]
         if dtype != "int8":
             return encode_arrays(delta, dtype)
-        body, self.residual = encode_feedback(delta, dtype, self.residual)
+        body, self.residual = encode_feedback(delta, dtype, self.residual, sparsity=self.info.get("delta_sparsity", 0.))
         return body
 
     def _post(self, number, body, params, overlapped=False):
@@ -3239,9 +3275,10 @@ class Member:
         try:
             self._call(lambda: self.client.post_bytes(f"{self.base}/rounds/{number}/delta", body, params, timeout=self.wait + 120))
             upload, trained = self.clock() - began, params.get("seconds", 0.)
+            sparse = f" (top {self.info['delta_sparsity']:.1%})" if self.info.get("delta_sparsity") else ""
             text = (f"in {upload:.2f} s, while the next round trained." if overlapped
                     else f"in {upload:.2f} s ({upload / max(1e-9, trained + upload):.0%} of the member's {trained + upload:.2f} s round).")
-            self.emit({"type": "info", "text": f"Round {number}: sent {len(body)} bytes of {self.info['delta_dtype']} delta {text}"})
+            self.emit({"type": "info", "text": f"Round {number}: sent {len(body)} bytes of {self.info['delta_dtype']}{sparse} delta {text}"})
         except PeerError as exc:
             if exc.status != 409:
                 raise

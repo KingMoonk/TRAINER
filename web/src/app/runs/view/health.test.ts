@@ -1,9 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { bytesSeries, compressionText, linkSeries, lossSeries, percentText, rateText, speedupText, splitRows, throughputSeries, verdictTone, type RoundHealth, type RunHealth } from "./health";
+import { bytesSeries, compressionText, linkSeries, lossSeries, percentText, rateText, sparsityText, speedupText, splitRows, throughputSeries, verdictTone, type RoundHealth, type RunHealth } from "./health";
 
 const member = (over: Partial<RoundHealth["members"][string]> = {}) => ({ loss: 3, steps: 100, tokens: 1000, compute_s: 6, tokens_per_s: 200, wait_s: 0, idle_s: 0, sync_s: 2, ...over });
 const round = (n: number, over: Partial<RoundHealth> = {}): RoundHealth => ({
-  round: n, seconds: 10, tokens: 3000, slowest: "mac", val_loss: 4 - n * 0.1, loss: 3.9, lr: 0.7, update_norm: 0.05, bytes_up: 2 * 2 ** 20, bytes_down: 4 * 2 ** 20, dtype: "float16", compression: 2, sync_s: 4,
+  round: n, seconds: 10, tokens: 3000, slowest: "mac", val_loss: 4 - n * 0.1, loss: 3.9, lr: 0.7, update_norm: 0.05, bytes_up: 2 * 2 ** 20, bytes_down: 4 * 2 ** 20, dtype: "float16", sparsity_up: 0, sparsity_down: 0, compression: 2, sync_s: 4,
   members: { mac: member({ loss: 3.5 - n * 0.1 }), box: member({ compute_s: 4, tokens_per_s: 500, wait_s: 2, sync_s: 4, loss: 3.2 - n * 0.1 }) }, ...over,
 });
 const health = (over: Partial<RunHealth> = {}): RunHealth => ({
@@ -34,6 +34,12 @@ describe("run health", () => {
 
   test("bytes are in MB, up and down", () => {
     expect(bytesSeries(health()).map((s) => [s.id, s.points[0].y])).toEqual([["up", 2], ["down", 4]]);
+  });
+
+  test("the sparsity of each way is in words, from the latest round", () => {
+    expect(sparsityText(health())).toBe("Sent up: all entries. Down: all entries.");
+    expect(sparsityText(health({ rounds: [round(0), round(1, { sparsity_up: 0.05 })] }))).toBe("Sent up: the largest 5% of each tensor's entries. Down: all entries.");
+    expect(sparsityText(health({ rounds: [] }))).toBe("");
   });
 
   test("the time split averages the members and adds up to the round", () => {
