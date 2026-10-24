@@ -5,6 +5,7 @@ import { mockApi } from "@/test/network";
 import { renderPage } from "@/test/render";
 import type { Run, StartRun } from "./logic";
 import TrainingPage from "./page";
+import RunViewPage from "@/app/runs/view/page";
 import { member, run } from "./test-data";
 
 // The join flow on the machine that starts a run: the readiness roster, the dialog when a chosen machine is not ready, and the run page's alerts.
@@ -27,6 +28,8 @@ function server(runs: Run[] = []) {
   mockApi({
     "GET /distributed/defaults": { body: DEFAULTS },
     "GET /distributed/runs": () => ({ body: runs }),
+    "GET /distributed/runs/r1": () => ({ body: runs[0] }),
+    "GET /queue": { body: { job: null, up_next: [] } },
     "POST /distributed/runs": ({ body }) => {
       state.started.push(body as StartRun);
       return { status: 201, body: run({ state: "queued", round: 0, history: [] }) };
@@ -165,7 +168,7 @@ describe("a run's page", () => {
         ],
       }),
     ]);
-    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
     const busy = within(await screen.findByTestId("member-alert-BEAST"));
     expect(busy.getByText("BEAST is busy with 'Version 1'")).toBeInTheDocument();
     expect(busy.getByRole("button", { name: "Ask BEAST to pause it" })).toBeInTheDocument();
@@ -177,7 +180,7 @@ describe("a run's page", () => {
 
   test("a run whose members all train has no alerts", async () => {
     server([run()]);
-    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
     await screen.findByTestId("run-r1");
     expect(screen.queryByTestId("member-alerts-r1")).toBeNull();
   });

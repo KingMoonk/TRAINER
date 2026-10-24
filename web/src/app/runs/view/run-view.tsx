@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { SeriesChart } from "@/components/series-chart";
 import { Badge } from "@/components/ui/badge";
-import { errorMarks, isActive, stopReasonText, trafficSeries, type Run } from "@/app/cluster/training/logic";
+import { isActive, lessonsText, stopReasonText, type Run } from "@/app/cluster/training/logic";
+import { Lessons } from "@/app/cluster/training/lessons-list";
+import { MemberAlerts } from "@/app/cluster/training/member-alerts";
 import { RunControls } from "@/app/cluster/training/run-controls";
 import { useStopMember, useStopRun } from "@/app/cluster/training/use-training";
 import { useQueueActions } from "@/app/queue/use-queue";
@@ -20,7 +21,8 @@ import { ProgressCard, RunHeader } from "./header";
 import { HealthPanel } from "./health-panel";
 import { factAge, memberPhaseText, roundNumber } from "./live";
 import { LossPanel } from "./loss-panel";
-import { dilocoShape, runViewHref, roundPairs, gapNow, gapText, lastOf, lossText, overfit, percentOf, roundSeries, soloShape, stepSeries, trainLine } from "./logic";
+import { dilocoShape, runViewHref, gapNow, gapText, lastOf, lossText, overfit, percentOf, soloShape, stepSeries, trainLine } from "./logic";
+import { OutcomePanel } from "./outcome-panel";
 import { RoundBanner } from "./round-banner";
 import { Timeline } from "./timeline";
 import { Topology } from "./topology";
@@ -35,10 +37,6 @@ export function DilocoView({ run }: { run: Run }) {
   const stopMember = useStopMember();
   const eta = runEta(run);
   const status = [TR.phases[run.phase], eta == null ? "" : fill(T.eta, { eta: etaText(eta) })].filter(Boolean).join(" · ");
-  const readouts = [
-    { id: "inner", label: T.lInner, value: lossText(lastOf(roundPairs(run.history, (r) => r.loss))), tip: T.lTrainTip, colour: "var(--info)" },
-    { id: "val", label: T.lVal, value: lossText(lastOf(roundPairs(run.history, (r) => r.val_loss))), tip: T.lValTip, colour: "var(--warning)" },
-  ].filter((readout) => readout.value !== "");
   return (
     <div className="flex flex-col gap-6" data-testid={`run-${run.id}`}>
       <RunHeader
@@ -60,6 +58,7 @@ export function DilocoView({ run }: { run: Run }) {
       />
       {run.paused && <p className="text-sm text-warning" data-testid="run-paused">{TR.pausedNote}</p>}
       {stopReasonText(run) && <p className="text-sm text-muted-foreground" data-testid="run-stop-reason">{stopReasonText(run)}</p>}
+      {lessonsText(run) && <p className="text-sm text-muted-foreground" data-testid={`run-lessons-${run.id}`}>{lessonsText(run)}</p>}
       {run.note && <p className="text-sm text-muted-foreground" data-testid="run-note">{run.note}</p>}
       <ProgressCard
         now={fill(T.roundOf, { round: roundNumber(run) })}
@@ -68,6 +67,9 @@ export function DilocoView({ run }: { run: Run }) {
         status={status}
         statusTip={T.etaTip}
       />
+      <OutcomePanel run={run} />
+      {isActive(run) && run.lessons + run.lessons_left_out > 0 && <Lessons run={run} />}
+      <MemberAlerts run={run} />
       <RoundBanner run={run} />
       <section aria-labelledby="run-who" className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5">
         <h2 id="run-who" className="text-lg font-semibold"><Hint tip={T.whoTip} plain>{T.who}</Hint></h2>
@@ -88,19 +90,7 @@ export function DilocoView({ run }: { run: Run }) {
       <div className="rounded-xl border border-border bg-card p-5">
         <Timeline run={run} />
       </div>
-      <div className="flex flex-wrap gap-4">
-        <LossPanel id="run-loss" title={T.lossVsRound} series={roundSeries(run.history)} xLabel={T.lossAxisRound} readouts={readouts} empty={TR.noRounds} marks={errorMarks(run)} />
-        <div className={PANEL}>
-          <EventLog run={run} />
-        </div>
-      </div>
-      {run.history.length > 0 && (
-        <details className="rounded-xl border border-border bg-card p-5">
-          <summary className="cursor-pointer text-sm font-medium">{TR.traffic}</summary>
-          <p className="mt-2 max-w-prose text-xs text-muted-foreground">{TR.trafficLead}</p>
-          <SeriesChart series={trafficSeries(run.history)} xLabel={TR.roundAxis} yLabel="MB" className="mt-2 h-48 w-full" />
-        </details>
-      )}
+      <div className={PANEL}><EventLog run={run} /></div>
     </div>
   );
 }

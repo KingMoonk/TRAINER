@@ -357,6 +357,13 @@ class ReadModel(unittest.TestCase):
         rows = runs.round_rows([{"round": n, "step": n, "contributed": [], "members": [], "dropped": []} for n in range(3)], 1)
         self.assertEqual([r["best"] for r in rows], [False, True, False])
 
+    def test_round_progress_distinguishes_current_and_late_accepted_work(self):
+        row = runs.round_rows([{"round": 1, "step": 200, "accepted_tokens": 120, "late": ["slow"],
+                                "contributed": ["fast"], "members": ["fast", "slow"], "dropped": ["slow"]}])[0]
+        self.assertEqual((row["accepted_tokens"], row["contributed"], row["late_contributed"]), (120, 1, 1))
+        old = runs.round_rows([{"round": 0, "step": 100}])[0]
+        self.assertIsNone(old["late_contributed"])
+
     def test_a_run_that_has_not_started_is_queued_or_starting_and_its_machines_are_invited(self):
         self.job.status = "waiting"
         view = runs.view(self.run, None, self.job)

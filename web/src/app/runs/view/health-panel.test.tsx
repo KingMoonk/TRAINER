@@ -40,16 +40,18 @@ describe("the health panel", () => {
     expect(screen.getByTestId("health-link")).toHaveTextContent("Transfer speed of each member (MB/s)");
   });
 
-  test("a measured run shows its verdict, speed-up, shares and every chart", () => {
+  test("a measured run shows its verdict, speed-up and time split without duplicate outcome charts", () => {
     renderPage(<HealthPanel run={run({ health: measured })} />);
     expect(screen.getByTestId("verdict")).toHaveTextContent("Working: 1.6× faster than gpu-box alone, loss falling.");
     expect(screen.getByTestId("health-speedup")).toHaveTextContent("1.60×");
     expect(screen.getByTestId("health-baseline")).toHaveTextContent("gpu-box alone 400 tok/s");
     expect(screen.getByTestId("health-comm")).toHaveTextContent("20%");
     expect(screen.getByTestId("health-wait")).toHaveTextContent("gpu-box waits 10%");
-    for (const id of ["health-loss", "health-throughput", "health-split", "health-bytes"]) expect(screen.getByTestId(id)).toBeInTheDocument();
+    expect(screen.getByTestId("health-split")).toBeInTheDocument();
+    expect(screen.queryByTestId("health-loss")).toBeNull();
+    expect(screen.queryByTestId("health-throughput")).toBeNull();
     expect(within(screen.getByTestId("health-split")).getAllByRole("listitem").length).toBeGreaterThanOrEqual(3);
-    expect(screen.getByTestId("health-bytes")).toHaveTextContent("2.0× smaller");
+    expect(screen.getByTestId("health-sparsity")).toHaveTextContent("2.0× smaller");
     expect(screen.getByTestId("health-sparsity")).toHaveTextContent("Sent up: the largest 5% of each tensor's entries. Down: all entries.");
   });
 

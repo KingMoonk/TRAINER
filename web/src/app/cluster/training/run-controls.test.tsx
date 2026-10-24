@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 import { mockApi } from "@/test/network";
 import { renderPage } from "@/test/render";
 import type { Run } from "./logic";
-import TrainingPage from "./page";
+import RunViewPage from "@/app/runs/view/page";
 import { round, run } from "./test-data";
 
 // Pause, Resume and Restart on the live view, the stop reason, and the error curve, against a mocked API.
@@ -22,7 +22,9 @@ function server(initial: Run[]) {
     "GET /pretraining/text_sets": { body: [] },
     "GET /versions": { body: [] },
     "GET /cluster/nodes": { body: NODES },
-    "GET /distributed/runs": () => ({ body: state.runs }),
+    "GET /distributed/runs/r1": () => ({ body: state.runs.find((r) => r.id === "r1") }),
+    "GET /distributed/runs/r2": () => ({ body: state.runs.find((r) => r.id === "r2") }),
+    "GET /queue": { body: { job: null, up_next: [] } },
     "POST /distributed/runs/*/pause": ({ path }) => {
       state.posted.push(path);
       return change(path.split("/")[3], { paused: true, can_pause: false, can_resume: true, phase: "paused" });
@@ -44,46 +46,46 @@ function server(initial: Run[]) {
 describe("run controls", () => {
   test("pauses a run, then resumes it", async () => {
     const state = server([run({ can_pause: true })]);
-    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Pause" }));
     await waitFor(() => expect(state.posted).toEqual(["/distributed/runs/r1/pause"]));
-    expect(await screen.findByTestId("run-paused-r1")).toHaveTextContent("Paused.");
+    expect(await screen.findByTestId("run-paused")).toHaveTextContent("Paused.");
     expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Resume" }));
     await waitFor(() => expect(state.posted[1]).toBe("/distributed/runs/r1/resume"));
-    await waitFor(() => expect(screen.queryByTestId("run-paused-r1")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("run-paused")).toBeNull());
     expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
   });
 
   test("a stopped run says why and offers Restart, which shows the new run", async () => {
     const state = server([run({ state: "stopped", can_stop: false, can_restart: true, stop_reason: "The loss stopped improving." })]);
-    renderPage(<TrainingPage />, { route: "/cluster/training" });
-    expect(await screen.findByTestId("run-stop-reason-r1")).toHaveTextContent("Stopped because: The loss stopped improving.");
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
+    expect(await screen.findByTestId("run-stop-reason")).toHaveTextContent("Stopped because: The loss stopped improving.");
     expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
     await userEvent.setup().click(screen.getByRole("button", { name: "Restart" }));
     await waitFor(() => expect(state.posted).toEqual(["/distributed/runs/r1/restart"]));
-    expect(await screen.findByTestId("run-r2")).toHaveTextContent("Restarted run");
+    expect(state.runs[0].label).toBe("Restarted run");
   });
 
   test("a run that cannot be paused or restarted shows none of the buttons", async () => {
     server([run()]);
-    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
     await screen.findByTestId("run-r1");
     for (const name of ["Pause", "Resume", "Restart"]) expect(screen.queryByRole("button", { name })).toBeNull();
   });
 
   test("the error curve of a run with no round yet says so", async () => {
     server([run({ history: [] })]);
-    renderPage(<TrainingPage />, { route: "/cluster/training" });
-    expect(within(await screen.findByTestId("error-curve")).getByText("No round has finished yet.")).toBeInTheDocument();
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
+    expect(within(await screen.findByTestId("run-outcome")).getByText("No round has finished yet.")).toBeInTheDocument();
   });
 
   test("the error curve is drawn for a run with rounds", async () => {
     server([run({ best_round: 1, history: [round(0), round(1), round(2, { pivot: "halve_lr" })] })]);
-    renderPage(<TrainingPage />, { route: "/cluster/training" });
-    const curve = await screen.findByTestId("error-curve");
-    expect(within(curve).getByRole("heading", { name: "Error curve" })).toBeInTheDocument();
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
+    const curve = await screen.findByTestId("run-outcome");
+    expect(within(curve).getByRole("heading", { name: "Learning progress" })).toBeInTheDocument();
     expect(within(curve).queryByText("No round has finished yet.")).toBeNull(); // jsdom has no layout, so the lines themselves are not drawn here
   });
 });

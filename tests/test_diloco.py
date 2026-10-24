@@ -173,6 +173,7 @@ class Rounds(Directory):
         self.assertEqual(c.history[1]["contributed"], ["a", "b"])
         self.assertEqual(c.history[1]["dropped"], [])
         self.assertEqual(c.history[1]["late"], ["b"])
+        self.assertEqual(c.history[1]["accepted_tokens"], c.history[1]["tokens"] + 10)
 
     def test_a_member_silent_for_missed_limit_rounds_is_removed_and_must_join_again(self):
         c = self.coordinator(inner_steps=2, rounds=9, missed_limit=2, grace_seconds=1., first_round_seconds=5.)

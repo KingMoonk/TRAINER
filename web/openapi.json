@@ -8675,6 +8675,17 @@
       },
       "Round": {
         "properties": {
+          "accepted_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Tokens"
+          },
           "best": {
             "default": false,
             "title": "Best",
@@ -8698,6 +8709,17 @@
             },
             "title": "Dropped",
             "type": "array"
+          },
+          "late_contributed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Late Contributed"
           },
           "lessons": {
             "default": 0,

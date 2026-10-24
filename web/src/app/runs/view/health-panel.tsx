@@ -1,11 +1,12 @@
 "use client";
 
 import { SeriesChart } from "@/components/series-chart";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Hint } from "@/app/runs/hint";
 import { cn } from "@/lib/utils";
 import type { Run } from "@/app/cluster/training/logic";
 import { T, fill } from "./copy";
-import { bytesSeries, compressionText, linkSeries, lossSeries, percentText, rateText, speedupText, sparsityText, splitRows, throughputSeries, verdictTone } from "./health";
+import { compressionText, linkSeries, percentText, rateText, speedupText, sparsityText, splitRows, verdictTone } from "./health";
 
 const PARTS = [
   { key: "compute", label: T.hCompute, colour: "var(--chart-1)" },
@@ -30,8 +31,9 @@ export function HealthPanel({ run }: { run: Run }) {
     { id: "idle", label: fill(T.hIdle, { node: health.idle_node }), value: percentText(health.idle_share), tip: T.hIdleTip },
   ].filter((readout) => readout.value !== "");
   return (
-    <section aria-labelledby="run-health" className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5" data-testid="health-panel">
-      <h2 id="run-health" className="text-lg font-semibold">{T.health}</h2>
+    <Card aria-labelledby="run-health" data-testid="health-panel">
+      <CardHeader><CardTitle id="run-health">{T.health}</CardTitle></CardHeader>
+      <CardContent className="flex flex-col gap-4">
       <Hint tip={health.basis} plain className="self-start">
         <p data-testid="verdict" data-state={health.verdict.state} className={cn("rounded-full border px-3 py-1.5 text-sm", verdictTone(health.verdict.state))}>
           {health.verdict.text}
@@ -49,14 +51,6 @@ export function HealthPanel({ run }: { run: Run }) {
         <p className="py-6 text-center text-sm text-muted-foreground">{T.hNoRounds}</p>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
-          <figure className="flex min-w-0 flex-col gap-2" data-testid="health-loss">
-            <figcaption className="text-sm font-medium">{T.hLossTitle}</figcaption>
-            <SeriesChart series={lossSeries(health)} xLabel={T.hAxisRound} yLabel="loss" className="h-48 w-full" />
-          </figure>
-          <figure className="flex min-w-0 flex-col gap-2" data-testid="health-throughput">
-            <figcaption className="text-sm font-medium">{T.hThroughputTitle}</figcaption>
-            <SeriesChart series={throughputSeries(health)} xLabel={T.hAxisRound} yLabel="tokens/s" className="h-48 w-full" />
-          </figure>
           <figure className="flex min-w-0 flex-col gap-2" data-testid="health-split">
             <figcaption className="text-sm font-medium"><Hint tip={T.hSplitTip}>{T.hSplitTitle}</Hint></figcaption>
             <ul className="flex flex-col gap-1" aria-label={T.hSplitTitle}>
@@ -83,14 +77,12 @@ export function HealthPanel({ run }: { run: Run }) {
               <SeriesChart series={link} xLabel={T.hAxisRound} yLabel="MB/s" className="h-48 w-full" />
             </figure>
           )}
-          <figure className="flex min-w-0 flex-col gap-2" data-testid="health-bytes">
-            <figcaption className="text-sm font-medium">{T.hBytesTitle}</figcaption>
-            <SeriesChart series={bytesSeries(health)} xLabel={T.hAxisRound} yLabel="MB" className="h-48 w-full" />
-            <p className="text-xs text-muted-foreground" data-testid="health-sparsity">{sparsityText(health)}</p>
-            {compression && <p className="text-xs text-muted-foreground">{fill(T.hCompression, { ratio: compression })}</p>}
-          </figure>
         </div>
       )}
-    </section>
+      {health.rounds.length > 0 && <p className="text-xs text-muted-foreground" data-testid="health-sparsity">
+        {sparsityText(health)} {compression && fill(T.hCompression, { ratio: compression })}
+      </p>}
+      </CardContent>
+    </Card>
   );
 }

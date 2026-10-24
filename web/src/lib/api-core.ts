@@ -2,7 +2,13 @@
 
 import { authHeaders } from "@/lib/token";
 
-export const BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+/** `make dev` serves /api through Tailscale, while localhost:3000 reaches Next directly and needs the loopback API. */
+export function resolvedBase(configured: string, hostname: string | undefined): string {
+  const base = configured.replace(/\/$/, "");
+  return base === "/api" && (hostname === "localhost" || hostname === "127.0.0.1") ? "http://127.0.0.1:8787" : base;
+}
+
+export const BASE = resolvedBase(process.env.NEXT_PUBLIC_API_URL ?? "", typeof window === "undefined" ? undefined : window.location.hostname);
 
 export class ApiError extends Error {
   constructor(

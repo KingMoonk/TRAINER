@@ -272,84 +272,31 @@ describe("Training tab: the start form", () => {
   });
 });
 
-describe("Training tab: a run", () => {
-  test("shows each machine with its device kind, speed and last change, and the loss and bytes of each round", async () => {
+describe("Training tab: run selection", () => {
+  test("summarizes the selected run and opens its only monitor", async () => {
     server({ runs: [run()] });
     renderPage(<TrainingPage />, { route: "/cluster/training" });
     const card = within(await screen.findByTestId("run-r1"));
     expect(card.getByTestId("run-state-r1")).toHaveTextContent("Training");
-    expect(card.getByText("mac-mini coordinates this run.")).toBeInTheDocument();
-    expect(card.getByText("2 of 10 rounds done")).toBeInTheDocument();
-    const gpu = within(card.getByTestId("member-gpu-box"));
-    expect(gpu.getByText("RTX 4090 (cuda)")).toBeInTheDocument();
-    expect(gpu.getByTestId("device-gpu-box")).toHaveTextContent("CUDA");
-    expect(gpu.getByText("5,120 tokens/s")).toBeInTheDocument();
-    expect(gpu.getByText("3.8 MB, float16")).toBeInTheDocument(); // on the edge that carries the change up
-    expect(gpu.getByText("Training")).toBeInTheDocument();
-    const me = within(card.getByTestId("member-mac-mini"));
-    expect(me.getByText("This computer")).toBeInTheDocument();
-    expect(me.getByText("Apple M2 (mps)")).toBeInTheDocument(); // an Apple GPU is a machine like any other
-    expect(me.getByTestId("device-mac-mini")).toHaveTextContent("MPS");
-    expect(me.queryByRole("button")).toBeNull(); // this computer cannot be stopped on its own
-    await userEvent.setup().click(card.getByText("Rounds"));
-    expect(card.getByTestId("round-2")).toHaveTextContent("3.000");
-    expect(card.getByTestId("round-2")).toHaveTextContent("2.0 MB");
-    expect(card.getByTestId("round-2")).toHaveTextContent("2 of 2");
+    expect(card.getByText(/2 of 10 rounds done/)).toBeInTheDocument();
+    expect(card.getByText("Validation loss: 3.500")).toBeInTheDocument();
+    expect(card.getByTestId("open-run-view-r1")).toHaveAttribute("href", "/runs/view?id=r1");
+    expect(card.queryByTestId("outcome-loss")).toBeNull();
+    expect(card.queryByTestId("topology")).toBeNull();
   });
 
-  test("an unreachable machine and one that refused with 401 show a sentence each while the others still render", async () => {
-    server({
-      runs: [run({
-        members: [
-          member("mac-mini", { local: true, rounds_done: 2, steps: 200, can_stop: false }),
-          member("gpu-box", { rounds_done: 2, steps: 200 }),
-          member("old-laptop", { device: "", device_name: "", state: "unreachable", note: "old-laptop did not answer within 2 seconds.", can_stop: false }),
-          member("brother-pc", { device: "", device_name: "", state: "unreachable", note: "brother-pc refused this computer (401). Add this computer's Tailscale login to the allowed users on brother-pc.", can_stop: false }),
-        ],
-      })],
-    });
+  test("choosing another run changes the summary and its monitor link", async () => {
+    server({ runs: [run(), run({ id: "r0", label: "Older run", state: "finished", started_at: 50 })] });
     renderPage(<TrainingPage />, { route: "/cluster/training" });
-    expect(await screen.findByTestId("reason-old-laptop")).toHaveTextContent(/^old-laptop did not answer within 2 seconds\.$/);
-    expect(screen.getByTestId("reason-brother-pc")).toHaveTextContent("refused this computer (401)");
-    expect(within(screen.getByTestId("member-old-laptop")).getByText("Unreachable")).toBeInTheDocument();
-    expect(screen.getByTestId("member-gpu-box")).toHaveTextContent("Training");
-    expect(screen.queryByTestId("reason-gpu-box")).toBeNull();
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Show Older run" }));
+    expect(await screen.findByTestId("run-r0")).toHaveTextContent("Older run");
+    expect(screen.getByTestId("open-run-view-r0")).toHaveAttribute("href", "/runs/view?id=r0");
   });
 
-  test("a dropped member and a late one say why, with a fallback when the server gave no note", async () => {
-    server({
-      runs: [run({ members: [member("mac-mini", { local: true, can_stop: false }), member("gpu-box", { state: "dropped", note: "Missed 3 rounds.", can_stop: false }), member("slow", { state: "behind", missed: 1 })] })],
-    });
-    renderPage(<TrainingPage />, { route: "/cluster/training" });
-    expect(await screen.findByTestId("reason-gpu-box")).toHaveTextContent("Missed 3 rounds.");
-    expect(screen.getByTestId("reason-slow")).toHaveTextContent("Late with its last change.");
-  });
-
-  test("stops a run, and its state follows", async () => {
-    const state = server({ runs: [run()] });
-    renderPage(<TrainingPage />, { route: "/cluster/training" });
-    await userEvent.setup().click(await screen.findByRole("button", { name: "Stop run" }));
-    await waitFor(() => expect(state.stopped).toEqual(["r1"]));
-    await waitFor(() => expect(screen.getByTestId("run-state-r1")).toHaveTextContent("Stopped"));
-    expect(screen.queryByRole("button", { name: "Stop run" })).toBeNull();
-  });
-
-  test("stops one member and leaves the run going", async () => {
-    const state = server({ runs: [run()] });
-    renderPage(<TrainingPage />, { route: "/cluster/training" });
-    await userEvent.setup().click(await screen.findByRole("button", { name: "Stop gpu-box" }));
-    await waitFor(() => expect(state.membersStopped).toEqual(["gpu-box"]));
-    await waitFor(() => expect(screen.getByTestId("member-gpu-box")).toHaveTextContent("Stopped"));
-    expect(screen.getByTestId("reason-gpu-box")).toBeInTheDocument();
-    expect(screen.getByTestId("run-state-r1")).toHaveTextContent("Training");
-    expect(state.stopped).toEqual([]);
-  });
-
-  test("a finished run offers no stop, and a queue event re-reads the list", async () => {
+  test("a queue event refreshes the selected run", async () => {
     const state = server({ runs: [run({ state: "finished", can_stop: false })] });
     renderPage(<TrainingPage />, { route: "/cluster/training" });
     expect(await screen.findByTestId("run-state-r1")).toHaveTextContent("Finished");
-    expect(screen.queryByRole("button", { name: "Stop run" })).toBeNull();
     state.runs = [run({ id: "r2", label: "Second run", state: "waiting", can_stop: true, started_at: 200 }), ...state.runs];
     emit("queue", {});
     expect(await screen.findByTestId("run-r2")).toHaveTextContent("Waiting for members");

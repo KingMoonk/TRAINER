@@ -9,7 +9,7 @@ export const member = (name: string, over: Partial<Member> = {}): Member => ({
 });
 
 export const round = (n: number, over: Partial<Round> = {}): Round => ({
-  round: n, step: (n + 1) * 100, loss: 4 - n, val_loss: 4.5 - n, bytes_up: 2 ** 20, bytes_down: 2 * 2 ** 20, seconds: 2, members: 2, contributed: 2, dropped: [], best: false, pivot: "", polish: "", val_loss_before_polish: null, polish_val_loss: null, lessons: 0, ...over,
+  round: n, step: (n + 1) * 100, accepted_tokens: 1_000, late_contributed: 0, loss: 4 - n, val_loss: 4.5 - n, bytes_up: 2 ** 20, bytes_down: 2 * 2 ** 20, seconds: 2, members: 2, contributed: 2, dropped: [], best: false, pivot: "", polish: "", val_loss_before_polish: null, polish_val_loss: null, lessons: 0, ...over,
 });
 
 export const lane = (node: string, over: Partial<Lane> = {}): Lane => ({

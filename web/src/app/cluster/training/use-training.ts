@@ -199,6 +199,7 @@ export function useChangeLesson(id: string) {
     onSuccess: (lessons) => {
       client.setQueryData([...RUNS, id, "lessons"], lessons);
       void client.invalidateQueries({ queryKey: RUNS, exact: true });
+      void client.invalidateQueries({ queryKey: ["distributed", "run", id] });
     },
     onError: (error) => toast.error(T.couldNotChangeLesson.replace("{why}", problem(error))),
   });

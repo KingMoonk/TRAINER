@@ -1,23 +1,24 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { runViewHref } from "@/app/runs/view/logic";
 import { problem } from "@/lib/cluster";
 import { TRAINING as T } from "@/lib/copy/training";
-import { LiveView } from "./live-view";
 import { liveRun } from "@/app/runs/view/live";
 import { RunsList } from "./runs-list";
 import { StartForm } from "./start-form";
-import { useRuns, useStopMember, useStopRun } from "./use-training";
+import { useRuns } from "./use-training";
 
 const FORM = "training-start";
 
 export default function TrainingPage() {
   const runs = useRuns();
-  const stopRun = useStopRun();
-  const stopMember = useStopMember();
   const [chosen, setChosen] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState<boolean | null>(null);
   const list = runs.data ?? [];
@@ -33,14 +34,23 @@ export default function TrainingPage() {
         ) : runs.isPending ? (
           <Skeleton className="h-32 w-full" aria-hidden="true" />
         ) : live ? (
-          <LiveView
-            run={live}
-            stoppingRun={stopRun.isPending && stopRun.variables === live.id}
-            stoppingNode={stopMember.isPending && stopMember.variables.id === live.id ? stopMember.variables.node : ""}
-            onStopRun={() => stopRun.mutate(live.id)}
-            onStopMember={(node) => stopMember.mutate({ id: live.id, node })}
-            onRestarted={(made) => setChosen(made.id)}
-          />
+          <Card data-testid={`run-${live.id}`} aria-label={T.liveRunLabel.replace("{label}", live.label)}>
+            <CardHeader>
+              <CardTitle className="flex flex-wrap items-center gap-2">
+                {live.label}
+                <Badge variant={live.state === "failed" ? "destructive" : "secondary"} data-testid={`run-state-${live.id}`}>{T.states[live.state]}</Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3 text-sm">
+              <p className="text-muted-foreground">{T.roundOf.replace("{round}", String(live.round)).replace("{rounds}", String(live.rounds))} · {T.phases[live.phase]}</p>
+              <div className="flex flex-wrap gap-x-6 gap-y-1 tabular-nums">
+                <span>{T.validationLoss}: {live.history.at(-1)?.val_loss?.toFixed(3) ?? "—"}</span>
+                <span>{T.contributedCol}: {live.contributed} of {live.expected} this round</span>
+                <span>{live.members.length} {live.members.length === 1 ? "member" : "members"}</span>
+              </div>
+              <Button asChild className="w-fit"><Link href={runViewHref(live.id)} data-testid={`open-run-view-${live.id}`}>{T.openRunView}</Link></Button>
+            </CardContent>
+          </Card>
         ) : (
           <p className="text-sm text-muted-foreground">{T.noRuns}</p>
         )}

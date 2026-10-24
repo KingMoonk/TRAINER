@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 import { mockApi } from "@/test/network";
 import { renderPage } from "@/test/render";
 import type { Lesson, Run } from "./logic";
-import TrainingPage from "./page";
+import RunViewPage from "@/app/runs/view/page";
 import { run } from "./test-data";
 
 // The lessons list on the live view: what the teacher gave, with Drop and Keep, against a mocked API.
@@ -20,7 +20,8 @@ function server(initialRun: Run, initial: Lesson[]) {
     "GET /pretraining/text_sets": { body: [] },
     "GET /versions": { body: [] },
     "GET /cluster/nodes": { body: NODES },
-    "GET /distributed/runs": () => ({ body: [state.run] }),
+    "GET /distributed/runs/r1": () => ({ body: state.run }),
+    "GET /queue": { body: { job: null, up_next: [] } },
     "GET /distributed/runs/*/lessons": () => ({ body: state.lessons }),
     "POST /distributed/runs/*/lessons/*/*": ({ path }) => {
       state.posted.push(path);
@@ -40,7 +41,7 @@ describe("lessons list", () => {
       { id: 4, round: 1, rows: 3, status: "live", keepable: false, items: [item("What is 1 plus 1?", "2 exactly."), item("What is 2 plus 2?", "4 exactly.")], more: 1 },
       { id: 5, round: 3, rows: 2, status: "live", keepable: false, items: [item("What is 9 plus 9?", "18 exactly.")], more: 0 },
     ]);
-    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
     const user = userEvent.setup();
     expect(await screen.findByTestId("run-lessons-r1")).toHaveTextContent("5 lessons from the teacher in the training text");
     const items = within(await screen.findByTestId("lessons-r1")).getAllByRole("listitem", { name: "" }).filter((li) => li.hasAttribute("data-status"));
@@ -66,7 +67,7 @@ describe("lessons list", () => {
       { id: 4, round: 1, rows: 2, status: "left_out", keepable: false, items: [], more: 0 },
       { id: 5, round: 2, rows: 2, status: "left_out", keepable: true, items: [], more: 0 },
     ]);
-    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
     const kept = await screen.findByTestId("lesson-5");
     expect(within(kept).getByRole("button", { name: "Keep" })).toBeEnabled();
     const lost = screen.getByTestId("lesson-4");
@@ -81,10 +82,11 @@ describe("lessons list", () => {
       "GET /pretraining/text_sets": { body: [] },
       "GET /versions": { body: [] },
       "GET /cluster/nodes": { body: NODES },
-      "GET /distributed/runs": { body: [run({ lessons: 2 })] },
+      "GET /distributed/runs/r1": { body: run({ lessons: 2 }) },
+      "GET /queue": { body: { job: null, up_next: [] } },
       "GET /distributed/runs/*/lessons": { status: 502, body: { detail: "box did not answer" } },
     });
-    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
     expect(await screen.findByText("Lessons are not reachable right now.")).toBeInTheDocument();
     expect(screen.queryByText(/box did not answer/)).toBeNull();
     expect(screen.queryAllByRole("alert").filter((a) => a.textContent?.includes("Lessons"))).toEqual([]);
@@ -96,9 +98,10 @@ describe("lessons list", () => {
       "GET /pretraining/text_sets": { body: [] },
       "GET /versions": { body: [] },
       "GET /cluster/nodes": { body: NODES },
-      "GET /distributed/runs": { body: [run({ state: "stopped", can_stop: false, lessons: 4 })] },
+      "GET /distributed/runs/r1": { body: run({ state: "stopped", can_stop: false, lessons: 4 }) },
+      "GET /queue": { body: { job: null, up_next: [] } },
     });
-    renderPage(<TrainingPage />, { route: "/cluster/training" });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
     expect(await screen.findByTestId("run-lessons-r1")).toHaveTextContent("4 lessons");
     expect(screen.queryByLabelText("Lessons from the teacher")).toBeNull();
     expect(calls.filter((c) => c.path.endsWith("/lessons"))).toEqual([]);

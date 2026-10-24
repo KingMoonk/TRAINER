@@ -1445,9 +1445,11 @@ class Coordinator:
             before = self.step_times.get(node)
             self.step_times[node] = seconds if before is None else (1 - STEP_TIME_SMOOTHING) * before + STEP_TIME_SMOOTHING * seconds
         tokens = sum(t for t, _, _, _, _ in sent.values())
+        accepted_tokens = tokens + sum(t for t, _, _, _, _ in late.values())
         losses = [(t, loss) for t, _, _, loss, _ in sent.values() if loss is not None and t > 0]
         row = {"round": current.number, "step": plan_before(self.plan, current.number + 1), "generation": current.generation,
-               "members": list(current.members), "contributed": list(sent), "dropped": dropped, "tokens": tokens, "late": list(late),
+               "members": list(current.members), "contributed": list(sent), "dropped": dropped, "tokens": tokens,
+               "accepted_tokens": accepted_tokens, "late": list(late),
                "steps": {node: value[1] for node, value in sent.items()}, "dealt": dict(current.steps),
                "loss": sum(t * loss for t, loss in losses) / sum(t for t, _ in losses) if losses else None,
                "val_loss": self.evaluate(self.theta), "seconds": now - current.opened,

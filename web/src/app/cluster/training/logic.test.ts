@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vitest";
 import {
-  bytesText, deltaText, errorMarks, lessonsText, holdButtons, defaultInnerSteps, deltaDtypeOf, initialForm, isActive, isProblem, lossSeries, memberDevice, needsReason, neverJoined, reasonText, speedText, sparsityProblem, startBody, stepsProblem, stopReasonText, toggled, trafficSeries, trouble,
+  bytesText, deltaText, lessonsText, holdButtons, defaultInnerSteps, deltaDtypeOf, initialForm, isActive, isProblem, memberDevice, needsReason, neverJoined, reasonText, speedText, sparsityProblem, startBody, stepsProblem, stopReasonText, toggled, trouble,
   type Form,
 } from "./logic";
 import { initialRules } from "./rules";
 import { TRAINING as T } from "@/lib/copy/training";
-import { member as build, round, run } from "./test-data";
+import { member as build, run } from "./test-data";
 
 // the shared member, with the numbers these tests were written around
 const member = (over: Partial<Parameters<typeof build>[1]> = {}) => build("gpu-box", { rounds_done: 2, steps: 200, tokens_per_second: 1234.4, last_delta_bytes: 4_000_000, last_delta_dtype: "float16", ...over });
@@ -176,38 +176,7 @@ describe("a member that is out", () => {
   });
 });
 
-describe("the charts", () => {
-  test("loss has a line for each kind the rounds carry, numbered from one", () => {
-    const series = lossSeries([round(0), round(1, { val_loss: null })]);
-    expect(series.map((s) => s.id)).toEqual(["loss", "val_loss"]);
-    expect(series[0].points).toEqual([{ x: 1, y: 4 }, { x: 2, y: 3 }]);
-    expect(series[1].points).toEqual([{ x: 1, y: 4.5 }]);
-    expect(lossSeries([round(0, { loss: null, val_loss: null })])).toEqual([]);
-  });
-
-  test("traffic is in megabytes, up and down", () => {
-    const [up, down] = trafficSeries([round(0)]);
-    expect(up.points).toEqual([{ x: 1, y: 1 }]);
-    expect(down.points).toEqual([{ x: 1, y: 2 }]);
-  });
-
-  test("the error curve marks the best round and each pivot round, counting rounds from one", () => {
-    const r = run({ best_round: 1, history: [round(0), round(1), round(2, { pivot: "halve_lr" }), round(3, { pivot: "next_dataset" }), round(4, { pivot: "something_new" })] });
-    expect(errorMarks(r).map((m) => [m.id, m.x, m.label])).toEqual([
-      ["pivot-2", 3, "Learning rate halved"], ["pivot-3", 4, "Next text"], ["pivot-4", 5, "Changed course"], ["best", 2, "Best"],
-    ]);
-    expect(errorMarks(run({ history: [round(0)] }))).toEqual([]);
-  });
-
-  test("the error curve marks each polish, kept, not kept or skipped, apart", () => {
-    const r = run({ history: [round(0, { polish: "accepted", val_loss_before_polish: 5 }), round(1, { polish: "rejected", polish_val_loss: 4.4 }), round(2, { polish: "skipped" }), round(3)] });
-    const marks = errorMarks(r);
-    expect(marks.map((m) => [m.id, m.x, m.label])).toEqual([
-      ["polish-0", 1, "Teacher polish kept"], ["polish-1", 2, "Teacher polish not kept"], ["polish-2", 3, "Teacher polish skipped"],
-    ]);
-    expect(new Set(marks.map((m) => m.color)).size).toBe(3);
-  });
-
+describe("training labels", () => {
   test("the journal and the phase line have words for the teacher's polish and lessons", () => {
     expect(T.phases.polishing).toBe("Teacher polishing");
     expect([T.eventKinds.polish, T.eventKinds.polish_off, T.eventKinds.lessons]).toEqual(["Teacher polish", "Polish off", "Lessons"]);
