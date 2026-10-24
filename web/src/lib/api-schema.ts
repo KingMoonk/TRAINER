@@ -2532,6 +2532,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pretraining/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pretrain Start
+         * @description Add the run the plan builds for these answers to the queue, as a job: when the size of the chosen text is not known yet it
+         *     is worked out first (Services.pretrain_preview), so the run can be asked for at once. The job fails with the plan's reason
+         *     when the run still cannot be added.
+         */
+        post: operations["pretrain_start_pretraining_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/pretraining/step_rate": {
         parameters: {
             query?: never;
@@ -8005,6 +8027,34 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** StartJob */
+        StartJob: {
+            /** Created At */
+            created_at: number;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Finished At */
+            finished_at?: number | null;
+            /** Fraction */
+            fraction?: number | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Progress
+             * @default
+             */
+            progress: string;
+            result?: components["schemas"]["studio_api__routers__pretraining__Started"] | null;
+            /** Started At */
+            started_at?: number | null;
+            /** Status */
+            status: string;
+        };
         /**
          * StartRun
          * @description What the Training tab's form sends. The design is a version's; this computer takes part, and starts the run as its coordinator.
@@ -8865,6 +8915,16 @@ export interface components {
             step: number;
             /** Text */
             text: string;
+        };
+        /**
+         * Started
+         * @description The queue job POST /pretraining/start added.
+         */
+        studio_api__routers__pretraining__Started: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
         };
         /**
          * GateModel
@@ -12914,6 +12974,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PreviewJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pretrain_start_pretraining_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartJob"];
                 };
             };
             /** @description Validation Error */

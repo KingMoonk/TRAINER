@@ -81,6 +81,17 @@ class PreviewJob(JobRecordModel):
     result: PreviewModel | None = None
 
 
+class Started(BaseModel):
+    """The queue job POST /pretraining/start added."""
+
+    id: str
+    label: str
+
+
+class StartJob(JobRecordModel):
+    result: Started | None = None
+
+
 class WordListsJob(JobRecordModel):
     result: WordListsModel | None = None
 
@@ -382,6 +393,31 @@ def cached_preview(services: Services, dataset_ids: Annotated[list[str], Query()
 def pretrain_preview(body: PreviewRequest, request: Request, services: Services) -> PreviewJob:
     """Services.pretrain_preview as a job."""
     return submit(request, "pretrain_preview", lambda stop: services.pretrain_preview(body.dataset_ids, body.rows), PreviewJob)
+
+
+@router.post("/start", status_code=202)
+def pretrain_start(body: PlanRequest, request: Request, services: Services) -> StartJob:
+    """Add the run the plan builds for these answers to the queue, as a job: when the size of the chosen text is not known yet it
+    is worked out first (Services.pretrain_preview), so the run can be asked for at once. The job fails with the plan's reason
+    when the run still cannot be added."""
+    import time
+    import uuid
+
+    from studio_ia.services import Job
+
+    def work(stop):
+        ids = list(dict.fromkeys(body.dataset_ids))
+        if ids and services.cached_preview(ids, body.preview_rows) is None:
+            services.pretrain_preview(ids, body.preview_rows)
+        if stop.is_set():
+            raise RuntimeError("Stopped before the run was added.")
+        made = pretrain_plan(body, services)
+        if not made.can_add:
+            raise ValueError(made.reason)
+        job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), note="", **made.job.model_dump())
+        added = services.enqueue(job) or job
+        return {"id": added.id, "label": added.label}
+    return submit(request, "pretrain_start", work, StartJob)
 
 
 @router.post("/step_rate", status_code=202)

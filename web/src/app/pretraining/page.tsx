@@ -134,6 +134,7 @@ export default function PretrainingPage() {
       <SizingCard plan={plan.data} estimating={estimating} hours={hours} onHours={setHours} chosenSteps={chosenSteps} onUseSteps={setChosenSteps} />
       <TrainCard
         plan={plan.data}
+        body={body}
         estimating={estimating}
         mode={mode}
         onMode={setMode}

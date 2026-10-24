@@ -45,6 +45,7 @@ class PretrainingRouterTests(ApiCase):
         self.assertEqual((rate["result"]["device"], rate["result"]["rows"]), ("cpu", 8))
         self.call("GET", "/pretraining/text_sets")
         self.call("POST", "/pretraining/plan", json={"dataset_ids": ["a"]})
+        self.assertEqual(self.job("POST", "/pretraining/start", json={"dataset_ids": ["a"]})["status"], "done")
         self.assertAllRoutesHit()
 
     def save_versions(self, parent_trained=True, tokenizer_changes=False):
@@ -187,6 +188,24 @@ class PretrainingRouterTests(ApiCase):
         self.call("POST", "/pretraining/plan", 404, json={"version": 9})
         self.call("POST", "/pretraining/plan", 422, json={"rows": 0})
         self.call("POST", "/pretraining/plan", 422, json={"mode": "sideways"})
+
+    def test_start_works_out_an_unknown_size_then_adds_the_run(self):
+        self.save_versions()
+        known, preview = {}, self.services.pretrain_preview
+        self.services.cached_preview = lambda ids, rows=16: known.get(tuple(ids))
+        self.services.pretrain_preview = lambda ids, rows=16: known.setdefault(tuple(ids), preview(ids, rows))
+        self.assertEqual(self.plan()["reason"], "The size of the text is still being worked out.")
+        done = self.job("POST", "/pretraining/start", json={"dataset_ids": ["Your files"]})
+        self.assertEqual(done["status"], "done", done["error"])
+        queued = self.services.queue().up_next[-1]
+        self.assertEqual((done["result"]["id"], done["result"]["label"], queued.kind), (queued.id, queued.label, "pretrain"))
+        self.assertIn(("Your files",), known)
+
+    def test_start_fails_with_the_reason_the_run_cannot_be_added(self):
+        done = self.job("POST", "/pretraining/start", json={"dataset_ids": ["Your files"]})
+        self.assertEqual(done["status"], "failed")
+        self.assertIn("Network designer", done["error"])
+        self.assertEqual(self.services.queue().up_next, [])
 
     def test_an_unknown_preview_is_null_not_computed(self):
         self.services.cached_preview = lambda ids, rows=16: None
