@@ -23,6 +23,7 @@ import { factAge, memberPhaseText, roundNumber } from "./live";
 import { LossPanel } from "./loss-panel";
 import { dilocoShape, runViewHref, gapNow, gapText, lastOf, lossText, overfit, percentOf, soloShape, stepSeries, trainLine } from "./logic";
 import { OutcomePanel } from "./outcome-panel";
+import { OpenRoundPanel } from "./open-round-panel";
 import { RoundBanner } from "./round-banner";
 import { Timeline } from "./timeline";
 import { Topology } from "./topology";
@@ -86,6 +87,7 @@ export function DilocoView({ run }: { run: Run }) {
           }
         />
       </section>
+      <OpenRoundPanel run={run} />
       <HealthPanel run={run} />
       <div className="rounded-xl border border-border bg-card p-5">
         <Timeline run={run} />

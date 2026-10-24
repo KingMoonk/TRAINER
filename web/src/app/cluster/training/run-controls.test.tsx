@@ -5,7 +5,7 @@ import { mockApi } from "@/test/network";
 import { renderPage } from "@/test/render";
 import type { Run } from "./logic";
 import RunViewPage from "@/app/runs/view/page";
-import { round, run } from "./test-data";
+import { member, round, run } from "./test-data";
 
 // Pause, Resume and Restart on the live view, the stop reason, and the error curve, against a mocked API.
 
@@ -87,5 +87,19 @@ describe("run controls", () => {
     const curve = await screen.findByTestId("run-outcome");
     expect(within(curve).getByRole("heading", { name: "Learning progress" })).toBeInTheDocument();
     expect(within(curve).queryByText("No round has finished yet.")).toBeNull(); // jsdom has no layout, so the lines themselves are not drawn here
+  });
+
+  test("the run shows worker loss and speed trends while a round is open", async () => {
+    server([run({
+      history: [],
+      members: [member("gpu-box", { samples: [
+        { step: 10, t: 1, loss: 4.4, tokens_per_second: 5000 },
+        { step: 20, t: 2, loss: 4.2, tokens_per_second: 4800 },
+      ] })],
+    })]);
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
+    const trends = await screen.findByTestId("open-round-trends");
+    expect(within(trends).getByText("Training loss by worker")).toBeInTheDocument();
+    expect(within(trends).getByText("Useful tokens/s by worker")).toBeInTheDocument();
   });
 });
