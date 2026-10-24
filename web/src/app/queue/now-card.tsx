@@ -70,6 +70,11 @@ function Running({ queue, actions, cluster }: { queue: Queue; actions: QueueActi
           {placeText(row)}
         </p>
       )}
+      {row?.basis && (
+        <p className="text-xs text-muted-foreground" data-testid="now-basis">
+          {row.basis}
+        </p>
+      )}
       <MembersLine job={job} />
       {invite ? (
         <MemberRow invite={invite} />

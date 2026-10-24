@@ -172,6 +172,22 @@ class OwnerSide(unittest.TestCase):
         self.assertEqual(self.sent("cluster")[-1]["state"], "dispatched")
         self.assertEqual(self.runner.state().job, None)
 
+    def test_the_sentence_that_picked_the_peer_is_kept_with_the_dispatched_job(self):
+        why = "gpu-box measured 0.1 s per step for this design on its CUDA, 3.0x faster than the slowest free machine."
+        job = self.runner.enqueue(self.job())
+        with mock.patch.object(sched, "decide", return_value=sched.Placement("remote", "gpu-box", basis=why)):
+            self.place()
+        self.assertEqual((job.status, job.params["cluster"]["basis"]), ("running", why))
+        self.assertEqual([(r["id"], r["basis"]) for r in self.runner.cluster.jobs_view()], [(job.id, why)])
+        self.assertEqual(self.runner.cluster.basis, {})  # handed to the job: nothing kept beside it
+        self.assertNotIn("cluster", self.peer.dispatched[0]["job"]["params"])
+
+    def test_a_peer_the_rule_picked_has_no_sentence(self):
+        job = self.runner.enqueue(self.job())
+        self.place()
+        self.assertNotIn("basis", job.params["cluster"])
+        self.assertEqual([r["basis"] for r in self.runner.cluster.jobs_view()], [""])
+
     def test_the_dispatch_carries_the_lease_the_data_and_nothing_that_belongs_to_this_machine(self):
         job = self.runner.enqueue(self.job(output_dir="C:/here/run", pinned=None, user_text="x", previous_best=2))
         self.place()

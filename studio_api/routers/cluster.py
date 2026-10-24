@@ -74,6 +74,7 @@ class ClusterJob(BaseModel):
     lease: str = ""  # held | lapsed | expired
     waiting_reason: str = ""
     checkpoint_step: int | None = None
+    basis: str = ""  # owner, running: why that machine was picked (it measured the fastest step for this design); "" when the rule decided
 
 
 class QueueLimits(BaseModel):
@@ -116,6 +117,7 @@ class QueueRow(BaseModel):
     step: int = 0  # a running job's progress as its machine reports it; 0 when unknown
     total: int = 0
     eta_s: float | None = None
+    basis: str = ""  # a running job: why its machine was picked (it measured the fastest step for this design); "" when the rule decided
 
 
 class Access(BaseModel):
@@ -275,7 +277,7 @@ def merged_queue(request: Request, services=Depends(get_services)) -> ClusterQue
                          online=p.info.online, error=p.info.error, seen_at=p.seen_at, listed=p.info.address in addresses,
                          limits=p.limits or _stored_limits(cluster, p.info.hostname), **_queue_stamp(cluster, p.info.hostname))
                for p in peers)]
-    rows = studio_cluster_queue.merge(own, peers, jobs, getattr(cluster, "waiting", None), progress)
+    rows = studio_cluster_queue.merge(own, peers, jobs, getattr(cluster, "waiting", None), progress, getattr(cluster, "basis", None))
     return ClusterQueue(nodes=nodes, jobs=[QueueRow(**asdict(r)) for r in rows])
 
 

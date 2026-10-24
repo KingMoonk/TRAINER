@@ -60,6 +60,15 @@ describe("Runs page", () => {
     await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/distributed/runs/v5run/join")).toBe(true));
   });
 
+  test("a job running on a peer says why that peer was picked", async () => {
+    const why = "beast measured 0.1 s per step for this design on its CUDA, 3.0x faster than the slowest free machine.";
+    const far = { id: "far", kind: "pretrain", label: "v7 away", role: "owner", node: "beast:8000", epoch: 1, status: "running", lease: "held", waiting_reason: "", checkpoint_step: null, basis: why };
+    server([diloco()], [], { "GET /cluster/jobs": { body: [far] } });
+    renderPage(<RunsPage />);
+    expect(await screen.findByTestId("basis-far")).toHaveTextContent(why);
+    expect(screen.queryByTestId("basis-v5run")).toBeNull();
+  });
+
   test("node chips show the device and the role in the active run", async () => {
     server();
     renderPage(<RunsPage />);

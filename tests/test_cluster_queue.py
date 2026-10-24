@@ -81,6 +81,17 @@ class Merge(unittest.TestCase):
         rows = self.merge(net, [Job("pretrain", "away", status="running", id="b", node="gpu", note=note), Job("pretrain", "plain", id="c")])[1]
         self.assertEqual([(r.id, r.note) for r in rows.values()], [("b", note), ("c", ""), ("p1", "peer note"), ("p2", "")])
 
+    def test_a_running_row_says_why_its_machine_was_picked(self):
+        why = "gpu-box measured 0.1 s per step for this design on its CUDA, 3.0x faster than the slowest free machine."
+        net = Net(gpu=peer("gpu-box", job("p1", "running", params={"cluster": {"basis": "peer said"}}), job("p2", params={"cluster": {"basis": "old"}})))
+        rows = self.merge(net, [Job("pretrain", "away", status="running", id="b", node="gpu", params={"cluster": {"basis": why}}),
+                                Job("pretrain", "now", status="running", id="a"), Job("pretrain", "w", id="w")])[1]
+        self.assertEqual({k: r.basis for k, r in rows.items()}, {"b": why, "a": "", "w": "", "p1": "peer said", "p2": ""})
+        peers = cq.Peers().survey(list(net.peers), net, timeout=1)
+        here = {r.id: r.basis for r in cq.merge(OWN, peers, [Job("pretrain", "now", status="running", id="a"), Job("pretrain", "w", id="w")],
+                                                basis={"a": "here measured", "w": "here too", "p1": "not this machine's"})}
+        self.assertEqual(here, {"a": "here measured", "w": "", "p1": "peer said", "p2": ""})
+
     def test_a_peers_jobs_are_rows_on_that_peer(self):
         net = Net(gpu=peer("gpu-box", job("p1", "running"), job("p2", params={"pinned": "here-box"}), job("p3", "held")))
         rows = self.merge(net)[1]
@@ -257,6 +268,13 @@ class QueueRoute(ApiCase):
         self.services.runner = SimpleNamespace(jobs=[away], cluster=None)
         rows = {r["id"]: r for r in self.call("GET", "/cluster/merged")["jobs"]}
         self.assertEqual((rows["far1"]["note"], rows["far1"]["queued_here"], rows["p1"]["note"]), ("the bucket is full", True, ""))
+
+    def test_why_a_job_running_on_a_peer_went_there_is_in_its_row(self):
+        self.call("PUT", "/cluster/nodes", json={"addresses": ["gpu"]})
+        away = Job("pretrain", "away", status="running", id="far1", node="gpu", params={"cluster": {"basis": "gpu-box measured the fastest step."}})
+        self.services.runner = SimpleNamespace(jobs=[away], cluster=None)
+        rows = {r["id"]: r for r in self.call("GET", "/cluster/merged")["jobs"]}
+        self.assertEqual((rows["far1"]["basis"], rows["p1"]["basis"]), ("gpu-box measured the fastest step.", ""))
 
     def test_a_job_still_running_on_a_removed_peer_keeps_its_row_and_note(self):
         self.services.runner = SimpleNamespace(jobs=[Job("pretrain", "away", status="running", id="far1", node="gpu", note="the bucket is full")], cluster=None)

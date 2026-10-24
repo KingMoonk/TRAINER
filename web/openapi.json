@@ -682,6 +682,11 @@
       },
       "ClusterJob": {
         "properties": {
+          "basis": {
+            "default": "",
+            "title": "Basis",
+            "type": "string"
+          },
           "checkpoint_step": {
             "anyOf": [
               {
@@ -7402,6 +7407,11 @@
       },
       "QueueRow": {
         "properties": {
+          "basis": {
+            "default": "",
+            "title": "Basis",
+            "type": "string"
+          },
           "eta_s": {
             "anyOf": [
               {

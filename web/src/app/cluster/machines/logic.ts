@@ -39,7 +39,7 @@ export function jobRows(merged: ClusterQueue | undefined, queue: Queue | undefin
   if (!queue) return [];
   const mine = (job: NonNullable<Queue["job"]>, status: QueueRow["status"]): QueueRow => ({
     id: job.id, kind: job.kind, label: job.label, status, node: "local", hostname: "", queued_on: "", queued_here: true, queued_address: "local",
-    pinned: "", waiting_reason: "", stale: false, note: job.note, step: 0, total: 0, eta_s: null,
+    pinned: "", waiting_reason: "", stale: false, note: job.note, step: 0, total: 0, eta_s: null, basis: "",
   });
   return [
     ...(queue.job ? [{ ...mine(queue.job, "running"), step: queue.step, total: queue.total, eta_s: queue.eta_s ?? null }] : []),

@@ -15,7 +15,7 @@ import QueuePage from "./page";
 
 type Row = {
   id: string; kind: string; label: string; status: string; node: string; hostname: string; queued_on: string; queued_here: boolean;
-  pinned: string; waiting_reason: string; stale: boolean; note: string;
+  pinned: string; waiting_reason: string; stale: boolean; note: string; basis?: string;
 };
 const NODES = {
   me: { address: "local", hostname: "mac-mini", pin: "mac-mini", local: true, online: true, error: "", seen_at: 0 },
@@ -132,6 +132,21 @@ describe("Queue page with several machines", () => {
     expect(far).toHaveTextContent(note);
     expect(screen.getAllByText(note)).toHaveLength(1);
     expect(other.getByTestId("other-g1")).not.toHaveTextContent("bucket");
+  });
+
+  test("a job running on another machine says why that machine was picked, and the running job here says it too", async () => {
+    const state = twoMachines();
+    const why = "gpu-box measured 0.1 s per step for this design on its CUDA, 3.0x faster than the slowest free machine.";
+    state.jobs.push(row("far1", "Version 4 pretraining", { status: "running", node: "gpu-box:8000", hostname: "gpu-box", basis: why }));
+    state.jobs[0] = { ...state.jobs[0], basis: "mac-mini measured the fastest step." };
+    server(state);
+    renderPage(<QueuePage />);
+
+    const other = within(await screen.findByTestId("other-machines"));
+    expect(await other.findByTestId("basis-far1")).toHaveTextContent(why);
+    expect(other.queryByTestId("basis-g1")).toBeNull();
+    expect(await screen.findByTestId("now-basis")).toHaveTextContent("mac-mini measured the fastest step.");
+    expect(screen.getByTestId("now-place")).toHaveTextContent(/^Running on mac-mini$/);
   });
 
   test("a job still running on a machine that was removed from the list keeps its row and note", async () => {

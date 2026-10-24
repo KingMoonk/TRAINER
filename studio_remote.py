@@ -163,6 +163,7 @@ class Cluster:
         self.gangs = sched.Gangs(clock, lease_s)  # the member slots of the distributed runs queued here
         self.guests = {}  # owner's job id -> GuestRun
         self.waiting = {}  # job id -> why it is waiting
+        self.basis = {}  # job id -> why the machine it goes to was picked (its measured speed), until it is dispatched; none when the rule decided
         self._landing, self._tries, self._retry_at = set(), {}, {}  # finished jobs being pulled now; failed pulls so far; clock time of the next try (`_land`)
         self._removed = {}  # job id -> checkpoint keys of a job taken out of the queue, still to be deleted from the store
         self._results = set()  # result keys of jobs taken out of the queue: a result can be the bytes of a checkpoint, and stays
@@ -442,6 +443,10 @@ class Cluster:
             self.waiting[job.id] = placement.reason
         else:
             self.waiting.pop(job.id, None)
+        if placement.basis:
+            self.basis[job.id] = placement.basis
+        else:
+            self.basis.pop(job.id, None)
         return placement
 
     def _place_gang(self, job):
@@ -482,6 +487,8 @@ class Cluster:
             if store is None:
                 raise sched.Refused(self.store_problem)
             body, notes = self._package(job, store, address)
+            if self.basis.get(job.id):
+                notes = {**notes, "basis": self.basis[job.id]}
             result = self.owner.dispatch(job.id, address, body)
         except sched.Refused as exc:
             return self._refused(job, address, str(exc))
@@ -498,6 +505,7 @@ class Cluster:
             if notes.get("checkpoint") and body["fetch"] and "resume_from" not in body["job"]["params"]:  # not on the node that has the full one
                 job.note = f"{job.note} On {address} the optimizer starts again from zero because only the weights are published.".strip()
             self.waiting.pop(job.id, None)
+            self.basis.pop(job.id, None)
             runner._save()
         runner._emit("job", {"job": job.id, "status": "running"})
         runner._emit("cluster", {"job": job.id, "state": "dispatched" if result.confirmed else "unconfirmed", "node": address,
@@ -880,7 +888,8 @@ class Cluster:
             notes = sched.attempt_state(job.params)
             rows.append({"id": job.id, "kind": job.kind, "label": job.label, "role": "owner", "node": job.node, "epoch": job.epoch,
                          "status": job.status, "lease": ("lapsed" if job.id in self.owner._lapsed else "held") if lease else "",
-                         "waiting_reason": self.waiting.get(job.id, ""), "checkpoint_step": (notes.get("checkpoint") or {}).get("step")})
+                         "waiting_reason": self.waiting.get(job.id, ""), "checkpoint_step": (notes.get("checkpoint") or {}).get("step"),
+                         "basis": notes.get("basis", "") if job.status == "running" else ""})
         for run in self.guests.values():
             if not run.ended:
                 rows.append({"id": run.id, "kind": run.spec["kind"], "label": run.spec.get("label", ""), "role": "runner",

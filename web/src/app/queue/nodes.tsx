@@ -111,6 +111,7 @@ export function OtherMachinesCard({ cluster }: { cluster: ClusterQueue }) {
                   <div className="text-xs text-muted-foreground">
                     {placeText(row)} · {fill(T.queuedOn, { node: row.queued_on })}
                   </div>
+                  {row.basis && <div className="text-xs text-muted-foreground" data-testid={`basis-${row.id}`}>{row.basis}</div>}
                   {row.note && <div className="text-sm text-muted-foreground">{row.note}</div>}
                 </div>
                 {row.stale && <Badge variant="outline">{T.lastKnown}</Badge>}
