@@ -79,7 +79,16 @@ def free_space(services=Depends(get_services)):
 @router.get("/exports", response_model=list[ExportRow])
 def exports(services=Depends(get_services)):
     """The versions that have trained, so can be exported, each with the reason GGUF is unavailable for it (if it is)."""
+    return [ExportRow(number=v.number, name=v.name, gguf_problem=_gguf_problem(v.spec)) for v in services.versions() if v.best_checkpoint]
+
+
+def _gguf_problem(spec):
+    """Why a version's design cannot be written as GGUF ("" when it can). A version saved its design as a training config or, from the
+    Builder, as a bare ModelSpec; one that cannot be read says so on its own row instead of failing the whole list."""
     import studio_export
     from studio_model import effective_spec, validate_config
-    return [ExportRow(number=v.number, name=v.name, gguf_problem=studio_export.gguf_problem(effective_spec(validate_config(v.spec))))
-            for v in services.versions() if v.best_checkpoint]
+    from studio_spec import is_model_spec
+    try:
+        return studio_export.gguf_problem(effective_spec(validate_config({"architecture": spec} if is_model_spec(spec) else spec or {})))
+    except (ValueError, TypeError, KeyError) as exc:
+        return f"This version's design could not be read: {exc}"

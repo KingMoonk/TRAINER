@@ -68,6 +68,18 @@ class StorageApiTest(unittest.TestCase):
         self.assertEqual(rows[0]["gguf_problem"], "")
         self.assertTrue(rows[1]["gguf_problem"].startswith("The"))
 
+    def test_a_version_saved_as_a_bare_model_spec_is_listed_and_an_unreadable_one_says_so_on_its_row(self):
+        import studio_spec
+        for _ in range(3):
+            self.services.save_version({"architecture": studio_spec.default_spec(preset="classic")}, "")
+        bare, broken, plain = self.services._versions
+        bare.spec, broken.spec = studio_spec.default_spec(preset="classic"), {"tokenizer": "byte", "steps": -1}
+        for v in (bare, broken, plain):
+            v.best_checkpoint = "best.npz"
+        rows = self.client.get("/storage/exports").json()
+        self.assertEqual([(r["number"], r["gguf_problem"]) for r in rows][::2], [(1, ""), (3, "")])
+        self.assertTrue(rows[1]["gguf_problem"].startswith("This version's design could not be read: steps must be between"))
+
     def test_exports_are_empty_before_anything_trains(self):
         self.assertEqual(self.client.get("/storage/exports").json(), [])
 
