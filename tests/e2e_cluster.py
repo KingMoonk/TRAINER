@@ -87,6 +87,19 @@ class Node:
             time.sleep(.5)
         return False
 
+    def traffic_records(self):
+        """Read the bounded SSE backfill and close before waiting for live traffic."""
+        with urllib.request.urlopen(f"http://{self.address}/traffic?last=2000", timeout=10) as response:
+            response.readline()  # connected comment
+            response.readline()
+            hello = json.loads(response.readline()[6:])
+            response.readline()
+            records = []
+            for _ in range(hello["payload"]["count"]):
+                records.append(json.loads(response.readline()[6:])["payload"])
+                response.readline()
+            return records
+
 
 class TwoNodeCluster(unittest.TestCase):
     @classmethod
@@ -161,6 +174,25 @@ class TwoNodeCluster(unittest.TestCase):
         self.assertEqual(statuses["loss"], "pass")
         for s in result["steps"]:
             print(f"{s['status']:5} {s['title']}: {s['detail']} ({s['seconds']} s)")
+
+    def test_receiver_grants_complete_a_real_two_process_run(self):
+        started = self.a.call("POST", "/distributed/runs", {"dataset_ids": [self.text], "machines": [self.b.address],
+                                                             "rounds": 2, "inner_steps": 4, "min_members": 2,
+                                                             "receiver_grants": True})
+        run_id = started["id"]
+        run = self.wait_for(lambda: next(r for r in self.a.call("GET", "/distributed/runs") if r["id"] == run_id),
+                            lambda r: r["state"] in ("finished", "stopped", "failed"), RUN_S)
+        self.assertEqual(run["state"], "finished", run)
+        self.assertEqual([(row["members"], row["contributed"]) for row in run["history"]], [(2, 2)] * 2)
+        records = self.a.traffic_records()
+        paths = [row["path"] for row in records if row["direction"] == "in" and row["status"] and row["status"] < 400]
+        self.assertTrue(any(path.endswith("/delta/transfers") for path in paths), "no admitted delta announcement")
+        self.assertTrue(any("/delta/transfers/" in path and path.endswith("/parts") for path in paths),
+                        "no admitted delta body")
+        self.assertTrue(any(row["path"].endswith("/params") and
+                            row["request"]["headers"].get("x-transfer-admission") == "1" and
+                            row["response"]["headers"].get("x-transfer-admission") == "1"
+                            for row in records if row["direction"] == "in"), "no admitted round-parameter download")
 
 
 if __name__ == "__main__":

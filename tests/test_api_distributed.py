@@ -540,6 +540,16 @@ class Routes(unittest.TestCase):
         for run_id in ids.values():
             self.client.post(f"/distributed/runs/{run_id}/stop")
 
+    def test_receiver_grants_opt_in_reaches_all_members_without_changing_overlap(self):
+        self.services.set_setting("nodes", ["127.0.0.1:9"])
+        alone = self.start(rounds=2000, receiver_grants=True).json()["id"]
+        across = self.start(rounds=2000, machines=["127.0.0.1:9"], receiver_grants=True).json()["id"]
+        jobs = self.jobs()
+        self.assertEqual(jobs[alone].params["member_options"], {"receiver_grants": True})
+        self.assertEqual(jobs[across].params["member_options"], {"overlap": True, "receiver_grants": True})
+        for run_id in (alone, across):
+            self.client.post(f"/distributed/runs/{run_id}/stop")
+
     def test_the_number_format_of_the_traffic_is_a_field_of_the_start_and_defaults_to_int8(self):
         default = self.start(rounds=2000).json()["id"]
         int8 = self.start(rounds=2000, delta_dtype="float16").json()["id"]
