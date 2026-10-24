@@ -57,12 +57,23 @@ describe("buildRows", () => {
 
   test("a job placed on a peer takes that peer as its node; a job run for another machine is active here", () => {
     const cluster: ClusterJob[] = [
-      { id: "p", kind: "pretrain", label: "placed", role: "owner", node: "beast:8000", epoch: 1, status: "running", lease: "held", waiting_reason: "", checkpoint_step: null },
-      { id: "q", kind: "pretrain", label: "for beast", role: "runner", node: "beast:8000", epoch: 1, status: "running", lease: "held", waiting_reason: "", checkpoint_step: null },
+      { id: "p", kind: "pretrain", label: "placed", role: "owner", node: "beast:8000", epoch: 1, status: "running", lease: "held", waiting_reason: "", checkpoint_step: null, basis: "" },
+      { id: "q", kind: "pretrain", label: "for beast", role: "runner", node: "beast:8000", epoch: 1, status: "running", lease: "held", waiting_reason: "", checkpoint_step: null, basis: "" },
     ];
     const rows = buildRows({ queue: queue({ up_next: [job("p")] }), runs: [], clusterJobs: cluster, nodes: NODES });
     expect(rows.find((r) => r.id === "p")).toMatchObject({ workers: ["beast"], coordinator: "beast" });
     expect(rows.find((r) => r.id === "q")).toMatchObject({ section: "active", workers: ["mac"], forOwner: "beast" });
+    expect(rows.map((r) => r.basis)).toEqual(["", ""]);
+  });
+
+  test("a job placed on a peer carries why that peer was picked", () => {
+    const why = "beast measured 0.1 s per step for this design on its CUDA, 3.0x faster than the slowest free machine.";
+    const cluster: ClusterJob[] = [
+      { id: "p", kind: "pretrain", label: "placed", role: "owner", node: "beast:8000", epoch: 1, status: "running", lease: "held", waiting_reason: "", checkpoint_step: null, basis: why },
+      { id: "n", kind: "pretrain", label: "new", role: "owner", node: "beast:8000", epoch: 1, status: "running", lease: "held", waiting_reason: "", checkpoint_step: null, basis: why },
+    ];
+    const rows = buildRows({ queue: queue({ up_next: [job("p")] }), runs: [], clusterJobs: cluster, nodes: NODES });
+    expect([rows.find((r) => r.id === "p")?.basis, rows.find((r) => r.id === "n")?.basis]).toEqual([why, why]);
   });
 
   test("finished, stopped and failed runs are completed, newest first; a queued run is scheduled", () => {

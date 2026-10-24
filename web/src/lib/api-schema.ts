@@ -3866,6 +3866,11 @@ export interface components {
         };
         /** ClusterJob */
         ClusterJob: {
+            /**
+             * Basis
+             * @default
+             */
+            basis: string;
             /** Checkpoint Step */
             checkpoint_step?: number | null;
             /**
@@ -6543,6 +6548,11 @@ export interface components {
         };
         /** QueueRow */
         QueueRow: {
+            /**
+             * Basis
+             * @default
+             */
+            basis: string;
             /** Eta S */
             eta_s?: number | null;
             /** Hostname */

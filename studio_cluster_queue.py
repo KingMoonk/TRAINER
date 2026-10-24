@@ -56,6 +56,7 @@ class Row:
     step: int = 0  # a running job's progress, where its machine said it; 0 when unknown
     total: int = 0
     eta_s: float | None = None
+    basis: str = ""  # a running job: why its machine was picked (it measured the fastest step for this design); "" when the rule decided
 
 
 class Peers:
@@ -179,12 +180,13 @@ def _pinned(params):
     return value.strip() if isinstance(value, str) else ""
 
 
-def merge(own, peers, jobs, waiting=None, progress=None):
+def merge(own, peers, jobs, waiting=None, progress=None, basis=None):
     """The rows of the whole cluster: `jobs` are this machine's (running, running on a peer, Up next), the peers' come from their
     surveys. A job a peer runs for another node is left to its owner's row, and a peer's job that runs here is already in `jobs`.
     `progress` is this machine's running job as {job_id, step, total, eta_s}; a running row takes the progress of the machine that runs
-    it (a job placed on a peer runs there as "<id>-e<epoch>")."""
-    waiting = waiting or {}
+    it (a job placed on a peer runs there as "<id>-e<epoch>"). A running row says why its machine was picked: the sentence its owner
+    kept when it dispatched the job (`params["cluster"]["basis"]`), or, for one running here, `basis` (job id -> the sentence)."""
+    waiting, basis = waiting or {}, basis or {}
     reports = [p for p in (progress, *(peer.progress for peer in peers)) if p]
     nodes = [own, *(p.info for p in peers)]
     names = _names(nodes)
@@ -193,9 +195,12 @@ def merge(own, peers, jobs, waiting=None, progress=None):
         node = _find(nodes, ref) if ref else None
         report = next((r for r in reports if r["job_id"] == job_id or re.fullmatch(re.escape(job_id) + r"-e\d+", r["job_id"])), None) \
             if status == "running" else None
+        notes = params.get("cluster") if isinstance(params, dict) else None
+        picked = (notes.get("basis") if isinstance(notes, dict) else "") or (basis.get(job_id, "") if here else "")
         return Row(job_id, kind, label, status, node.address if node else "", names[node.address] if node else ref, queued_on, here,
                    _pinned(params), why, bool(peer and peer.stale), note, queued_address,
-                   report["step"] if report else 0, report["total"] if report else 0, report["eta_s"] if report else None)
+                   report["step"] if report else 0, report["total"] if report else 0, report["eta_s"] if report else None,
+                   picked if status == "running" and isinstance(picked, str) else "")
 
     rows = []
     for job in jobs:

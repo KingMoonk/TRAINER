@@ -80,6 +80,7 @@ export function ActiveCard({ row }: { row: RunRow }) {
             </span>
           </div>
           {row.state === "waiting" && <p className="text-sm text-muted-foreground">{row.note || T.waitingForMembers}</p>}
+          {row.basis && <p className="text-sm text-muted-foreground" data-testid={`basis-${row.id}`}>{row.basis}</p>}
           <Machines row={row} />
           <div className="flex flex-wrap items-center gap-3">
             <div

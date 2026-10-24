@@ -7,7 +7,7 @@ const node = (address: string, over: Partial<ClusterNode> = {}): ClusterNode => 
 });
 const row = (id: string, label: string, over: Partial<QueueRow> = {}): QueueRow => ({
   id, kind: "pretrain", label, status: "waiting", node: "", hostname: "", queued_on: "mac-mini", queued_here: true, queued_address: "local",
-  pinned: "", waiting_reason: "", stale: false, note: "", step: 0, total: 0, eta_s: null, ...over,
+  pinned: "", waiting_reason: "", stale: false, note: "", step: 0, total: 0, eta_s: null, basis: "", ...over,
 });
 const job = (id: string, over: Record<string, unknown> = {}) => ({ id, kind: "pretrain", label: id.toUpperCase(), note: "", params: {}, status: "waiting", eta_s: null, created_at: 0, error: "", node: "", owner: "", epoch: 0, ...over });
 const quiet = { job: null, up_next: [], paused: false, step: 0, total: 0, phase: "", lr: null, eta_s: null, blocked: null, stopping: false };

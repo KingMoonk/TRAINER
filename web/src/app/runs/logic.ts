@@ -39,6 +39,8 @@ export type RunRow = {
   note: string;
   /** The machine that queued a job this computer runs for it, else "". */
   forOwner: string;
+  /** Why the machine it runs on was picked (it measured the fastest step for this design), else "": the rule picked it. */
+  basis: string;
   state: string;
   /** A failed job still in the queue's failed list: it can be restarted. */
   restartable: boolean;
@@ -119,7 +121,7 @@ function jobSection(status: string): Section {
 function blank(id: string): RunRow {
   return {
     id, section: "scheduled", name: "", kindText: "", distributed: false, version: null, workers: [], coordinator: "", round: 0, rounds: 0,
-    innerSteps: 0, step: 0, total: 0, trainLoss: null, valLoss: null, etaS: null, queueIndex: -1, held: false, note: "", forOwner: "", state: "",
+    innerSteps: 0, step: 0, total: 0, trainLoss: null, valLoss: null, etaS: null, queueIndex: -1, held: false, note: "", forOwner: "", basis: "", state: "",
     restartable: false, canJoin: false,
   };
 }
@@ -203,11 +205,12 @@ export function buildRows({ queue, runs, clusterJobs, nodes }: Inputs): RunRow[]
       if (existing && !existing.distributed && where) Object.assign(existing, { workers: [where], coordinator: where });
       if (existing) {
         if (cj.waiting_reason && !existing.note) existing.note = cj.waiting_reason;
+        if (cj.basis) existing.basis = cj.basis;
         continue;
       }
       rows.set(cj.id, {
         ...blank(cj.id), section: jobSection(cj.status), name: cj.label || kindText(cj.kind), kindText: kindText(cj.kind),
-        distributed: cj.kind === DISTRIBUTED, workers: [where || T.anyIdleNode], coordinator: where || T.anyIdleNode, note: cj.waiting_reason, state: cj.status,
+        distributed: cj.kind === DISTRIBUTED, workers: [where || T.anyIdleNode], coordinator: where || T.anyIdleNode, note: cj.waiting_reason, basis: cj.basis ?? "", state: cj.status,
       });
     } else if (!existing) {
       // Queued by another machine and running here.
