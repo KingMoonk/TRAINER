@@ -11087,6 +11087,87 @@
         "title": "Start",
         "type": "object"
       },
+      "StartJob": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraction"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "progress": {
+            "default": "",
+            "title": "Progress",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/studio_api__routers__pretraining__Started"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "created_at"
+        ],
+        "title": "StartJob",
+        "type": "object"
+      },
       "StartRun": {
         "description": "What the Training tab's form sends. The design is a version's; this computer takes part, and starts the run as its coordinator.",
         "properties": {
@@ -13138,6 +13219,25 @@
           "text"
         ],
         "title": "Sample",
+        "type": "object"
+      },
+      "studio_api__routers__pretraining__Started": {
+        "description": "The queue job POST /pretraining/start added.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "Started",
         "type": "object"
       },
       "studio_api__routers__queue__GateModel": {
@@ -19090,6 +19190,48 @@
           }
         },
         "summary": "Pretrain Preview",
+        "tags": [
+          "pretraining"
+        ]
+      }
+    },
+    "/pretraining/start": {
+      "post": {
+        "description": "Add the run the plan builds for these answers to the queue, as a job: when the size of the chosen text is not known yet it\nis worked out first (Services.pretrain_preview), so the run can be asked for at once. The job fails with the plan's reason\nwhen the run still cannot be added.",
+        "operationId": "pretrain_start_pretraining_start_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pretrain Start",
         "tags": [
           "pretraining"
         ]

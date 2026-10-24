@@ -43,6 +43,7 @@ export function planBody(c: {
     from_version: c.fromVersion ?? null,
   };
 }
+export type PlanBody = ReturnType<typeof planBody>;
 
 /** End the run when its validation loss goes flat: by length (runs over an hour), always, or never. */
 export const STOP_WHEN_FLAT = { Auto: null, Always: true, Never: false } as const;
