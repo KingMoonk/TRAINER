@@ -959,6 +959,12 @@ class CoordinatorChoice(unittest.TestCase):
         self.assertEqual(every.status_code, 409)  # also when the rest of the machines would have been enough
         self.assertEqual(self.services.queue().up_next, [])
 
+    def test_receiver_grants_refuses_an_explicitly_selected_peer_on_another_app_version(self):
+        refused = self.start(machines=["box", "new"], receiver_grants=True)
+        self.assertEqual((refused.status_code, refused.json()["detail"]),
+                         (409, "newpc cannot join with receiver grants: it runs app version 2.0.0; this computer runs 1.0.0."))
+        self.assertEqual(self.services.queue().up_next, [])
+
     def test_a_teacher_needs_this_computer_to_coordinate_but_the_coordinators_own_error_comes_first(self):
         teacher = {"teacher": "judge:1b", "polish_every": 1}
         refused = self.start(machines=["box"], coordinator="box", **teacher)

@@ -598,6 +598,12 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     left_out = []
     if body.all_machines:
         peers, left_out = _answering(peers, own)
+    if body.receiver_grants:
+        mismatched = next((peer for peer in peers if peer.version and own.version and peer.version != own.version), None)
+        if mismatched is not None:
+            name = mismatched.hostname or mismatched.address
+            raise HTTPException(409, f"{name} cannot join with receiver grants: it runs app version {mismatched.version}; "
+                                    f"this computer runs {own.version}.")
     machines = [{"node": own.hostname, "address": studio_cluster.LOCAL, "device": own.device, "device_name": own.device_name},
                 *({"node": peer.hostname or peer.address, "address": peer.address, "device": peer.device if peer.online else "",
                    "device_name": peer.device_name, "error": "" if peer.online else peer.error} for peer in peers)]
