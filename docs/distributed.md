@@ -361,6 +361,8 @@ stale by one round, instead of being dropped.
 
 ### Parallel transfers (#584)
 
+For the receiver-driven scheduling proposal and shared-bottleneck experiment, see [receiver-driven transfers](receiver-driven-transfers.md) (#648). This is discovery work; the transport below remains the current behavior.
+
 One TCP stream over a long, lossy link (Mac to a GPU box over Tailscale: about 120 ms RTT, about 1.7% loss) is loss-limited to
 roughly 0.1 to 0.5 MB/s, whatever the line carries. Weights, shards, replica state and changes are big bodies, so each goes over
 several streams at once (`studio_peer.PeerClient`, `studio_parts.py`).

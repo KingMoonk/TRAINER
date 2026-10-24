@@ -161,7 +161,7 @@ class Fleet:
         case.addCleanup(studio_distributed.RUNS.clear)
         studio_distributed.RUNS[RUN] = studio_distributed.Run(RUN, "Version 1 across 3 machines", 1, 100., {"rounds": ROUNDS}, "n0", handoff=handoff)
         self.first = support.build(self.nodes["n0"].root / "run", RUN, inner_steps=2, rounds=ROUNDS, outer_lr=.7, outer_momentum=.9,
-                                   min_members=1, max_members=3, replicas=3, delta_dtype="float32", **settings)
+                                   min_members=settings.pop("min_members", 1), max_members=3, replicas=3, delta_dtype="float32", **settings)
         self.first.prefer = (handoff,) if handoff else ()  # (studio_diloco.prepare)
         self.nodes["n0"].registry[RUN] = self.first
         case.addCleanup(self.stop)
@@ -294,7 +294,8 @@ class Handoff(unittest.TestCase):
     """A run started with another machine chosen to coordinate it: n0 starts it, n1 is chosen, and n0 stays up throughout."""
 
     def setUp(self):
-        self.fleet = Fleet(self, handoff="n1")
+        # The artificial upload gate must not trap n0 before n1/n2 can join a round.
+        self.fleet = Fleet(self, handoff="n1", min_members=3)
         self.addCleanup(studio_diloco.COORDINATORS.clear)
 
     def test_the_chosen_node_takes_the_run_over_while_the_starter_is_up_and_the_members_follow_it(self):

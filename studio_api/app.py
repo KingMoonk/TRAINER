@@ -27,7 +27,7 @@ def get_services(request: Request):
     return request.app.state.services
 
 
-def create_app(services, open=False, origins=(), hosts=(), fake_traffic=False, **auth):
+def create_app(services, open=False, origins=(), hosts=(), fake_traffic=False, upload_admission_options=None, **auth):
     """`auth` is TailscaleAuth's allow_tags, allow_users, whois and token (studio_cluster.allowed_callers gives the first two,
     studio_cluster.funnel_token the token). `origins` are the web origins (the Vercel site) allowed to call this API from a
     browser: their requests get the CORS headers only once authenticated, and only their preflight is answered without.
@@ -37,7 +37,20 @@ def create_app(services, open=False, origins=(), hosts=(), fake_traffic=False, *
     @asynccontextmanager
     async def lifespan(app):
         anyio.to_thread.current_default_thread_limiter().total_tokens = THREADS
-        yield
+        async def expire_upload_credit():
+            while True:
+                await anyio.sleep(1.)
+                app.state.upload_admission.expire()
+
+        try:
+            async with anyio.create_task_group() as group:
+                group.start_soon(expire_upload_credit)
+                try:
+                    yield
+                finally:
+                    group.cancel_scope.cancel()
+        finally:
+            app.state.upload_admission.close()
         if isinstance(hosts, HostNames):
             hosts.stop.set()  # the Tailscale-name refresh thread
         app.state.jobs.close()
@@ -46,6 +59,15 @@ def create_app(services, open=False, origins=(), hosts=(), fake_traffic=False, *
 
     app = FastAPI(title="Groundwork API", version=app_version(), lifespan=lifespan)
     app.state.services = services
+    # Receiver grant accounting is shared by requests handled in this process.
+    from studio_upload_admission import UploadAdmission
+    from studio_peer import _RECEIVER_INGRESS
+    admission_options = dict(upload_admission_options or {})
+    admission_options.setdefault("ingress_budget", _RECEIVER_INGRESS)
+    admission_options.setdefault("on_event", lambda kind, event: services.emit("collective_upload", {"kind": kind, **event}))
+    app.state.upload_admission = UploadAdmission(**admission_options)
+    app.state.upload_apply_limiter = anyio.CapacityLimiter(2)
+    app.state.download_build_limiter = anyio.CapacityLimiter(2)
     app.state.open = open
     app.state.hosts = hosts  # a HostNames knows this node's tailnet name (GET /cluster/nodes)
     app.state.broadcaster = events.Broadcaster(services)

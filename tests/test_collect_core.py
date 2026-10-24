@@ -165,10 +165,16 @@ class Polite(unittest.TestCase):
         self.assertIn("GroundworkTrainer-Collector", self.web.headers_log[0]["User-Agent"])
 
     def test_requests_to_one_host_are_spaced(self):
-        http = self.http()
+        elapsed = [0.]
+
+        def sleep(seconds):
+            self.slept.append(seconds)
+            elapsed[0] += seconds
+
+        http = Http(self.ledger, self.limits, transport=self.web, sleep=sleep, clock=lambda: elapsed[0])
         http.get("https://ok.example/a")
         http.get("https://ok.example/b")
-        self.assertGreater(sum(self.slept), self.limits["seconds_between_requests"] - 0.1)
+        self.assertEqual(sum(self.slept), self.limits["seconds_between_requests"])
 
     def test_a_crawl_delay_raises_the_spacing_never_lowers_it(self):
         http = self.http()

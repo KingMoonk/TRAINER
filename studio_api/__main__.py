@@ -31,6 +31,13 @@ def step_duration(value):
     return seconds
 
 
+def positive_mib(value):
+    size = int(value)
+    if size < 1:
+        raise argparse.ArgumentTypeError("MiB budget must be at least 1")
+    return size
+
+
 def schema_json():
     """The text of web/openapi.json, from the routes over FakeServices. tests/test_api_schema.py compares against it, so one
     function writes it. info.version is pinned: app_version() comes from the checkout's tags, so it differs per checkout and
@@ -75,6 +82,14 @@ def parse(argv=None, prog="python -m studio_api"):
                         help="seconds per simulated training step with --fake (default: 0.05)")
     parser.add_argument("--bind", default="127.0.0.1", help="address to listen on (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=studio_cluster.DEFAULT_PORT, help="port (default: the port other nodes expect)")
+    parser.add_argument("--delta-outstanding-mib", type=positive_mib, default=32,
+                        help="receiver-grant in-flight upload budget in MiB (default: 32; experimental opt-in uploads)")
+    parser.add_argument("--delta-assembly-mib", type=positive_mib, default=512,
+                        help="receiver-grant assembly-memory budget in MiB (default: 512; experimental opt-in uploads)")
+    parser.add_argument("--delta-grant-mib", type=positive_mib, default=4,
+                        help="largest receiver grant in MiB (default: 4; experimental opt-in uploads)")
+    parser.add_argument("--delta-turn-mib", type=positive_mib, default=4,
+                        help="maximum bytes granted to one transfer per fair queue turn in MiB (default: 4)")
     parser.add_argument("--allow-origin", action="append", default=[], type=origin, metavar="ORIGIN",
                         help=f"a web origin (the Vercel site) allowed to call the API from a browser once authenticated; repeat for "
                              f"several, or list them comma-separated in ${ORIGINS} (default: none)")
@@ -107,6 +122,10 @@ def build(args):
     if not args.fake:
         print("studio_api", accelerator.check(args.allow_cpu), flush=True)  # SystemExit before anything is served
     hosts.start_refresh()
+    upload_admission_options = {"max_outstanding": args.delta_outstanding_mib << 20,
+                                "max_assembly": args.delta_assembly_mib << 20,
+                                "grant_bytes": args.delta_grant_mib << 20,
+                                "turn_bytes": args.delta_turn_mib << 20}
     if args.fake:
         from studio_ia.services import FakeServices
 
@@ -122,9 +141,11 @@ def build(args):
         studio_legacy_cleanup.start(workspace.root)  # sign-in entries of the removed watchdog
         services.resume_queue_at_start()  # a queue the last run of the app left going carries on by itself
         tags, users = studio_cluster.allowed_callers(workspace.state)
-        return create_app(services, open=args.bind in LOCAL, origins=args.allow_origin, hosts=hosts, allow_tags=tags, allow_users=users,
+        return create_app(services, open=args.bind in LOCAL, origins=args.allow_origin, hosts=hosts,
+                          upload_admission_options=upload_admission_options, allow_tags=tags, allow_users=users,
                           token=studio_cluster.funnel_token(workspace.state))
-    return create_app(services, open=True, origins=args.allow_origin, hosts=hosts, fake_traffic=True)
+    return create_app(services, open=True, origins=args.allow_origin, hosts=hosts, fake_traffic=True,
+                      upload_admission_options=upload_admission_options)
 
 
 def local_reason(services):

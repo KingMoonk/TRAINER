@@ -3,6 +3,7 @@
     python tasks.py test [tests.test_x ...]   ruff + unit tests (all, or just the modules named). Run this locally.
     python tasks.py test:ci [--shard i/n]     test + compileall + e2e_cluster. Every pull request runs it on Linux, in 4 shards.
     python tasks.py test:ci:e2e               test:ci + the real training run (tests.e2e_train). Nightly, on macOS and Windows.
+    python tasks.py network:bench [args]     synthetic loopback contention benchmark; requires --output FILE.
     python tasks.py profile                   record the app with py-spy into profile.svg, timings on. Close the app to write it.
     python tasks.py web:lint                  eslint + tsc on the web UI (web/). Needs pnpm.
     python tasks.py web:test                  Vitest: unit, component and contract tests (web/src). No browser, safe to run locally.
@@ -520,12 +521,17 @@ def run_app():
         pass
 
 
+def network_bench(args):
+    """Run the opt-in synthetic network experiment; never part of the test suite."""
+    run(PY, "-m", "studio_transfer_discovery", *args)
+
+
 TASKS = {"test": test, "test:ci": test_ci, "test:ci:e2e": test_ci_e2e, "profile": profile,
          "web:lint": web_lint, "web:test": web_test, "web:e2e": web_e2e, "web:fixtures": web_fixtures,
-         "web:build": web_build, "setup": setup, "dev": dev, "run": run_app}
+         "web:build": web_build, "network:bench": network_bench, "setup": setup, "dev": dev, "run": run_app}
 
 if __name__ == "__main__":
     name, args = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ("", [])
-    if name not in TASKS or (args and name not in ("test", "test:ci")):
+    if name not in TASKS or (args and name not in ("test", "test:ci", "network:bench")):
         sys.exit(__doc__)
-    TASKS[name](args) if name in ("test", "test:ci") else TASKS[name]()
+    TASKS[name](args) if name in ("test", "test:ci", "network:bench") else TASKS[name]()

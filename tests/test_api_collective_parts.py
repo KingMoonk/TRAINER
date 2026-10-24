@@ -10,6 +10,7 @@ import uvicorn
 import studio_diloco
 import studio_run_health
 from studio_peer import PeerClient
+from studio_upload_admission import UploadAdmission
 from tests import diloco_support as support
 from tests.test_api_collective import Collective
 
@@ -139,12 +140,15 @@ class Parts(Collective):
 class OverHttp(Collective):
     """A real socket, studio_peer.PeerClient with small parts: the ranged downloads and the upload in parts through the real stack."""
 
-    def serve(self):
+    def serve(self, admission=None):
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
         sock.close()
-        server = uvicorn.Server(uvicorn.Config(support.app(), host="127.0.0.1", port=port, log_level="error"))
+        app = support.app()
+        if admission is not None:
+            app.state.upload_admission = admission
+        server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
         self.addCleanup(thread.join, 10)
@@ -167,6 +171,85 @@ class OverHttp(Collective):
         self.assertEqual(len(coordinator.history), 1)
         self.assertEqual(coordinator.history[0]["node_bytes"], {"a": len(body)})
         self.assertIsNotNone(studio_run_health.summarize(coordinator.history)["rounds"][0]["members"]["a"]["up_mb_s"])
+
+    def test_admitted_downloads_pin_weights_shards_and_replica_state_over_real_http(self):
+        coordinator = self.start(inner_steps=2, rounds=3, outer_lr=1.)
+        peer = PeerClient(self.serve(), part=3000, streams=4, receiver_grants=True)
+        peer.post_json("/collective/r1/join", {"node": "a", "epoch": 1}, {"term": 0})
+        view = peer.get_json("/collective/r1/rounds/0", {"node": "a", "term": 1})
+        theta = peer.get_bytes("/collective/r1/params", {"round": 0, "node": "a", "term": 1}, priority=True)
+        self.assertEqual(theta, coordinator.params_bytes(0))
+        self.assertEqual(peer.download_admission_mode, "admitted")
+        self.assertEqual(peer.get_bytes("/collective/r1/shards/0", {"term": 1}), coordinator.shard_bytes(0))
+        target = self.dir / "shard.npz"
+        peer.get_file("/collective/r1/shards/0", target, {"term": 1})
+        self.assertEqual(target.read_bytes(), coordinator.shard_bytes(0))
+        peer.post_bytes("/collective/r1/rounds/0/delta", self.delta_body(coordinator),
+                        {"node": "a", "generation": view["generation"], "epoch": 1, "tokens": 10, "steps": 2, "term": 1})
+        state = peer.get_bytes("/collective/r1/state", {"round": 1, "term": 1}, priority=False)
+        self.assertEqual(state, coordinator.state_bytes(1))
+        self.assertEqual(peer.get_bytes("/collective/r1/validation", {"term": 1}), coordinator.validation_bytes())
+        self.assertEqual(peer.download_admission_mode, "admitted")
+
+    def test_receiver_grants_are_opt_in_and_submit_the_delta_once(self):
+        coordinator = self.start(inner_steps=2, rounds=3, outer_lr=1.)
+        peer = PeerClient(self.serve(), part=3000, streams=4, receiver_grants=True)
+        peer.post_json("/collective/r1/join", {"node": "a", "epoch": 1}, {"term": 0})
+        view = peer.get_json("/collective/r1/rounds/0", {"node": "a", "term": 1})
+        body = self.delta_body(coordinator)
+        peer.post_bytes("/collective/r1/rounds/0/delta", body, {"node": "a", "generation": view["generation"],
+                                                                  "epoch": 1, "tokens": 10, "steps": 2, "term": 1})
+        self.assertEqual(len(coordinator.history), 1)
+        self.assertEqual(coordinator.history[0]["node_bytes"], {"a": len(body)})
+        self.assertEqual(coordinator.history[0]["contributed"], ["a"])
+        peer.post_bytes("/collective/r1/rounds/0/delta", body, {"node": "a", "generation": view["generation"],
+                                                                  "epoch": 1, "tokens": 10, "steps": 2, "term": 1})
+        self.assertEqual(len(coordinator.history), 1)  # a retry after a lost final acknowledgement cannot submit twice
+
+    def test_sender_uses_the_part_size_advertised_by_the_receiver(self):
+        coordinator = self.start(inner_steps=2, rounds=3, outer_lr=1.)
+        admission = UploadAdmission(max_assembly=1 << 20, max_outstanding=2000, grant_bytes=1000)
+        peer = PeerClient(self.serve(admission), part=3000, streams=4, receiver_grants=True)
+        peer.post_json("/collective/r1/join", {"node": "a", "epoch": 1}, {"term": 0})
+        view = peer.get_json("/collective/r1/rounds/0", {"node": "a", "term": 1})
+        body = self.delta_body(coordinator)
+        peer.post_bytes("/collective/r1/rounds/0/delta", body, {"node": "a", "generation": view["generation"],
+                                                                  "epoch": 1, "tokens": 10, "steps": 2, "term": 1})
+        self.assertEqual(coordinator.history[0]["node_bytes"], {"a": len(body)})
+        self.assertEqual(admission.outstanding_bytes, 0)
+        self.assertEqual(admission.assembly_bytes, 0)
+
+    def test_status_recovers_unapplied_assembly_and_commit_wins_concurrent_cancel(self):
+        coordinator = self.start(inner_steps=2, rounds=3, outer_lr=1.)
+        admission = UploadAdmission()
+        peer = PeerClient(self.serve(admission))
+        peer.post_json("/collective/r1/join", {"node": "a", "epoch": 1}, {"term": 0})
+        view = peer.get_json("/collective/r1/rounds/0", {"node": "a", "term": 1})
+        body = self.delta_body(coordinator)
+        identity = ("r1", 1, 0, "a", view["generation"], 1, 10, 2, 0., None, 0.)
+        transfer = admission.announce(identity, len(body), hashlib.sha256(body).hexdigest(), 1, len(body))
+        ident, inc = transfer["transfer_id"], transfer["incarnation"]
+        grant = admission.grant(ident, inc, identity)["grants"][0]
+        admission.begin_part(ident, inc, identity, grant["grant_id"], 0, len(body))
+        admission.finish_part(ident, inc, identity, grant["grant_id"], 0, body, hashlib.sha256(body).hexdigest())
+        admission.end_part(grant["grant_id"])
+        self.assertFalse(admission.transfers[ident]["applying"])
+        original_submit = coordinator.submit
+
+        def submit(*args, **kwargs):
+            # The application worker owns the outcome already; cancellation
+            # must not destroy its forthcoming receipt after numerical submit.
+            admission.cancel_transfer(ident, inc)
+            return original_submit(*args, **kwargs)
+
+        coordinator.submit = submit
+        query = {"incarnation": inc, "node": "a", "generation": view["generation"], "epoch": 1,
+                 "tokens": 10, "steps": 2, "term": 1}
+        route = f"/collective/r1/rounds/0/delta/transfers/{ident}/grants"
+        self.assertTrue(peer.get_json(route, query)["complete"])
+        self.assertTrue(peer.get_json(route, query)["complete"])
+        self.assertEqual(len(coordinator.history), 1)
+        self.assertEqual(admission.assembly_bytes, 0)
 
 
 if __name__ == "__main__":
