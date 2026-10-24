@@ -115,11 +115,13 @@
     },
     "history": [
       {
+        "accepted_tokens": null,
         "best": true,
         "bytes_down": 8000000,
         "bytes_up": 4000000,
         "contributed": 2,
         "dropped": [],
+        "late_contributed": null,
         "lessons": 0,
         "loss": 5.0509,
         "members": 2,

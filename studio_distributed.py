@@ -518,6 +518,7 @@ def stop_reason(state, rules, rounds):
 def round_rows(history, best_round=None):
     """The rounds for the wire; only the round the rules name as the best is marked best."""
     return [{"round": row["round"], "step": row["step"], "loss": row.get("loss"), "val_loss": row.get("val_loss"),
+             "accepted_tokens": row.get("accepted_tokens"), "late_contributed": len(row["late"]) if "late" in row else None,
              "best": best_round is not None and row["round"] == best_round, "pivot": row.get("pivot") or "",
              "bytes_up": row.get("delta_bytes", 0), "bytes_down": row.get("theta_bytes", 0), "seconds": row.get("seconds", 0.),
              "members": len(row.get("members", [])), "contributed": len(row.get("contributed", [])),

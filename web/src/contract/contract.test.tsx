@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
-import TrainingPage from "@/app/cluster/training/page";
+import RunViewPage from "@/app/runs/view/page";
 import StoragePage from "@/app/storage/page";
 import QueuePage from "@/app/queue/page";
 import { fetchJson } from "@/lib/api";
@@ -90,10 +90,10 @@ describe("pages on recorded responses", () => {
 
 describe("the Training tab's live view on the recorded demo run", () => {
   // The run `studio_api --fake` opens on, read at three moments of its first rounds (tests/web_fixtures.py DEMO_MOMENTS). The page reads the list,
-  // so each fixture is served as a list of one, with the rest of what the page reads recorded or empty.
+  // so each fixture is served as the canonical monitor's run, with its queue and machine list recorded or empty.
   const moment = (name: string) => {
     const body = fixtures[name].body;
-    replay(["distributed-defaults", "pretraining-text-sets", "versions", "cluster-nodes"], { "GET /distributed/runs": () => json([body]) });
+    replay(["queue-empty", "cluster-nodes"], { "GET /distributed/runs/*": () => json(body) });
     return body as {
       round: number; rounds: number; deadline_s: number | null; contributed: number; expected: number;
       members: { node: string; device: string; step_in_round: number }[]; timeline: { round: number; lanes: { node: string }[] }[]; events: { kind: string; text: string }[];
@@ -102,7 +102,7 @@ describe("the Training tab's live view on the recorded demo run", () => {
 
   test("while the members train: one CUDA and one MPS machine, each with progress, and a lane for each in the open round", async () => {
     const run = moment("distributed-run-demo-training");
-    renderPage(<TrainingPage />, { route: "/cluster/training/" });
+    renderPage(<RunViewPage />, { route: "/runs/view/?id=demo-run" });
     expect(await screen.findByTestId("round-title")).toHaveTextContent(`Round ${run.round + 1} of ${run.rounds}`);
     expect(screen.getByTestId("stage-training")).toHaveAttribute("aria-current", "step");
     expect(screen.getByTestId("countdown")).toHaveTextContent(`${Math.ceil(run.deadline_s as number)} s to the deadline`);
@@ -118,7 +118,7 @@ describe("the Training tab's live view on the recorded demo run", () => {
 
   test("while changes are collected: how many are in, and the finished machine's upload edge", async () => {
     const run = moment("distributed-run-demo-collecting");
-    renderPage(<TrainingPage />, { route: "/cluster/training/" });
+    renderPage(<RunViewPage />, { route: "/runs/view/?id=demo-run" });
     expect(await screen.findByTestId("stage-collecting")).toHaveTextContent(`(${run.contributed} of ${run.expected} in)`);
     expect(screen.getByTestId("stage-collecting")).toHaveAttribute("aria-current", "step");
     expect(screen.getByTestId("edge-up-gpu-box")).toHaveTextContent("float16");
@@ -126,7 +126,7 @@ describe("the Training tab's live view on the recorded demo run", () => {
 
   test("in the second round: the first is on the timeline, closed, and its outer step and checkpoint are in the log", async () => {
     const run = moment("distributed-run-demo-second-round");
-    renderPage(<TrainingPage />, { route: "/cluster/training/" });
+    renderPage(<RunViewPage />, { route: "/runs/view/?id=demo-run" });
     expect(await screen.findByTestId("round-title")).toHaveTextContent(`Round ${run.round + 1} of ${run.rounds}`);
     expect(screen.getByTestId("timeline-round-1")).toHaveAttribute("data-open", "false");
     expect(screen.getByTestId("timeline-round-2")).toHaveAttribute("data-open", "true");

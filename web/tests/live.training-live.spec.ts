@@ -1,12 +1,16 @@
 import { expect, test } from "@playwright/test";
 
-// The Training tab's live view (#338) against the real --fake server, which opens on a simulated run (id demo-run): a MPS machine (mac-mini) and a CUDA
+// The Training tab opens the canonical run monitor against the real --fake server, which has a simulated run (id demo-run): a MPS machine (mac-mini) and a CUDA
 // machine (gpu-box) training in rounds of about six seconds. Nothing is intercepted. These specs only watch the run; they never stop it, since the
 // other live specs share the workspace.
 
 test("/cluster/ opens on the demo run: a banner, two machines of different kinds, and edges to the coordinator", async ({ page }) => {
   await page.goto("/cluster/");
   await expect(page).toHaveURL(/\/cluster\/training\/?$/);
+  const summary = page.getByTestId("run-demo-run");
+  await expect(summary.getByTestId("open-run-view-demo-run")).toBeVisible({ timeout: 15_000 });
+  await summary.getByTestId("open-run-view-demo-run").click();
+  await expect(page).toHaveURL(/\/runs\/view\/?\?id=demo-run$/);
   const card = page.getByTestId("run-demo-run");
   await expect(card).toBeVisible({ timeout: 15_000 });
   await expect(card.getByTestId("round-title")).toContainText(/Round \d+ of 400/);
@@ -17,11 +21,10 @@ test("/cluster/ opens on the demo run: a banner, two machines of different kinds
     await expect(card.getByTestId(`edge-down-${node}`)).toContainText("θ down");
     await expect(card.getByTestId(`edge-up-${node}`)).toContainText("Δ up");
   }
-  await expect(page.getByRole("button", { name: "Start a run" })).toHaveAttribute("aria-expanded", "false"); // a run is going: the form is folded
 });
 
 test("the view moves on its own: progress, a phase, the countdown, the timeline and the log fill in without a reload", async ({ page }) => {
-  await page.goto("/cluster/training/");
+  await page.goto("/runs/view/?id=demo-run");
   const card = page.getByTestId("run-demo-run");
   const bar = card.getByRole("progressbar", { name: "Progress of gpu-box" });
   await expect(bar).toBeVisible({ timeout: 15_000 });
@@ -39,12 +42,12 @@ test("the view moves on its own: progress, a phase, the countdown, the timeline 
   // the timeline keeps only the last few rounds, so by now the demo run's round 1 may have rolled off: any round's lane for the machine will do
   await expect(card.locator("[data-testid^='lane-'][data-testid$='-gpu-box']").first()).toBeVisible();
   await expect(card.getByRole("region", { name: "Journal" }).getByRole("listitem").first()).toBeVisible();
-  await expect(card.getByRole("region", { name: "Error curve" })).toBeVisible();
-  await expect(card.getByRole("region", { name: "Tokens per second" })).toBeVisible();
+  await expect(card.getByTestId("outcome-loss")).toBeVisible();
+  await expect(card.getByTestId("outcome-participation")).toBeVisible();
 });
 
 test("a round closes with an outer step, which the log lists newest first with its size", async ({ page }) => {
-  await page.goto("/cluster/training/");
+  await page.goto("/runs/view/?id=demo-run");
   const log = page.getByTestId("run-demo-run").getByRole("region", { name: "Journal" });
   await expect(log.locator("[data-kind='outer_step']").first()).toBeVisible({ timeout: 30_000 });
   await expect(log.locator("[data-kind='outer_step']").first()).toContainText(/size/i);
@@ -54,10 +57,9 @@ test("a round closes with an outer step, which the log lists newest first with i
 });
 
 test("the machines can be stopped from their nodes, and the run from the coordinator", async ({ page }) => {
-  await page.goto("/cluster/training/");
+  await page.goto("/runs/view/?id=demo-run");
   const card = page.getByTestId("run-demo-run");
-  await expect(card.getByRole("button", { name: "Stop run" })).toBeVisible({ timeout: 15_000 });
-  await expect(card.getByTestId("coordinator").getByRole("button", { name: "Stop run" })).toBeVisible();
-  await expect(card.getByTestId("node-gpu-box").getByRole("button", { name: "Stop gpu-box" })).toBeVisible();
+  await expect(card.getByRole("button", { name: "Stop run…" })).toBeVisible({ timeout: 15_000 });
+  await expect(card.getByTestId("node-gpu-box").getByRole("button", { name: "Remove gpu-box from run…" })).toBeVisible();
   await expect(card.getByTestId("node-mac-mini").getByRole("button")).toHaveCount(0); // this computer is the coordinator's own member
 });

@@ -36,16 +36,21 @@ test("starts a run with an unreachable machine, shows why it is out, then stops 
   await page.getByRole("button", { name: "Start with the ready machines now, others join when free" }).click(); // the chosen machine does not answer
   const id = ((await (await started).json()) as Run).id;
 
-  const card = page.getByTestId(`run-${id}`); // the run just started becomes the live view
+  const summary = page.getByTestId(`run-${id}`);
+  await expect(summary).toBeVisible({ timeout: 10_000 });
+  await summary.getByTestId(`open-run-view-${id}`).click();
+  await expect(page).toHaveURL(new RegExp(`/runs/view/\\?id=${id}`));
+  const card = page.getByTestId(`run-${id}`); // the canonical run view has member details and controls
   await expect(card).toBeVisible({ timeout: 10_000 });
-  await expect(card).toContainText("of 500 rounds done");
+  await expect(card.getByTestId("run-progress")).toContainText(/Round \d+\/500/);
   const unreachable = card.getByTestId(`member-${NOBODY}`);
   await expect(unreachable).toContainText("Unreachable", { timeout: 10_000 });
   await expect(card.getByTestId(`reason-${NOBODY}`)).toContainText(NOBODY);
   await expect(card.getByText("This computer", { exact: true })).toBeVisible(); // the run goes on without the machine that did not answer
 
   await card.getByRole("button", { name: "Stop run" }).click();
-  await expect(page.getByTestId(`run-state-${id}`)).toHaveText("Stopped", { timeout: 10_000 });
+  await page.getByRole("alertdialog", { name: "Stop the whole run?" }).getByRole("button", { name: "Stop run" }).click();
+  await expect.poll(async () => ((await (await request.get(`/distributed/runs/${id}`)).json()) as Run).state).toBe("stopped");
   await expect(card.getByRole("button", { name: "Stop run" })).toHaveCount(0);
 });
 

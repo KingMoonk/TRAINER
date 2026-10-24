@@ -59,7 +59,7 @@ function soloServer(over: { queue?: Record<string, unknown>; curve?: unknown } =
 }
 
 describe("Run view: a DiLoCo run", () => {
-  test("shows the shape line, the round and its progress, who does what, the timeline and the loss by round", async () => {
+  test("shows one monitor with outcome, participation and causal evidence", async () => {
     dilocoServer();
     renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
     expect(await screen.findByTestId("run-title")).toHaveTextContent("Version 2 across machines");
@@ -69,8 +69,10 @@ describe("Run view: a DiLoCo run", () => {
     expect(screen.getByTestId("coordinator")).toBeInTheDocument();
     expect(screen.getByTestId("member-gpu-box")).toBeInTheDocument();
     expect(screen.getByTestId("lane-1-gpu-box")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Loss vs. round" })).toBeInTheDocument();
-    expect(screen.getByTestId("readout-val")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Learning progress" })).toBeInTheDocument();
+    expect(screen.getByTestId("outcome-loss")).toHaveTextContent("Validation loss vs. work");
+    expect(screen.getByTestId("outcome-participation")).toHaveTextContent("Members and accepted contributions");
+    expect(screen.queryByTestId("run-loss")).toBeNull();
   });
 
   test("Remove from run… asks first, then stops only that machine; the coordinator has none", async () => {

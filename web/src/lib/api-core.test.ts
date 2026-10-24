@@ -29,6 +29,14 @@ describe("BASE and apiUrl", () => {
     expect(apiUrl("/jobs/1")).toBe("http://node:8787/jobs/1");
     expect(apiUrl("jobs/1")).toBe("http://node:8787/jobs/1");
   });
+
+  test("the dev stack reaches the local API directly but keeps the tailnet proxy", async () => {
+    const { resolvedBase } = await load("/api");
+    expect(resolvedBase("/api", "127.0.0.1")).toBe("http://127.0.0.1:8787");
+    expect(resolvedBase("/api", "localhost")).toBe("http://127.0.0.1:8787");
+    expect(resolvedBase("/api", "gpu-box.tailnet.ts.net")).toBe("/api");
+    expect(resolvedBase("http://node:8787/", "localhost")).toBe("http://node:8787");
+  });
 });
 
 describe("ApiError", () => {

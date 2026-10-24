@@ -7197,6 +7197,8 @@ export interface components {
         };
         /** Round */
         Round: {
+            /** Accepted Tokens */
+            accepted_tokens?: number | null;
             /**
              * Best
              * @default false
@@ -7210,6 +7212,8 @@ export interface components {
             contributed: number;
             /** Dropped */
             dropped: string[];
+            /** Late Contributed */
+            late_contributed?: number | null;
             /**
              * Lessons
              * @default 0

@@ -126,6 +126,8 @@ class Member(BaseModel):
 class Round(BaseModel):
     round: int
     step: int
+    accepted_tokens: int | None = None  # target tokens used by this outer step, including permitted one-round-late changes; null for older runs
+    late_contributed: int | None = None  # prior-round changes included in this outer step; null for older APIs
     loss: float | None  # the members' training loss over the round, weighted by tokens
     val_loss: float | None  # the shared weights on the held-back text
     bytes_up: int  # the members' changes, as sent
