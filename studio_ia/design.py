@@ -179,7 +179,7 @@ TOKENIZERS = ("byte", "bpe_fast", "bpe_gpt2", "word")  # the small word list is 
 VS = (256, 8192, 50257, 8192)  # word-list sizes behind letters / small / large / whole words (the cap; less on little data)
 WORDS = ("Letters", "Small word list", "Large word list", "Whole words")
 WIDTHS = ("Narrow", "Normal", "Wide")
-HEADS = (1, 4, 8)
+HEADS = (1, 4, 8, 12)  # 12 rarely divides the width, so picking it can round the width (width_for)
 PART_SLOTS = ("embedding", "position", "head")  # the model-wide parts the tower shows; every block has BLOCK_SLOTS
 PART_TERMS = dict(embedding="embedding", position="position", norm="norm", mixer="token_mixer", channel="mlp", head="output_head")
 WORD_TERMS = ("bytes", "bpe", "gpt2_bpe", "whole_words")  # GLOSSARY entries behind WORDS
@@ -188,6 +188,7 @@ EXPECT = dict(
     more="More blocks: each word gets more rounds of processing, and every training step takes longer. With little data it may memorize rather than learn; watch the test line.",
     fewer="Fewer blocks: smaller and faster. It may not get its error as low.",
     heads="Different look-back heads: same size, same speed. Each block splits its looking into {how} views. Whether that helps at this size is something to test, not assume.",
+    heads_width="{heads} heads need a width that splits evenly into them, so each word's width goes from {d} to {w}: {way}.",
     wider="More thinking room: more to learn in every block, so bigger and slower.",
     narrower="Less thinking room: smaller and faster, with less capacity in every block.",
     letters="Letters: the word table becomes tiny, but the model has to learn spelling, and your text turns into about 5 times as many pieces, so each step covers less text.",
@@ -222,6 +223,21 @@ def knob_applies(s, key):
     """Whether look-back heads (H) or thinking room (W) mean anything for the all-blocks look-back / thinking-room choice."""
     slot, field = {"H": ("mixer", "heads"), "W": ("channel", "d_ff")}[key]
     return field in fields_of(slot, s["M"][slot])
+
+
+def width_for(d, heads, even=False):
+    """d_model `d`, or the nearest width (a tie goes wider) that splits into `heads` heads, of an even size when `even`
+    (rotary positions rotate pairs), within the engine's 16..1024."""
+    step = heads * (2 if even else 1)
+    if d % step == 0:
+        return d
+    lo, hi = d // step * step, -(-d // step) * step
+    return min((w for w in (hi, lo) if 16 <= w <= 1024), key=lambda w: abs(w - d))
+
+
+def draft_width(s):
+    """The width the draft `s` is written with: its own, or the one its heads round it to (write_spec)."""
+    return width_for(s["d"], s["H"], s["M"]["position"] == "rope") if knob_applies(s, "H") else s["d"]
 
 
 def block_parts(s, i):
@@ -312,10 +328,16 @@ def write_spec(base, s, was=None):
     for slot in BLOCK_SLOTS:
         if s["M"][slot] != was["M"][slot]:
             spec["block"][slot] = entry_for(slot, s["M"][slot], spec["block"][slot], s)
-    if s["H"] != was["H"] and "heads" in spec["block"]["mixer"]["config"]:
-        spec["block"]["mixer"]["config"]["heads"] = s["H"]
-    if s["W"] != was["W"] and "d_ff" in spec["block"]["channel"]["config"]:
-        spec["block"]["channel"]["config"]["d_ff"] = room_width(spec["block"]["channel"]["id"], FF[s["W"]], s["d"])
+    resized = False
+    if s["H"] != was["H"] and "heads" in (mixer := spec["block"]["mixer"]["config"]):
+        mixer["heads"] = s["H"]
+        if mixer.get("kv_heads") and s["H"] % mixer["kv_heads"]:
+            mixer["kv_heads"] = max(k for k in range(1, mixer["kv_heads"] + 1) if s["H"] % k == 0)
+        d = spec["dims"]["d_model"]
+        spec["dims"]["d_model"] = width_for(d, s["H"], spec["position"]["id"] == "rope")
+        resized = spec["dims"]["d_model"] != d
+    if (s["W"] != was["W"] or resized) and "d_ff" in spec["block"]["channel"]["config"]:
+        spec["block"]["channel"]["config"]["d_ff"] = room_width(spec["block"]["channel"]["id"], FF[s["W"]], spec["dims"]["d_model"])
     for key in sorted(set(s["O"]) | set(was["O"])):
         if s["O"].get(key) == was["O"].get(key):
             continue
@@ -658,6 +680,8 @@ def expectations(cur, draft, versions=(), issues=(), facts=None, compares=None):
         out.append(blocks_change_text(*last))
     if b["H"] != a["H"]:
         out.append(EXPECT["heads"].format(how="more, narrower" if b["H"] > a["H"] else "fewer, wider"))
+        if (w := draft_width(b)) != b["d"]:
+            out.append(EXPECT["heads_width"].format(heads=b["H"], d=b["d"], w=w, way="a little bigger and slower" if w > b["d"] else "a little smaller and faster"))
     if b["W"] > a["W"]:
         out.append(EXPECT["wider"])
     if b["W"] < a["W"]:
@@ -1022,7 +1046,7 @@ def example_text(part, s, short, lists=None):
 
 def example_for(part, s, short, pieces, sentence):
     """example_text with the example sentence already cut by the draft's word list: `pieces` ([label] or None) of `sentence`."""
-    d, rows = s["d"], VS[s["V"]]
+    d, rows = draft_width(s), VS[s["V"]]
     upto = T["up_to"] if s["V"] in (1, 3) else ""  # built from your text: the size is a cap
     last, before = (pieces[-1].strip() or pieces[-1], len(pieces) - 1) if pieces and len(pieces) > 1 else (None, 0)
     slot = "norm" if part == "final_norm" else part

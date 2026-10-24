@@ -8,7 +8,8 @@
     "heads": [
       1,
       4,
-      8
+      8,
+      12
     ],
     "part_slots": [
       "embedding",
