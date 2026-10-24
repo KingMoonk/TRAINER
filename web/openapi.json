@@ -11421,6 +11421,17 @@
             ],
             "title": "Polish Every"
           },
+          "receiver_grants": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receiver Grants"
+          },
           "replaces": {
             "anyOf": [
               {

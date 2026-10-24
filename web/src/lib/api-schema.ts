@@ -8238,6 +8238,8 @@ export interface components {
             plateau_min_improvement?: number | null;
             /** Polish Every */
             polish_every?: number | null;
+            /** Receiver Grants */
+            receiver_grants?: boolean | null;
             /** Replaces */
             replaces?: string | null;
             /**

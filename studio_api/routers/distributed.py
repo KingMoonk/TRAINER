@@ -67,6 +67,7 @@ class StartRun(BaseModel):
     coordinator: str | None = None  # a machine from the Machines list to coordinate the run (it must be one of the machines invited and answer); "" (the default): this computer
     reviewed_only: bool = False  # train only on the examples marked Good (the validation text is cut from those too); 400 when the sets hold none
     overlap: bool | None = None  # every member (this one and the invited) overlaps its communication with its compute: it trains on while the exchange runs. None (the default): on when another machine takes part, off for a run on this computer alone; false turns it off
+    receiver_grants: bool | None = None  # true opts every member into experimental HTTP admission; omitted or false uses legacy transfers
     delta_sparsity: float = Field(0., ge=0, le=studio_diloco.MAX_SPARSITY)  # int8 only: each member sends just this share of every tensor's entries (the largest changes), keeping the rest for its next change; 0 (the default): all of them
     delta_dtype: Literal["int8", "float16", "float32"] = DEFAULTS.delta_dtype  # the precision of a member's change and of the outer update members download; int8 keeps what it loses for the next change, float32 downloads the whole weights
     time_box: bool | None = None  # members train until the round's deadline (set from the fastest member's time for H steps) instead of H steps each, and the outer step weights each change by the tokens it trained. None (the default): on when more than one machine takes part, off for a run on this computer alone.
@@ -604,6 +605,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
         raise HTTPException(400, f"The run needs {settings.min_members} machines at once, but only {len(machines)} "
                                  f"{'is' if len(machines) == 1 else 'are'} chosen, this computer included.")
     overlap = body.overlap if body.overlap is not None else len(machines) > 1  # a run with a member on another machine hides the exchange behind the next steps
+    member_options = {**({"overlap": True} if overlap else {}), **({"receiver_grants": True} if body.receiver_grants else {})}
     boxed = body.time_box if body.time_box is not None else len(machines) > 1  # machines differ in speed, and none should wait for another
     settings = replace(settings, time_box=boxed)
     config = plan.pretrain_config(version.spec, body.rounds * body.inner_steps, ROWS, HOLD)
@@ -611,7 +613,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
         "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
         "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")},
-        "delta_dtype": settings.delta_dtype, "delta_sparsity": settings.delta_sparsity, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **rules["settings"], **rules["params"], **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": {"overlap": True}} if overlap else {}), "machines": machines, "owner": own.hostname,
+        "delta_dtype": settings.delta_dtype, "delta_sparsity": settings.delta_sparsity, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **rules["settings"], **rules["params"], **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": member_options} if member_options else {}), "machines": machines, "owner": own.hostname,
         **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
         **({"left_out": left_out} if body.all_machines else {})})
     runs.open_run(job)
