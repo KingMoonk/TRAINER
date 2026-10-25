@@ -5133,6 +5133,8 @@ export interface components {
             params: {
                 [key: string]: unknown;
             };
+            /** Sizing */
+            readonly sizing: number | null;
             /**
              * Status
              * @default waiting

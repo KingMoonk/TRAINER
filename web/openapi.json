@@ -3518,6 +3518,18 @@
             "title": "Params",
             "type": "object"
           },
+          "sizing": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "readOnly": true,
+            "title": "Sizing"
+          },
           "status": {
             "default": "waiting",
             "title": "Status",
@@ -3526,7 +3538,8 @@
         },
         "required": [
           "id",
-          "kind"
+          "kind",
+          "sizing"
         ],
         "title": "JobModel",
         "type": "object"

@@ -15,6 +15,8 @@ export const T = {
   trainingLink: "Train on several machines at once",
   trainingTip: "A run that spreads over machines is started and watched on the Cluster page.",
   preparingText: "Preparing text: {percent}%",
+  sizingBar: "Size check progress",
+  sizingText: "Working out the size of the text: {percent}%",
   stopAfterCooldown: "Stop after a short cool-down",
   stopping: "Asked it to stop. It stops at its next check.",
   checkpointNow: "Make a checkpoint now",

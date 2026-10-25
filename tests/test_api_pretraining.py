@@ -228,7 +228,7 @@ class PretrainingRouterTests(ApiCase):
         self.save_versions()
         known, preview, release = {}, self.services.pretrain_preview, threading.Event()
 
-        def slow(ids, rows=16):
+        def slow(ids, rows=16, progress=None):
             self.assertTrue(release.wait(10))
             return known.setdefault(tuple(ids), preview(ids, rows))
         self.services.cached_preview = lambda ids, rows=16: known.get(tuple(ids))
@@ -247,11 +247,34 @@ class PretrainingRouterTests(ApiCase):
         self.assertEqual(queued.params["config"], self.plan()["job"]["params"]["config"])
         self.assertIn(("Your files",), known)
 
+    def test_the_waiting_run_reports_how_far_the_size_is_worked_out_until_it_is_filled(self):
+        self.save_versions()
+        known, preview = {}, self.services.pretrain_preview
+        seen, at = [], {}
+
+        def counting(ids, rows=16, progress=None):
+            for percent in (0, 40, 70):
+                progress(percent)
+                job = self.services.queue().up_next[0]
+                seen.append(self.call("GET", "/queue")["up_next"][0]["sizing"])
+                at[percent] = job.params["sizing_percent"]
+            return known.setdefault(tuple(ids), preview(ids, rows))
+        self.services.cached_preview = lambda ids, rows=16: known.get(tuple(ids))
+        self.services.pretrain_preview = counting
+        started = self.call("POST", "/pretraining/start", 202, json={"dataset_ids": ["Your files"]})
+        queued = self.services.queue().up_next[-1]
+        self.assertEqual(self.call("GET", "/queue")["up_next"][0]["sizing"], 0)
+        self.until(lambda: "config" in queued.params, "the run's steps")
+        self.assertEqual(seen, [0, 40, 70])
+        up_next = self.call("GET", "/queue")["up_next"]
+        self.assertEqual((up_next[0]["id"], up_next[0]["sizing"]), (started["id"], None))
+        self.assertNotIn("sizing_percent", queued.params)
+
     def test_start_fails_the_queued_run_with_the_reason_its_size_could_not_be_worked_out(self):
         self.save_versions()
         self.services.cached_preview = lambda ids, rows=16: None
 
-        def broken(ids, rows=16):
+        def broken(ids, rows=16, progress=None):
             raise ValueError("The text could not be read.")
         self.services.pretrain_preview = broken
         started = self.call("POST", "/pretraining/start", 202, json={"dataset_ids": ["Your files"]})
@@ -276,7 +299,7 @@ class PretrainingRouterTests(ApiCase):
         self.assertIsNone(self.call("GET", "/pretraining/preview"))
 
     def test_the_preview_without_a_design_is_empty(self):
-        self.services.pretrain_preview = lambda ids, rows=16: {}
+        self.services.pretrain_preview = lambda ids, rows=16, progress=None: {}
         done = self.job("POST", "/pretraining/preview", json={})
         self.assertEqual(done["result"], {})
 

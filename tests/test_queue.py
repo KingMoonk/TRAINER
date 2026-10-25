@@ -214,6 +214,21 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(sized.params, {"steps": 5, "pinned": "peer"})  # a pin set meanwhile stays
         self.assertFalse(r.fill(sized.id, "again", {}))  # filled once
 
+    def test_a_sizing_job_carries_the_percent_of_its_size_check_until_filled(self):
+        r = self.runner()
+        seen = []
+        r.subscribe(lambda kind, payload: seen.append(payload) if kind == "queue" else None)
+        sized = r.enqueue(self.job("sizing", sizing=True))
+        seen.clear()
+        self.assertTrue(r.size_progress(sized.id, 40))
+        self.assertTrue(r.size_progress(sized.id, 40))  # unchanged: nothing announced
+        self.assertTrue(r.size_progress(sized.id, 250))  # kept within 0-100
+        self.assertEqual((sized.params["sizing_percent"], seen), (100, [{"job": sized.id}] * 2))
+        r.fill(sized.id, "filled", {"steps": 5})
+        self.assertEqual(sized.params, {"steps": 5})
+        self.assertFalse(r.size_progress(sized.id, 50))  # filled: no longer sizing
+        self.assertFalse(r.size_progress("nobody", 50))
+
     def test_a_job_filled_after_sizing_runs(self):
         r = self.runner()
         sized = r.enqueue(self.job("sizing", sizing=True))

@@ -25,7 +25,7 @@ const source = (version: number, over: Record<string, unknown> = {}) => ({
   params: 812_000, best_val_loss: 2.25, train_loss: 2.5, device: "RTX 4090", rounds: null, inner_steps: null, same_design: true, parent: false, ...over,
 });
 
-function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODES, failRun = false, jobs = [] as unknown[], sources = [] as unknown[], blocked = null as string | null } = {}) {
+function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODES, failRun = false, jobs = [] as unknown[], sources = [] as unknown[], blocked = null as string | null, sizing = false } = {}) {
   const calls = mockApi({
     "GET /cluster/merged": { body: { nodes: [], jobs } },
     "GET /cluster/nodes": { body: nodes },
@@ -46,10 +46,12 @@ function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODE
     "GET /queue": { body: { job: null, step: 0, total: 0, phase: "", lr: null, eta_s: null, paused: false, blocked: null, stopping: false, gate: { reason: null, supported: true }, up_next: [], plan: PLAN } },
     "POST /pretraining/plan": ({ body }) => {
       const { mode, from_version } = body as { mode: string; from_version: number | null };
+      if (sizing) return { body: { can_add: false, reason: "The size of the text is still being worked out.", job: null, version: 2, mode: "from_scratch", outlook: "", pieces_per_step: 1, context: 256, estimating: true, can_continue: false, sources: [], continue_from: null, continue_blocked: null } };
       const from = sources.length ? (from_version ?? (sources[0] as { version: number }).version) : null;
       return { body: { can_add: true, reason: "", job: { ...job, params: { ...job.params, mode } }, mode: "from_scratch", outlook: "", pieces_per_step: 1, context: 256, estimating: false,
         can_continue: sources.length > 0, sources, continue_from: from, continue_blocked: sources.length ? null : blocked } };
     },
+    "POST /pretraining/start": { status: 202, body: { id: "job-5", label: "Version 2, once the size of its text is known" } },
     "POST /queue/jobs": { body: { id: "job-7", kind: "pretrain", label: "x", status: "waiting" } },
     "POST /distributed/runs": failRun ? { status: 400, body: { detail: "Rounds must be at most 1000." } } : { body: { id: "run-3" } },
     "POST /post-training/rounds": { body: { id: "job-8", label: "SFT", params: {}, round: 1 } },
@@ -136,6 +138,23 @@ describe("New run", () => {
     renderPage(<NewRunPage />, { route: "/runs/new/" });
     expect(await screen.findByTestId("worker-lab")).toBeDisabled();
     expect(screen.getByTestId("worker-lab")).toHaveTextContent("Unreachable");
+  });
+
+  test("while the size of the text is worked out Start is on: the run goes through /pretraining/start, is pinned and its page opens", async () => {
+    const { sent, calls } = server({ nodes: MORE, sizing: true });
+    const user = userEvent.setup();
+    renderPage(<NewRunPage />, { route: "/runs/new/" });
+    await user.click(await screen.findByTestId("worker-beast"));
+    await user.click(await screen.findByTestId("worker-local"));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Remote"));
+    await waitFor(async () => expect(await cta()).toBeEnabled());
+    expect(screen.queryByTestId("blocker")).toBeNull();
+    expect(await screen.findByTestId("size-first")).toHaveTextContent("it waits in the queue until the size is known");
+    await user.click(await cta());
+    await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=job-5"));
+    expect(sent("POST", "/pretraining/start")?.body).toMatchObject({ dataset_ids: ["stories"], mode: "from_scratch", version: 2 });
+    expect(sent("POST", "/queue/jobs/job-5/pin")?.body).toEqual({ pinned: "beast" });
+    expect(calls.some((c) => c.method === "POST" && c.path === "/queue/jobs")).toBe(false);
   });
 
   test("a peer alone is pinned with params.pinned", async () => {
