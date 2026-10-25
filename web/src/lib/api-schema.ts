@@ -2994,6 +2994,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/queue/jobs/{job_id}/start_now": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Now
+         * @description Run a waiting job now: release it if held, put it first in Up next, lift a pause and start the queue, answering as Start
+         *     does. A job already running is not stopped: the chosen one goes next. The plan (hours, battery, idle) still holds it.
+         */
+        post: operations["start_now_queue_jobs__job_id__start_now_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/queue/next_step": {
         parameters: {
             query?: never;
@@ -13842,6 +13863,37 @@ export interface operations {
         };
     };
     restart_queue_jobs__job_id__restart_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueStateModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_now_queue_jobs__job_id__start_now_post: {
         parameters: {
             query?: never;
             header?: never;

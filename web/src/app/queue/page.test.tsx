@@ -79,6 +79,12 @@ function server(start: { running?: boolean; reason?: string | null; supported?: 
       return reply();
     },
     "POST /queue/start": () => reply(),
+    "POST /queue/jobs/*/start_now": ({ path }) => {
+      const [started] = state.up_next.splice(index(path), 1);
+      state.job = { ...started, status: "running" };
+      state.paused = false;
+      return reply();
+    },
     "POST /queue/stop_after_cooldown": () => {
       state.stopping = true;
       return reply();
@@ -193,6 +199,23 @@ describe("Queue page", () => {
       ["POST", "c/move", { index: 0 }],
       ["DELETE", "a", undefined],
     ]);
+  });
+
+  test("with nothing running a held job starts now; while a job runs rows offer Run next instead", async () => {
+    const { state, calls } = server({ running: false });
+    state.paused = true;
+    state.up_next[1].status = "held";
+    const user = userEvent.setup();
+    renderPage(<QueuePage />);
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    expect(screen.queryByRole("button", { name: /^Run next:/ })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Start now: Second waiting" }));
+    await waitFor(() => expect(screen.getByTestId("state-line")).toHaveTextContent("Second waiting · running"));
+    expect(rows()).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: /^Start now:/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Run next: Third waiting" })).toBeEnabled();
+    expect(calls.filter((c) => c.method !== "GET").map((c) => [c.method, c.path])).toEqual([["POST", "/queue/jobs/b/start_now"]]);
   });
 
   test("pause, resume, checkpoint now, stop after cool-down and stop", async () => {

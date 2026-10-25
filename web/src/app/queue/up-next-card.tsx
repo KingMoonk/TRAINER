@@ -56,6 +56,7 @@ export function UpNextCard({ queue, actions, cluster }: { queue: Queue | undefin
                       n={n}
                       last={jobs.length - 1}
                       active={dragging === job.id || (over === n && dragging !== null)}
+                      idle={!queue.job}
                       actions={actions}
                       cluster={cluster}
                       onDragStart={() => setDragging(job.id)}
@@ -79,6 +80,7 @@ function Row({
   n,
   last,
   active,
+  idle,
   actions,
   cluster,
   onDragStart,
@@ -90,6 +92,8 @@ function Row({
   n: number;
   last: number;
   active: boolean;
+  /** Nothing is running: the row offers Start now instead of Run next. */
+  idle: boolean;
   actions: QueueActions;
   cluster?: ClusterQueue;
   onDragStart: () => void;
@@ -157,9 +161,15 @@ function Row({
         <Button variant="outline" size="sm" aria-label={`${T.moveDown}: ${name}`} disabled={n === last} onClick={() => move(n + 1)}>
           {"▼"}
         </Button>
-        <Button variant="outline" size="sm" aria-label={`${T.runNext}: ${name}`} disabled={n === 0} onClick={() => move(0)}>
-          {T.runNext}
-        </Button>
+        {idle ? (
+          <Button variant="outline" size="sm" aria-label={`${T.startNow}: ${name}`} onClick={() => actions.startNow.mutate(job.id)}>
+            {T.startNow}
+          </Button>
+        ) : (
+          <Button variant="outline" size="sm" aria-label={`${T.runNext}: ${name}`} disabled={n === 0} onClick={() => move(0)}>
+            {T.runNext}
+          </Button>
+        )}
         <Button variant="outline" size="sm" aria-label={`${held ? T.release : T.hold}: ${name}`} onClick={() => actions.hold.mutate({ id: job.id, held: !held })}>
           {held ? T.release : T.hold}
         </Button>

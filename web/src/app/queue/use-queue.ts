@@ -99,6 +99,12 @@ export function useQueueActions() {
     onSuccess: keep,
     onError: failed,
   });
+  // Releases the job, puts it first, lifts a pause and starts the queue, in one call.
+  const startNow = useMutation({
+    mutationFn: (id: string) => unwrap(api.POST("/queue/jobs/{job_id}/start_now", job(id))),
+    onSuccess: keep,
+    onError: failed,
+  });
   const pin = useMutation({
     mutationFn: (v: { id: string; pinned: string | null }) =>
       unwrap(api.POST("/queue/jobs/{job_id}/pin", { ...job(v.id), body: { pinned: v.pinned } })),
@@ -147,7 +153,7 @@ export function useQueueActions() {
       failed(error);
     },
   });
-  return { pause, resume, start, stopAfterCooldown, checkpointNow, remove, restart, hold, move, pin, allMachines, savePlan };
+  return { pause, resume, start, stopAfterCooldown, checkpointNow, remove, restart, hold, move, startNow, pin, allMachines, savePlan };
 }
 
 export type QueueActions = ReturnType<typeof useQueueActions>;
