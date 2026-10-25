@@ -64,13 +64,13 @@ const SIZING = {
   gpu_note: "A RTX 4090 would run this design about 10.0× faster than the CPU does.",
 };
 
-function server({ known = true, sizing = SIZING as unknown } = {}) {
+function server({ known = true, sizing = SIZING as unknown, batchSize }: { known?: boolean; sizing?: unknown; batchSize?: number } = {}) {
   const state = { plans: [] as PlanBody[], lr: [] as unknown[], known, sizing, rates: [] as unknown[], starts: [] as unknown[] };
   mockApi({
     "GET /versions": {
       body: [
         { number: 1, name: "version 1", change: "", parent: null, spec: {}, status: "trained", best_checkpoint: "ck1", scorecard: {}, verdict: "", prediction: {} },
-        { number: 2, name: "version 2", change: "", parent: 1, spec: { train: { optimizer: { config: { lr: 0.0006 } } } }, status: "saved", best_checkpoint: null, scorecard: {}, verdict: "", prediction: {} },
+        { number: 2, name: "version 2", change: "", parent: 1, spec: { train: { optimizer: { config: { lr: 0.0006 } }, ...(batchSize ? { run: { batch_size: batchSize } } : {}) } }, status: "saved", best_checkpoint: null, scorecard: {}, verdict: "", prediction: {} },
       ],
     },
     "GET /pretraining/text_sets": {
@@ -184,6 +184,17 @@ describe("Pretraining page", () => {
     await waitFor(() => expect(screen.getByTestId("selected-line")).toHaveTextContent(/^nothing selected$/));
     expect(await screen.findByTestId("reason")).toHaveTextContent(/^Choose some text first\.$/);
     expect(screen.getByRole("button", { name: "Add to the queue" })).toBeDisabled();
+  });
+
+  test("rows per step start at the batch size the newest version saved, and the person can still pick another", async () => {
+    const state = server({ batchSize: 24 });
+    const user = userEvent.setup();
+    renderPage(<PretrainingPage />, { route: "/pretraining/" });
+    expect(await screen.findByRole("radio", { name: "24" })).toHaveAttribute("aria-checked", "true");
+    await waitFor(() => expect(state.plans.at(-1)).toMatchObject({ rows: 24 }));
+    expect(screen.getAllByRole("radio").filter((r) => ["8", "16", "24", "32"].includes(r.textContent ?? "")).map((r) => r.textContent)).toEqual(["8", "16", "24", "32"]);
+    await user.click(screen.getByRole("radio", { name: "8" }));
+    await waitFor(() => expect(state.plans.at(-1)).toMatchObject({ rows: 8 }));
   });
 
   test("the plan warns that the model is too small, shows the time and the expected curve, and offers a design that fits the hours", async () => {

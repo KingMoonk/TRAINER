@@ -16,7 +16,7 @@ vi.mock("./pieces", () => ({ Pieces: () => <div>Text pieces</div> }));
 afterEach(() => vi.restoreAllMocks());
 
 const registry = fixture.body as Registry;
-const choices: Choices = { L: 2, H: 4, W: 1, V: 0, T: 32, U: 263, token_limit_millions: 0, d: 32, O: [], M: { head: "tied", embedding: "learned", position: "learned", mixer: "attention", channel: "mlp_gelu", norm: "layernorm" } };
+const choices: Choices = { L: 2, H: 4, W: 1, V: 0, T: 32, U: 263, token_limit_millions: 0, d: 32, O: [], batch_size: 4, accumulation: 1, learning_rate: 0.001, weight_decay: 0.01, warmup: 20, dropout: 0.1, eval_every: 25, seed: 42, precision: "fp32", M: { head: "tied", embedding: "learned", position: "learned", mixer: "attention", channel: "mlp_gelu", norm: "layernorm" } };
 const tower = (value: Choices): TowerShape => ({
   knobs: { H: true, W: true },
   blocks: Array.from({ length: value.L }, (_, block) => ({

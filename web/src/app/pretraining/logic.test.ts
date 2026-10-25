@@ -11,6 +11,8 @@ import {
   modeTexts,
   perStepLine,
   queueNote,
+  rowChoices,
+  savedRows,
   readoutView,
   selectedLine,
   specLr,
@@ -181,6 +183,23 @@ describe("errorText", () => {
     expect(errorText(new Error("offline"))).toBe("offline");
     expect(errorText("boom")).toBe("boom");
     expect(errorText(null)).toBe("null");
+  });
+});
+
+describe("rows per step from the saved batch size", () => {
+  it("reads the newest version's batch size, else nothing", () => {
+    expect(savedRows({ spec: { train: { run: { batch_size: 24 } } } })).toBe("24");
+    expect(savedRows({ spec: { train: { run: {} } } })).toBeNull();
+    expect(savedRows({ spec: {} })).toBeNull();
+    expect(savedRows({ spec: { train: { run: { batch_size: "24" } } } })).toBeNull();
+    expect(savedRows(undefined)).toBeNull();
+  });
+
+  it("offers the usual rows plus the saved one in order", () => {
+    expect(rowChoices(null)).toEqual(["8", "16", "32"]);
+    expect(rowChoices("16")).toEqual(["8", "16", "32"]);
+    expect(rowChoices("24")).toEqual(["8", "16", "24", "32"]);
+    expect(rowChoices("64")).toEqual(["8", "16", "32", "64"]);
   });
 });
 

@@ -94,6 +94,68 @@ class WriteSpec(unittest.TestCase):
         self.assertEqual(D.write_spec(spec, D.read_spec(spec)), spec)
 
 
+class TrainingSettings(unittest.TestCase):
+    PATCH = dict(batch_size=32, accumulation=4, learning_rate=0.0005, weight_decay=0.05, warmup=50, dropout=0.2, eval_every=10,
+                 seed=7, precision="bf16")
+
+    def test_a_spec_that_sets_none_reads_as_the_engines_defaults(self):
+        c = choices()
+        self.assertEqual((c["batch_size"], c["accumulation"], c["eval_every"], c["seed"]), (4, 1, 25, 42))
+        self.assertEqual((c["learning_rate"], c["weight_decay"], c["warmup"], c["dropout"], c["precision"]), (0.001, 0.01, 20, 0.1, "fp32"))
+
+    def test_every_setting_is_written_where_the_spec_keeps_it_and_read_back(self):
+        spec = D.write_spec(base(), choices(**self.PATCH))
+        train = spec["train"]
+        self.assertEqual({k: train["run"][k] for k in ("batch_size", "accumulation", "eval_every", "seed")}, dict(batch_size=32, accumulation=4, eval_every=10, seed=7))
+        self.assertEqual((train["optimizer"]["config"]["lr"], train["optimizer"]["config"]["weight_decay"], train["schedule"]["config"]["warmup"]),
+                         (0.0005, 0.05, 50))
+        self.assertEqual((spec["dims"]["dropout"], train["precision"]["id"]), (0.2, "bf16"))
+        self.assertEqual({k: D.read_spec(spec)[k] for k in self.PATCH}, self.PATCH)
+
+    def test_a_default_the_person_did_not_change_is_not_written_into_the_spec(self):
+        spec = D.write_spec(base(), choices(learning_rate=0.002))
+        self.assertNotIn("run", spec["train"])
+        self.assertEqual(spec["train"]["optimizer"]["config"]["lr"], 0.002)
+
+    def test_a_schedule_without_warm_up_reads_none_and_ignores_one(self):
+        flat = base()
+        flat["train"]["schedule"] = {"id": "constant"}
+        flat = validate_spec(flat)
+        self.assertIsNone(D.read_spec(flat)["warmup"])
+        self.assertEqual(D.write_spec(flat, dict(D.read_spec(flat), warmup=30), D.read_spec(flat)), flat)
+
+    def test_a_bad_value_is_refused_with_a_plain_sentence(self):
+        for patch, text in (({"batch_size": 500}, "Batch size must be between 1 and 128."), ({"batch_size": 2.5}, "Batch size must be a whole number."),
+                            ({"accumulation": 0}, "Accumulation must be between 1 and 64."), ({"dropout": 0.9}, "Dropout must be between 0 and 0.5."),
+                            ({"eval_every": 0}, "Eval every must be between 1 and 100000."), ({"seed": -1}, "Seed must be between 0 and 2147483647."),
+                            ({"learning_rate": 5}, "lr must be between"), ({"warmup": -3}, "warmup must be between"),
+                            ({"precision": "fp8"}, "Unknown precision module")):
+            with self.subTest(patch=patch), self.assertRaises(ValueError) as caught:
+                D.write_spec(base(), choices(**patch))
+            self.assertIn(text, str(caught.exception))
+
+    def test_the_not_saved_summary_names_each_changed_setting(self):
+        cur, draft = choices(), choices(**self.PATCH)
+        chips = D.change_chips(base(), D.write_spec(base(), draft), cur, draft)
+        self.assertEqual([c for c in chips if "recipe" in c], [])
+        for text in ("batch size 4 → 32", "gradient accumulation 1 → 4", "learning rate 0.001 → 0.0005", "weight decay 0.01 → 0.05", "warm-up steps 20 → 50",
+                     "dropout 0.1 → 0.2", "evaluate every 25 → 10", "seed 42 → 7", "precision fp32 → bf16"):
+            self.assertIn(text, chips)
+        self.assertEqual(D.warm_outlook(cur, draft)["kind"], "same")
+        self.assertIsNone(D.warm_outlook(cur, cur))
+
+    def test_saving_training_settings_together_is_one_step(self):
+        cur, draft = choices(), choices(**self.PATCH)
+        self.assertEqual(len(D.split_steps(cur, draft)), 1)
+
+    def test_a_catch_up_job_trains_with_the_versions_own_settings(self):
+        spec = D.write_spec(base(), choices(**self.PATCH))
+        job = D.catchup_job("j", 2, spec, "catch_up", None, [])
+        cfg = job.params["config"]
+        self.assertEqual((cfg["batch_size"], cfg["accumulation"], cfg["learning_rate"], cfg["warmup"], cfg["dropout"]), (32, 4, 0.0005, 50, 0.2))
+        self.assertEqual(D.catchup_job("j", 1, base(), "catch_up", None, []).params["config"]["batch_size"], D.ROWS)
+
+
 class Validation(unittest.TestCase):
     def test_a_pick_that_cannot_work_says_why(self):
         s = D.choose(choices(), "mixer", "gru")

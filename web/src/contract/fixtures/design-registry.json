@@ -16,6 +16,28 @@
       "position",
       "head"
     ],
+    "precisions": [
+      {
+        "blurb": "Standard for training. Half the memory of float64.",
+        "name": "float32",
+        "short": "fp32"
+      },
+      {
+        "blurb": "Matrix multiplies run in bfloat16 for speed and memory; weights, optimizer and loss stay float32. Needs no loss scaling.",
+        "name": "bfloat16 mixed",
+        "short": "bf16"
+      },
+      {
+        "blurb": "Matrix multiplies run in float16 under a loss scale that grows and shrinks to avoid underflow; weights, optimizer and loss stay float32. A step whose gradients overflow is skipped.",
+        "name": "float16 mixed",
+        "short": "fp16"
+      },
+      {
+        "blurb": "Double precision. Twice the memory, used for gradient checks; not available on Apple GPUs.",
+        "name": "float64",
+        "short": "fp64"
+      }
+    ],
     "slots": [
       {
         "modules": [

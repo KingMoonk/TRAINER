@@ -11,7 +11,7 @@ import os
 import sys
 
 import studio_registry as registry
-from studio_arch import model_spec_presets
+from studio_arch import TRAINING_DEFAULTS, model_spec_presets
 from studio_compute import MAX_EPOCHS, TOKENS_PER_PARAM, plan, step_seconds, throughput
 from studio_estimate import estimate
 from studio_glossary import MODULE_TERMS, glossary_text
@@ -315,9 +315,25 @@ def param_parts(rows):
     return out
 
 
+RUN_SETTINGS = ("batch_size", "accumulation", "eval_every", "seed")  # train.run: absent means the engine's default (TRAINING_DEFAULTS)
+TRAINING_SETTINGS = (*RUN_SETTINGS, "learning_rate", "weight_decay", "warmup", "dropout", "precision")
+TRAINING_NAMES = dict(batch_size="batch size", accumulation="gradient accumulation", learning_rate="learning rate",
+                      weight_decay="weight decay", warmup="warm-up steps", dropout="dropout", eval_every="evaluate every",
+                      seed="seed", precision="precision")
+
+
+def training_of(spec):
+    """The training settings of a validated spec, as the choices hold them. warmup is None when its schedule has no warm-up."""
+    train, run = spec["train"], spec["train"].get("run") or {}
+    return dict({key: run.get(key, TRAINING_DEFAULTS[key]) for key in RUN_SETTINGS},
+                learning_rate=train["optimizer"]["config"]["lr"], weight_decay=train["optimizer"]["config"]["weight_decay"],
+                warmup=train["schedule"]["config"].get("warmup"), dropout=spec["dims"]["dropout"], precision=train["precision"]["id"])
+
+
 def read_spec(spec):
     """ModelSpec -> the editable choices: L blocks, H heads, W thinking room, V word list, d and T, M the module of every part
-    ({slot: id}; the block slots hold the all-blocks choice) and O the per-block picks ({(block index, slot): id})."""
+    ({slot: id}; the block slots hold the all-blocks choice), O the per-block picks ({(block index, slot): id}) and the
+    training settings (TRAINING_SETTINGS)."""
     spec = validate_spec(spec)
     f, block = _facts(spec), spec["block"]
     word = {"letters": 0, "small word list": 1, "large word list": 2, "whole words": 3}.get(f["words"], 1)
@@ -326,7 +342,7 @@ def read_spec(spec):
     run = spec["train"].get("run") or {}
     return dict(L=f["blocks"], H=block["mixer"]["config"].get("heads") or 4, W=room_choice(block["channel"], f["width"]), V=word,
                 d=f["width"], T=f["context"], U=tokenizer_vocab_size(spec, word),
-                token_limit_millions=run.get("token_limit_millions", 0), M=parts, O=own)
+                token_limit_millions=run.get("token_limit_millions", 0), M=parts, O=own, **training_of(spec))
 
 
 def write_spec(base, s, was=None):
@@ -378,10 +394,21 @@ def write_spec(base, s, was=None):
         run["token_limit_millions"] = token_limit
     else:
         run.pop("token_limit_millions", None)
+    for key in RUN_SETTINGS:  # only what the person changed, so a default the spec never set is not written into it
+        if s.get(key, was[key]) != was[key]:
+            run[key] = s[key]
     if run:
         spec["train"]["run"] = run
     else:
         spec["train"].pop("run", None)
+    train = spec["train"]
+    for key, slot, name in (("learning_rate", "optimizer", "lr"), ("weight_decay", "optimizer", "weight_decay"), ("warmup", "schedule", "warmup")):
+        if s.get(key, was[key]) != was[key] and name in train[slot]["config"]:
+            train[slot]["config"][name] = s[key]
+    if s.get("dropout", was["dropout"]) != was["dropout"]:
+        spec["dims"]["dropout"] = s["dropout"]
+    if s.get("precision", was["precision"]) != was["precision"]:
+        train["precision"] = {"id": s["precision"], "config": {}}
     return validate_spec(spec)
 
 
@@ -439,9 +466,29 @@ def change_chips(old_spec, new_spec, cur, draft):
     if cur["token_limit_millions"] != draft["token_limit_millions"]:
         cap = f"{draft['token_limit_millions']:,} million tokens" if draft["token_limit_millions"] else "off"
         out.append(f"training token limit {cap}")
-    if recipe_of(validate_spec(old_spec)) != recipe_of(new_spec):
+    out += training_changes(cur, draft)
+    if without_settings(recipe_of(validate_spec(old_spec))) != without_settings(recipe_of(new_spec)):
         out.append(T["recipe_change"].format(recipe=recipe_text(new_spec)))
     return out or plain
+
+
+def training_changes(cur, draft):
+    """One chip for every training setting the draft changes, with its old and new value."""
+    out = []
+    for key in TRAINING_SETTINGS:
+        if key in cur and key in draft and cur[key] != draft[key]:
+            a, b = cur[key], draft[key]
+            both_whole = isinstance(a, int) and isinstance(b, int)
+            out.append(f"{TRAINING_NAMES[key]} {a:,} → {b:,}" if both_whole else f"{TRAINING_NAMES[key]} {a} → {b}")
+    return out
+
+
+def without_settings(recipe):
+    """The recipe without the settings the training chips already name (learning rate, weight decay, warm-up)."""
+    out = copy.deepcopy(recipe)
+    for slot, key in (("optimizer", "lr"), ("optimizer", "weight_decay"), ("schedule", "warmup")):
+        out[slot]["config"].pop(key, None)
+    return out
 
 
 def parts_changed(cur, draft):
@@ -471,7 +518,7 @@ def warm_kind(cur, draft):
 
 def warm_outlook(cur, draft):
     """None when nothing changed, else {kind, carries, preserving, chip, state, text} for the cost panel."""
-    if all(cur[k] == draft[k] for k in ("L", "H", "W", "V", "d", "T", "U", "token_limit_millions", "M", "O")):
+    if all(cur[k] == draft[k] for k in ("L", "H", "W", "V", "d", "T", "U", "token_limit_millions", "M", "O")) and not training_changes(cur, draft):
         return None
     kind = warm_kind(cur, draft)
     chip, state = WARM[kind]
@@ -905,6 +952,8 @@ def split_steps(cur, draft):
     for key in ("d", "T", "U", "token_limit_millions"):
         if draft[key] != s[key]:
             take({key: draft[key]})
+    if patch := {key: draft[key] for key in TRAINING_SETTINGS if key in draft and draft[key] != s.get(key)}:
+        take(patch)  # the training settings are one step: they say how to train, not what the network is
     for slot in (*PART_SLOTS, *BLOCK_SLOTS):
         if draft["M"][slot] != s["M"][slot]:
             take(dict(M=dict(s["M"], **{slot: draft["M"][slot]})))
@@ -1066,7 +1115,7 @@ def pill_text(job, base):
 
 def catchup_job(job_id, number, spec, mode, parent_checkpoint, datasets):
     """The pretrain job for a saved version, in the shape the Pretraining page queues."""
-    cfg_ = {**config_from_spec(spec), "steps": STEPS, "batch_size": ROWS, "validation": .1}
+    cfg_ = {"batch_size": ROWS, **config_from_spec(spec), "steps": STEPS, "validation": .1}  # the version's own batch size when it has one
     scratch = mode == "from_scratch"
     return Job(job_id, "pretrain", f"Version {number} {'from scratch' if scratch else 'catch-up'}",
                params={"config": cfg_, "datasets": list(datasets), "mode": mode, "init_from": None if scratch else parent_checkpoint,

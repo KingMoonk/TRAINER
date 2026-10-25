@@ -9,6 +9,19 @@ export type RangeResult = components["schemas"]["RangeResult"];
 export type StepRate = components["schemas"]["StepRate"];
 
 export const ROWS = ["8", "16", "32"] as const;
+export const DEFAULT_ROWS = "16";
+
+/** The rows per step the newest version saved on the model setup page (train.run.batch_size), or null when it saved none. */
+export function savedRows(version: { spec?: unknown } | null | undefined): string | null {
+  const run = (version?.spec as { train?: { run?: { batch_size?: unknown } } } | undefined)?.train?.run ?? {};
+  const rows = run.batch_size;
+  return typeof rows === "number" && Number.isInteger(rows) && rows >= 1 ? String(rows) : null;
+}
+
+/** The rows-per-step choices: the usual ones, plus the version's own batch size when it is none of them. */
+export function rowChoices(saved: string | null): string[] {
+  return saved && !(ROWS as readonly string[]).includes(saved) ? [...ROWS, saved].sort((a, b) => Number(a) - Number(b)) : [...ROWS];
+}
 export const HOLD = ["2%", "5%", "10%"] as const;
 export const LENGTHS = { Short: 1, Medium: 2, Long: 4 } as const; // passes over the chosen text
 export type Length = keyof typeof LENGTHS;
@@ -22,7 +35,7 @@ export function planBody(c: {
   version: number | null;
   datasetIds: string[];
   mode: "catch_up" | "from_scratch";
-  rows: (typeof ROWS)[number];
+  rows: string;
   hold: (typeof HOLD)[number];
   length: Length;
   hours?: Hours;

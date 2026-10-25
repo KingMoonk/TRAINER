@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { VersionTray } from "@/app/builder/version-tray";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BuilderDisclosure, Controls, Costs, Expect, StartFrom, Tray, TryIt, VersionList } from "@/components/builder/side";
+import { TrainingSettings } from "@/components/builder/training-settings";
 import { Experiments } from "@/components/builder/experiments";
 import { Answers } from "@/components/builder/answers";
 import { Explain } from "@/components/builder/explain";
@@ -211,6 +212,7 @@ export function Builder() {
   };
   const setWords = (v: number) => edit({ ...draft!, V: v, U: tokenizerDefaultSize(v, draft!.d, draft!.L) });
   const modelSetting = (key: "d" | "T" | "U" | "token_limit_millions", value: number) => edit({ ...draft!, [key]: value });
+  const trainingSetting = (patch: Partial<Choices>) => edit({ ...draft!, ...patch });
   const loadSpec = (spec: Spec) =>
     run(async () => {
       const choices = await design.read(spec);
@@ -344,6 +346,9 @@ export function Builder() {
           <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
             <div className="min-w-0 lg:col-start-2 lg:row-start-1">
               <Controls registry={registry} cur={cur} draft={draft} knobs={draftTowerQ.data?.knobs} onKnob={knob} onModelSetting={modelSetting} />
+              <div className="mt-3">
+                <TrainingSettings registry={registry} cur={cur} draft={draft} onChange={trainingSetting} />
+              </div>
             </div>
             <div className="min-w-0 lg:col-start-1 lg:row-start-1 lg:row-span-2">
               <Tower

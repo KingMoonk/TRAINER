@@ -61,23 +61,33 @@ class Choices(BaseModel):
     T: int = Field(ge=1)
     U: int = Field(default=263, ge=263, le=65536)
     token_limit_millions: int = Field(default=0, ge=0, le=1000000)
+    # The training settings. Numbers are checked by validate_spec (design.write_spec), which answers a bad one with a plain sentence.
+    batch_size: int | float = 4  # rows per step, 1-128
+    accumulation: int | float = 1  # steps read before one update, 1-64
+    learning_rate: int | float = 0.001
+    weight_decay: int | float = 0.01
+    warmup: int | float | None = None  # steps; null when the design's schedule has no warm-up
+    dropout: int | float = 0.1  # 0-0.5
+    eval_every: int | float = 25  # steps between tests on the held-back text
+    seed: int | float = 42
+    precision: str = "fp32"
     M: Parts
     O: list[Own] = []
 
 
 def choices_in(c: Choices):
     out = dict(L=c.L, H=c.H, W=c.W, V=c.V, d=c.d, T=c.T, M=c.M.model_dump(), O={(o.block, o.slot): o.id for o in c.O})
-    if "U" in c.model_fields_set:
-        out["U"] = c.U
-    if "token_limit_millions" in c.model_fields_set:
-        out["token_limit_millions"] = c.token_limit_millions
+    for key in ("U", "token_limit_millions", *design.TRAINING_SETTINGS):
+        if key in c.model_fields_set:
+            out[key] = getattr(c, key)
     return out
 
 
 def choices_out(s) -> Choices:
     own = [Own(block=block, slot=slot, id=short) for (block, slot), short in sorted(s["O"].items())]
     return Choices(L=s["L"], H=s["H"], W=s["W"], V=s["V"], d=s["d"], T=s["T"], U=s["U"],
-                   token_limit_millions=s["token_limit_millions"], M=Parts(**s["M"]), O=own)
+                   token_limit_millions=s["token_limit_millions"], M=Parts(**s["M"]), O=own,
+                   **{key: s[key] for key in design.TRAINING_SETTINGS})
 
 
 # ---------------------------------------------------------------------------------------------- the registry
@@ -97,7 +107,14 @@ class SlotInfo(BaseModel):
     modules: list[ModuleInfo]
 
 
+class Precision(BaseModel):
+    short: str
+    name: str
+    blurb: str
+
+
 class Registry(BaseModel):
+    precisions: list[Precision]  # the number formats a run can train in (the precision slot), for the training settings
     part_slots: list[str]  # the model-wide parts the tower shows
     block_slots: list[str]  # every block has these
     slots: list[SlotInfo]
@@ -113,7 +130,8 @@ def design_registry() -> Registry:
                       modules=[ModuleInfo(short=m.short, name=m.name, blurb=m.blurb, tip=design.module_tip(slot, m.short),
                                           fields=plain(registry.fields(m))) for m in registry.for_slot(slot)])
              for slot in TOWER_SLOTS]
-    return Registry(part_slots=list(design.PART_SLOTS), block_slots=list(BLOCK_SLOTS), slots=slots, words=list(design.WORDS),
+    precisions = [Precision(short=m.short, name=m.name, blurb=m.blurb) for m in registry.for_slot("precision")]
+    return Registry(precisions=precisions, part_slots=list(design.PART_SLOTS), block_slots=list(BLOCK_SLOTS), slots=slots, words=list(design.WORDS),
                     widths=list(design.WIDTHS), heads=list(design.HEADS))
 
 

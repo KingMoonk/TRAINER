@@ -12,7 +12,7 @@ import { useApiEvents } from "../your-data/events";
 import { runJob, type JobLike } from "../your-data/jobs";
 import { BatchesCard, EnoughCard, SetsCard } from "./cards";
 import { T } from "./copy";
-import { DEFAULT_HOURS, HOLD, PREVIEW_ROWS, ROWS, chosenIds, errorText, planBody, type Hours, type Length, type Preview, type StepRate, type StopWhenFlat } from "./logic";
+import { DEFAULT_HOURS, HOLD, PREVIEW_ROWS, DEFAULT_ROWS, chosenIds, errorText, planBody, type Hours, type Length, type Preview, type StepRate, savedRows, type StopWhenFlat } from "./logic";
 import { LrCard } from "./lr-card";
 import { SizingCard } from "./sizing-card";
 import { TrainCard } from "./train-card";
@@ -23,7 +23,6 @@ export default function PretrainingPage() {
   // The draft choices live here, in the browser; the server turns them into steps, a config and a job.
   const [use, setUse] = useState<Record<string, boolean>>({});
   const [mode, setMode] = useState<"catch_up" | "from_scratch">("catch_up");
-  const [rows, setRows] = useState<(typeof ROWS)[number]>("16");
   const [hold, setHold] = useState<(typeof HOLD)[number]>("5%");
   const [length, setLength] = useState<Length>("Medium");
   const [hours, setHours] = useState<Hours>(DEFAULT_HOURS);
@@ -31,6 +30,10 @@ export default function PretrainingPage() {
   const [chosenSteps, setChosenSteps] = useState<number | null>(null); // from the sizing suggestion; a length chosen afterwards clears it
 
   const versions = useQuery({ queryKey: ["versions"], queryFn: () => unwrap(api.GET("/versions")) });
+  // Rows per step start at the newest version's saved batch size (Model setup) until one is picked here.
+  const [pickedRows, setRows] = useState<string | null>(null);
+  const saved = savedRows(versions.data?.at(-1));
+  const rows = pickedRows ?? saved ?? DEFAULT_ROWS;
   const sets = useQuery({ queryKey: ["pretraining", "text_sets"], queryFn: () => unwrap(api.GET("/pretraining/text_sets")) });
   const ids = useMemo(() => chosenIds(sets.data, use), [sets.data, use]);
 
@@ -131,7 +134,7 @@ export default function PretrainingPage() {
       <SetsCard sets={sets.data} loading={sets.isLoading} chosen={ids} onToggle={toggle} />
       <CollectionCard kind="text" description={T.collectionDesc} />
       <EnoughCard plan={plan.data} estimating={estimating} />
-      <BatchesCard plan={plan.data} preview={cached.data} estimating={estimating} rows={rows} hold={hold} onRows={setRows} onHold={setHold} />
+      <BatchesCard plan={plan.data} preview={cached.data} estimating={estimating} rows={rows} savedRows={saved} hold={hold} onRows={setRows} onHold={setHold} />
       <SizingCard plan={plan.data} estimating={estimating} hours={hours} onHours={setHours} chosenSteps={chosenSteps} onUseSteps={setChosenSteps} />
       <TrainCard
         plan={plan.data}
