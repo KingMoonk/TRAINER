@@ -68,7 +68,7 @@ def register(workspace, emit=lambda text: None):
         with workspace._connect({target}) as connection:
             for path in files:
                 batch = []
-                for line in path.read_text(encoding="utf-8").splitlines():
+                for line in path.read_text(encoding="utf-8").split("\n"):  # not splitlines(): JSON leaves U+2028 unescaped inside strings
                     if not line.strip():
                         continue
                     row = json.loads(line)

@@ -99,7 +99,7 @@ class Journal:
 
     def tail(self, count=50):
         try:
-            lines = self.path.read_text(encoding="utf-8").splitlines()[-count:]
+            lines = [line for line in self.path.read_text(encoding="utf-8").split("\n") if line][-count:]
         except OSError:
             return []
         rows = []
