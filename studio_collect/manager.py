@@ -1,5 +1,8 @@
 """The app's side of the collector: keep the background service running when collection is on, and register its shards.
 
+The collector lives only while the app is open and only when the person turned it on in this session: starting the app turns a saved
+"on" off and stops a collector left from an earlier session, and closing the app stops the one it started (`stand_down`).
+
 One daemon thread per app process. It never fetches anything itself. `tick()` starts the service if the settings want it and it is not
 running, and adds finished shards to the workspace (studio_collect.register), then tells the page through `emit("collect")`.
 """
@@ -8,14 +11,18 @@ from __future__ import annotations
 import threading
 
 from studio_collect import config as cfg
+import studio_platform
 from studio_collect import register, service
+from studio_collect.store import State
 
 INTERVAL = 30.0
 
 
 class Manager:
-    def __init__(self, workspace, emit=lambda kind, payload=None: None, interval=INTERVAL, ensure=service.ensure_running, running=service.running):
+    def __init__(self, workspace, emit=lambda kind, payload=None: None, interval=INTERVAL, ensure=service.ensure_running, running=service.running,
+                 terminate=studio_platform.terminate):
         self.workspace, self.emit, self.interval, self.ensure, self.running = workspace, emit, interval, ensure, running
+        self.terminate = terminate
         self.stop = threading.Event()
         self.thread = None
         self.lock = threading.Lock()
@@ -24,8 +31,17 @@ class Manager:
     def root(self):
         return self.workspace.root
 
+    def stand_down(self):
+        """Stop the collector process if one runs and turn collection off, so it never carries on without the app or starts by itself."""
+        with self.lock:
+            if self.running(self.root):
+                self.terminate(State(self.root).data.get("pid"))
+            if cfg.load(self.root)["enabled"]:
+                cfg.save(self.root, {"enabled": False})
+
     def start(self):
         if self.thread is None or not self.thread.is_alive():
+            self.stand_down()
             self.stop.clear()
             self.thread = threading.Thread(target=self._loop, name="collect-manager", daemon=True)
             self.thread.start()
@@ -34,6 +50,7 @@ class Manager:
         self.stop.set()
         if self.thread is not None:
             self.thread.join(timeout=5)
+        self.stand_down()
 
     def _loop(self):
         while not self.stop.is_set():
