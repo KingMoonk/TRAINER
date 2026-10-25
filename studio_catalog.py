@@ -342,7 +342,14 @@ def _fineweb_shard(number):
 # definitions so existing downloads still open; none of them is a default.
 CATALOG = [_fineweb_shard(number) for number in range(len(FINEWEB_SHARDS))] + [
     dict(_legacy_by_id["cosmopedia_khan"], default=True, records_hint="24,123 textbook units"),
-    {"id": "cosmopedia_openstax", "name": "Cosmopedia · OpenStax-style textbooks", "domain": "Language foundation", "stage": "language", "default": True,
+    {"id": "cosmopedia_v2", "name": "Cosmopedia v2 · synthetic textbooks (SmolLM's pretraining text)", "domain": "Language foundation", "stage": "language", "default": True,
+     "description": "The synthetic textbooks, blog posts and stories SmolLM was pretrained on (cosmopedia-v2 of the smollm-corpus, first of 104 shards): about 1.4 billion characters, "
+                    "roughly 320M tokens of explanatory text, more varied and cleaner than the first Cosmopedia.",
+     "license": "ODC-By 1.0 (dataset card)", "source_url": "https://huggingface.co/datasets/HuggingFaceTB/smollm-corpus",
+     "size_hint": "1.2 GB download (one shard)", "records_hint": "376,289 textbook units (the whole shard)", "bytes": 1_174_424_341,
+     "revision": "3ba9d605774198c5868892d7a8deda78031a781f", "repo": "HuggingFaceTB/smollm-corpus", "filename": "cosmopedia-v2/train-00000-of-00104.parquet",
+     "format": "parquet", "parser": "cosmopedia", "sha256": "5a25721146377d6e7f288c244e991df93e672b8cc3e535fd4aac5da4cdb1491d", "split": "train", "synthetic": True},
+    {"id": "cosmopedia_openstax", "name": "Cosmopedia · OpenStax-style textbooks", "domain": "Language foundation", "stage": "language", "default": False,
      "description": "Textbook units on college subjects written by Mixtral-8x7B from OpenStax outlines (the openstax config of Cosmopedia, first of two shards): about 244M characters, roughly 55M tokens of explanatory prose.",
      "license": "Apache 2.0", "source_url": "https://huggingface.co/datasets/HuggingFaceTB/cosmopedia",
      "size_hint": "174 MB download (one shard)", "records_hint": "63,166 textbook units (the whole shard)", "revision": "0ae6ec63f91742bd2d1eaef4f02232c55d719385",
@@ -397,6 +404,8 @@ def default_catalog_ids():
     return [entry["id"] for entry in CATALOG if entry["id"] in DEFAULT_IDS]
 FORMAT_VERSION = 5  # 2: line endings normalised to \n. 3: OpenAssistant keeps English trees only; HellaSwag text is capitalised and punctuated. 4: GSM8K and MetaMathQA rows share a group per source question. 5: whole-shard sources. Existing conversions remain compatible; ToolACE is new.
 MAX_DOWNLOAD_BYTES = 1_000_000_000
+MAX_PINNED_BYTES = 3_000_000_000  # an entry that records its exact "bytes" and sha256 may be this large: the hash checks it is the file
+DISK_MARGIN = 1.2  # a download needs its file plus the converted rows, about this many times the file, free first
 MAX_RECORD_CHARS = 16_000_000
 _DOWNLOAD_LOCK = threading.Lock()
 
@@ -1030,6 +1039,22 @@ def _checkable(raw, parser):
     return None
 
 
+def _download_limit(entry):
+    """The most bytes one transfer of this entry may take: the global cap, or the entry's own exact size when it is pinned and hashed."""
+    size = entry.get("bytes")
+    if size and entry.get("sha256") and entry.get("revision"):
+        return min(max(MAX_DOWNLOAD_BYTES, int(size)), MAX_PINNED_BYTES)
+    return MAX_DOWNLOAD_BYTES
+
+
+def _check_room(entry, root):
+    """Refuse before downloading when the disk cannot hold the file and its converted rows (the free space of `root`'s drive)."""
+    need = int((entry.get("bytes") or 0) * DISK_MARGIN)
+    if need and shutil.disk_usage(root).free < need:
+        raise ValueError(f"Not enough free disk space for {entry['name']}: it needs about {need / 1e9:.1f} GB and "
+                         f"{shutil.disk_usage(root).free / 1e9:.1f} GB is free.")
+
+
 def _cap_changed(manifest, entry):
     """True when the manifest records a max_records that differs from the entry's now (a lifted or changed cap).
     A manifest without the key is judged by its format version alone."""
@@ -1068,6 +1093,7 @@ def download_dataset(catalog_id, root=ROOT, stop=None, emit=None):
     normalized = folder / "records.jsonl"
     manifest_path = folder / "manifest.json"
     _cancel(stop)
+    _check_room(entry, root)
     # One catalog transfer at a time protects .part/manifests from concurrent writes.
     if not _DOWNLOAD_LOCK.acquire(blocking=False):
         raise RuntimeError("Another catalogue download is already running.")
@@ -1087,7 +1113,8 @@ def download_dataset(catalog_id, root=ROOT, stop=None, emit=None):
         range_bytes = entry.get("range_bytes")
         if not (raw_path.exists() and receipt.get("url") == source_url and receipt.get("range_bytes") == range_bytes
                 and receipt.get("sha256") == file_sha256(raw_path, stop)):
-            receipt = _fetch(source_url, raw_path, stop, emit, **({"range_bytes": range_bytes} if range_bytes else {}))
+            receipt = _fetch(source_url, raw_path, stop, emit, maximum=_download_limit(entry),
+                             **({"range_bytes": range_bytes} if range_bytes else {}))
             if range_bytes:
                 receipt["range_bytes"] = range_bytes
             atomic_json(receipt_path, receipt)

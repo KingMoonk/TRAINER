@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from studio_catalog import (ALL_CATALOG, STARTER_IDS, approve_catalog_rows, CATALOG, LEGACY_CATALOG, STAGES, DownloadCancelled, _fetch, clean_wikitext, convert_record, default_catalog_ids,
+from studio_catalog import (ALL_CATALOG, _check_room, _download_limit, STARTER_IDS, approve_catalog_rows, CATALOG, LEGACY_CATALOG, STAGES, DownloadCancelled, _fetch, clean_wikitext, convert_record, default_catalog_ids,
                             download_dataset, file_sha256, iter_json_array, iter_stories, list_downloads, register_download,
                             source_records, wikitext_paragraphs)
 from studio_core import Workspace, fingerprint, normalize, parse_file
@@ -123,6 +123,19 @@ class DownloadLifecycleTests(unittest.TestCase):
             self.assertEqual(workspace.examples(dataset_id)[0]["quality"], "Good")
             self.assertGreater(workspace._dataset(dataset_id)["rev"], rev)
             self.assertEqual(approve_catalog_rows(workspace), [])
+
+    def test_a_pinned_entry_may_exceed_the_global_cap_and_the_disk_is_checked_first(self):
+        from studio_catalog import MAX_DOWNLOAD_BYTES, MAX_PINNED_BYTES
+        big = next(e for e in ALL_CATALOG if e["id"] == "cosmopedia_v2")
+        self.assertEqual(_download_limit(big), big["bytes"])
+        self.assertGreater(big["bytes"], MAX_DOWNLOAD_BYTES)
+        self.assertEqual(_download_limit({**big, "sha256": ""}), MAX_DOWNLOAD_BYTES)  # unhashed: the global cap
+        self.assertEqual(_download_limit({**big, "bytes": 10 * MAX_PINNED_BYTES}), MAX_PINNED_BYTES)
+        self.assertEqual(_download_limit({"id": "x"}), MAX_DOWNLOAD_BYTES)
+        with tempfile.TemporaryDirectory() as directory:
+            _check_room({"name": "Small", "bytes": 1000}, directory)
+            with self.assertRaisesRegex(ValueError, "Not enough free disk space"):
+                _check_room({"name": "Huge", "bytes": 1 << 62}, directory)
 
     def test_cache_checksums_registration_and_legacy_workspace_recovery(self):
         with tempfile.TemporaryDirectory() as directory, patch("studio_catalog._fetch", side_effect=self.fake_fetch) as fetch:
@@ -266,7 +279,7 @@ class CatalogMetadataTests(unittest.TestCase):
 
     def test_default_ids_are_the_nanochat_recipe_and_stay_in_stage_order(self):
         defaults = default_catalog_ids()
-        self.assertEqual(defaults, ["fineweb_edu_00", "fineweb_edu_01", "fineweb_edu_02", "fineweb_edu_03", "cosmopedia_khan", "cosmopedia_openstax",
+        self.assertEqual(defaults, ["fineweb_edu_00", "fineweb_edu_01", "fineweb_edu_02", "fineweb_edu_03", "cosmopedia_khan", "cosmopedia_v2",
                                     "mmlu_auxiliary", "gsm8k", "smol_smoltalk", "toolace"])
         self.assertEqual(STARTER_IDS, tuple(defaults))
         for catalog_id in defaults:
@@ -276,7 +289,7 @@ class CatalogMetadataTests(unittest.TestCase):
         self.assertEqual({e["stage"] for e in CATALOG}, {"language", "instructions", "knowledge", "reasoning", "conversation"})
         self.assertTrue(all(not e["default"] for e in LEGACY_CATALOG))
         optional = {e["id"] for e in CATALOG if not e["default"]}
-        self.assertEqual(optional, {"fineweb_edu_04", "fineweb_edu_05", "fineweb_edu_06", "fineweb_edu_07", "cosmopedia_openstax_b",
+        self.assertEqual(optional, {"fineweb_edu_04", "fineweb_edu_05", "fineweb_edu_06", "fineweb_edu_07", "cosmopedia_openstax", "cosmopedia_openstax_b",
                                     "dolly15k", "squad2", "oasst1", "smol_smoltalk_b"})
 
     def test_hugging_face_entries_are_hashed_pinned_and_under_the_download_cap(self):
@@ -649,7 +662,7 @@ class NanochatRecipeParserTests(unittest.TestCase):
 class LanguageCorpusSizeTests(unittest.TestCase):
     def test_replacement_catalog_language_text_is_fineweb_edu_and_cosmopedia(self):
         defaults = {e["id"] for e in CATALOG if e["stage"] == "language" and e["default"]}
-        self.assertEqual(defaults, {"fineweb_edu_00", "fineweb_edu_01", "fineweb_edu_02", "fineweb_edu_03", "cosmopedia_khan", "cosmopedia_openstax"})
+        self.assertEqual(defaults, {"fineweb_edu_00", "fineweb_edu_01", "fineweb_edu_02", "fineweb_edu_03", "cosmopedia_khan", "cosmopedia_v2"})
 
     def test_whole_shards_are_unbounded_pinned_hashed_and_licensed(self):
         for catalog_id in ("fineweb_edu_00", "fineweb_edu_07", "cosmopedia_openstax", "smol_smoltalk", "mmlu_auxiliary", "fineweb_edu", "openwebmath", "openwebmath_b", "wikipedia_en_a", "wikipedia_en_b", "gutenberg", "gutenberg_b"):

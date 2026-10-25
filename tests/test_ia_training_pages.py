@@ -102,7 +102,7 @@ class RecommendedCollection(unittest.TestCase):
         from unittest.mock import patch
         import studio_catalog as cat
         stage = {e["id"]: e["stage"] for e in cat.CATALOG}
-        self.assertEqual(self.svc.collection_ids("text"), ["fineweb_edu_00", "fineweb_edu_01", "fineweb_edu_02", "fineweb_edu_03", "cosmopedia_khan", "cosmopedia_openstax"])
+        self.assertEqual(self.svc.collection_ids("text"), ["fineweb_edu_00", "fineweb_edu_01", "fineweb_edu_02", "fineweb_edu_03", "cosmopedia_khan", "cosmopedia_v2"])
         self.assertEqual(self.svc.collection_ids("problems"), [])
         self.assertNotIn("winogrande_check", self.svc.collection_ids("problems"))
         self.assertEqual(set(self.svc.collection_ids("conversations")), {"mmlu_auxiliary", "gsm8k", "smol_smoltalk", "toolace"})
