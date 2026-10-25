@@ -118,6 +118,17 @@ class Ones:
         return self.size
 
 
+def release_maps(*arrays):
+    """Close the memory maps among `arrays` now, so a Windows file is not left locked until the garbage collector gets to them."""
+    for array in arrays:
+        mapped = getattr(array, "_mmap", None)
+        if mapped is not None:
+            try:
+                mapped.close()
+            except (BufferError, ValueError, OSError):
+                pass
+
+
 def _map(path, dtype, size):
     return np.memmap(path, dtype=dtype, mode="r", shape=(size,)) if size else np.empty(0, dtype=dtype)  # mmap refuses an empty file
 
@@ -132,9 +143,14 @@ def open_split(directory, name, vocab_size, entry):
     for kind, size in expected.items():
         if (directory / f"{name}.{kind}.bin").stat().st_size != size:
             raise ValueError(f"{name}.{kind}.bin is not the size its index says.")
-    flags = Ones(flag_count) if entry["all_targets"] else _map(directory / f"{name}.flags.bin", np.uint8, flag_count)
-    return (_map(directory / f"{name}.tokens.bin", dtype, entry["tokens"]), flags,
-            _map(directory / f"{name}.offsets.bin", np.int64, entry["windows"] + 1))
+    opened = []
+    try:
+        for kind, kind_dtype, size in (("tokens", dtype, entry["tokens"]), ("flags", np.uint8, flag_count), ("offsets", np.int64, entry["windows"] + 1)):
+            opened.append(Ones(flag_count) if kind == "flags" and entry["all_targets"] else _map(directory / f"{name}.{kind}.bin", kind_dtype, size))
+    except BaseException:
+        release_maps(*opened)  # a half-opened split must not keep its files locked
+        raise
+    return tuple(opened)
 
 
 def load(root, key, vocab_size):
@@ -144,8 +160,15 @@ def load(root, key, vocab_size):
         index = json.loads((directory / "index.json").read_text(encoding="utf-8"))
         if index["format"] != FORMAT or index["vocab_size"] != vocab_size:
             return None
-        found = {name: (*open_split(directory, name, vocab_size, index[name]), index[name]) for name in SPLITS}
-        os.utime(directory / "index.json")  # Storage ages folders by their newest file: a folder in use is not old
+        found = {}
+        try:
+            for name in SPLITS:
+                found[name] = (*open_split(directory, name, vocab_size, index[name]), index[name])
+            os.utime(directory / "index.json")  # Storage ages folders by their newest file: a folder in use is not old
+        except BaseException:
+            for opened in found.values():
+                release_maps(*opened[:3])  # the splits opened before the failure must not keep the folder locked
+            raise
         return found
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -292,6 +315,8 @@ class TokenCache:
 
     def close(self):
         """Release the memory maps (a Windows file stays locked while one is open)."""
+        for files in self.maps.values():
+            release_maps(*files)
         self.maps.clear()
 
 

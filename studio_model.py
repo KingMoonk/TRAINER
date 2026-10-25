@@ -381,6 +381,10 @@ class MappedWindows(WindowStore):
         super().__init__(tokens, flags, offsets)
         self.entry = entry
 
+    def close(self):
+        """Close the memory maps, so the folder can be removed or rebuilt on Windows (the windows must not be read afterwards)."""
+        studio_shards.release_maps(self.tokens, self.flags, self.offsets)
+
     def describe(self):
         count = self.entry["windows"]
         return {"windows": count, "tokens": self.entry["tokens"] - count, "targets": self.entry["targets"],
