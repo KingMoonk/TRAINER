@@ -5,6 +5,7 @@ reads; a document that is mostly personal data (a contact list) is dropped by th
 """
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
 
@@ -60,12 +61,48 @@ BOILERPLATE = ("lorem ipsum", "javascript is disabled", "enable javascript", "al
                "404 not found", "access denied", "please enable cookies", "captcha", "this site requires javascript")
 
 
+LATIN_SHARE = 0.85       # of the letters: the model learns English, so text in another script is not its material
+NUMBER_SHARE = 0.3       # of the letters and digits: a price list or a log, not prose
+STRUCTURE_SHARE = 0.06   # of the visible characters, square brackets and double quotes: a JSON or array dump
+TABLE_SHARE = 0.7        # of the lines, ones with the same count (2+) of one delimiter: a CSV or a table
+
+
 def _words(text):
     return re.findall(r"\w+", text)
 
 
-def text_problem(text):
-    """Why a document is not worth training on, or "" when it is. Gopher/C4-style rules, loose enough for code and maths."""
+def _latin(text):
+    """Share of the letters that are Latin script (ASCII and the Latin-1/Extended-A accents)."""
+    letters = [c for c in text if c.isalpha()]
+    return sum(c < "ɐ" for c in letters) / len(letters) if letters else 1.0
+
+
+def _structured(text, visible):
+    """Why a document is data rather than prose ("structured data", "mostly numbers"), or ""."""
+    stripped = text.strip()
+    if stripped[:1] in "[{":
+        try:
+            json.loads(stripped)
+            return "structured data"
+        except ValueError:
+            pass
+    if sum(c in '[]"' for c in visible) / max(1, len(visible)) > STRUCTURE_SHARE:    # not braces: LaTeX is full of them
+        return "structured data"
+    alnum = [c for c in visible if c.isalnum()]
+    if sum(c.isdigit() for c in alnum) / max(1, len(alnum)) > NUMBER_SHARE:
+        return "mostly numbers"
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) >= 5:
+        for delimiter in (",", "\t", "|", ";"):
+            width, rows = Counter(line.count(delimiter) for line in lines).most_common(1)[0]
+            if width >= 2 and rows / len(lines) >= TABLE_SHARE:
+                return "structured data"
+    return ""
+
+
+def text_problem(text, code=False):
+    """Why a document is not worth training on, or "" when it is. Gopher/C4-style rules, loose enough for code and maths;
+    code=True (source code) skips the checks that tell prose from data, since code is full of brackets, digits and delimiters."""
     n = len(text)
     if n < MIN_CHARS:
         return "too short"
@@ -73,6 +110,8 @@ def text_problem(text):
         return "too long"
     if "\x00" in text or text.count("�") > 0.01 * n:
         return "binary or broken text"
+    if _latin(text) < LATIN_SHARE:
+        return "not English"
     words = _words(text)
     if len(words) < 30:
         return "too few words"
@@ -82,6 +121,8 @@ def text_problem(text):
     visible = [c for c in text if not c.isspace()]
     if sum(c.isalnum() for c in visible) / max(1, len(visible)) < 0.45:
         return "mostly symbols"
+    if not code and (problem := _structured(text, visible)):
+        return problem
     low = text.lower()
     if any(phrase in low for phrase in BOILERPLATE) and n < 3000:
         return "boilerplate"
@@ -114,6 +155,8 @@ def _pair_text(question, answer):
     text = f"{question} {answer}"
     if "\x00" in text or text.count("�") > 0.01 * len(text):
         return "binary or broken text"
+    if _latin(text) < LATIN_SHARE:
+        return "not English"
     if any(phrase in text.lower() for phrase in BOILERPLATE) and len(text) < 600:
         return "boilerplate"
     words = _words(answer)

@@ -98,6 +98,20 @@ class Cleaning(unittest.TestCase):
         self.assertEqual(clean.pair_problem("What is the boiling point of water at sea level?", "About 100 degrees Celsius at sea level."), "")
         self.assertEqual(clean.pair_problem("why?", "because"), "too short")
 
+    def test_data_dumps_and_other_languages_are_not_prose(self):
+        prices = '[' + ", ".join(f'{{"t": {1700000000 + i * 60}, "p": 0.{i % 97:02d}}}' for i in range(40)) + ']'
+        table = "\n".join(f"{i},{i * 3},{i * 7},sensor-{i % 4}" for i in range(30))
+        thai = "พระราชบัญญัติฉบับนี้ให้ใช้บังคับตั้งแต่วันถัดจากวันประกาศในราชกิจจานุเบกษาเป็นต้นไป " * 6
+        self.assertEqual(clean.text_problem(prices), "structured data")
+        self.assertIn(clean.text_problem(table), ("structured data", "mostly numbers"))
+        self.assertEqual(clean.text_problem(thai), "not English")
+        self.assertEqual(clean.pair_problem("พระราชบัญญัตินี้ใช้บังคับเมื่อใด", "ตั้งแต่วันถัดจากวันประกาศในราชกิจจานุเบกษา"), "not English")
+        code = "\n".join(f"def f{i}(rows, limit={i}):\n    return [r[{i}] for r in rows if r[0] > limit]" for i in range(12))
+        self.assertEqual(clean.text_problem(code, code=True), "")
+        self.assertEqual(clean.text_problem(prose(2) + " Café naïve résumé, déjà vu."), "")
+        latex = prose(3) + " " + " ".join(r"\frac{a_{%d}}{b^{2}} + \sqrt{x_{%d}}" % (i, i) for i in range(4))
+        self.assertEqual(clean.text_problem(latex), "")
+
 
 class Duplicates(unittest.TestCase):
     def example(self, text):

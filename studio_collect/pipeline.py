@@ -102,7 +102,7 @@ class Pipeline:
         if c.kind == "qa":
             problem = clean.pair_problem(c.question, c.answer)
         else:
-            problem = clean.text_problem(c.text)
+            problem = clean.text_problem(c.text, code=c.source.startswith("github:") or c.meta.get("topic") == "code")
         if problem:
             return self.drop(c.group, "quality")
         redactions = 0

@@ -74,6 +74,21 @@ class Planning(unittest.TestCase):
         self.assertEqual([f["path"] for f in files], ["train-0.parquet"])
         self.assertEqual(planned, 5_000_000)
 
+    def test_a_term_fits_only_at_the_start_of_a_word(self):
+        self.assertEqual(hub.fit_score({"id": "ops/decode-logs"}, ("code",)), 0)
+        self.assertEqual(hub.fit_score({"id": "zoo/claw-machine"}, ("law",)), 0)
+        self.assertGreater(hub.fit_score({"id": "nvidia/OpenMathInstruct"}, ("math",)), 0)
+
+    def test_media_and_non_english_datasets_are_skipped(self):
+        cfg = self.config
+        self.assertIn("not text only", hub.screen(hub_entry("lab/science-vqa", tags=["modality:image"]), cfg))
+        self.assertIn("not English", hub.screen(hub_entry("gov/science-th", tags=["language:th"]), cfg))
+        self.assertEqual(hub.screen(hub_entry("lab/science-en", tags=["language:en", "language:fr", "modality:tabular"]), cfg), "")
+        self.assertIn("not text", hub.screen({**hub_entry("m/science-prices"), "tags": ["license:mit", "modality:timeseries"]}, cfg))
+
+    def test_a_plan_made_under_older_screening_rules_is_made_again(self):
+        self.assertEqual(hub.Adapter.plan_inputs(self.config)["screen"], hub.SCREEN)
+
 
 class Download(unittest.TestCase):
     def test_a_dropped_connection_resumes_with_a_range_request_and_verifies_the_hash(self):
@@ -123,6 +138,14 @@ class Rows(unittest.TestCase):
         self.assertEqual(pair.url, "https://huggingface.co/datasets/a/b")
         self.assertIn("Hugging Face", pair.attribution)
         self.assertEqual(hub.row_to_candidates({"id": 4, "label": 1}, self.item, "r"), [])
+
+    def test_a_json_array_larger_than_one_read_is_read_whole(self):
+        rows = [{"text": prose(i, 10)} for i in range(120)]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "train.json"
+            path.write_text(json.dumps(rows), encoding="utf-8")
+            self.assertGreater(path.stat().st_size, 64 * 1024)
+            self.assertEqual(list(hub.iter_rows(path)), rows)
 
 
 class EndToEnd(unittest.TestCase):
