@@ -4,6 +4,7 @@
 #   make run        the built app: API serving web/out, opens the browser (python app.py); tailnet / -> API
 #   make test       ruff + all unit tests; `make test T="tests.test_x tests.test_y"` for just those modules
 #   make network-bench BENCH_ARGS="--output /tmp/network.json"  synthetic shared-link transfer discovery
+#   make voice-setup  optional: voice mode's speech engines (pip into .venv, clone Breeze TTS, fetch both models; several GB)
 #   make web-check  web/: Vitest, lint, typecheck, build
 # Windows: install make once (`winget install ezwinports.make`), then the same commands work in PowerShell.
 
@@ -18,10 +19,10 @@ endif
 T ?=
 BENCH_ARGS ?= --output artifacts/network-discovery.json
 
-.PHONY: help setup dev run test test-ci web-test web-lint web-build web-check web-fixtures network-bench
+.PHONY: help setup dev run test test-ci web-test web-lint web-build web-check web-fixtures network-bench voice-setup
 
 help:
-	@echo "make setup | dev | run | test [T=\"tests.test_x\"] | test-ci | web-test | web-lint | web-build | web-check | web-fixtures | network-bench [BENCH_ARGS=\"...\"]"
+	@echo "make setup | dev | run | test [T=\"tests.test_x\"] | test-ci | web-test | web-lint | web-build | web-check | web-fixtures | voice-setup | network-bench [BENCH_ARGS=\"...\"]"
 
 setup:
 	$(SYS_PY) tasks.py setup
@@ -54,3 +55,6 @@ web-check: web-test web-lint web-build
 
 network-bench:
 	$(VENV_PY) tasks.py network:bench $(BENCH_ARGS)
+
+voice-setup:
+	$(VENV_PY) tasks.py voice:setup

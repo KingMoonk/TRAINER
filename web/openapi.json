@@ -267,6 +267,21 @@
         "title": "Body_import_pretrained_post_training_imports_post",
         "type": "object"
       },
+      "Body_transcribe_voice_transcribe_post": {
+        "properties": {
+          "audio": {
+            "contentMediaType": "application/octet-stream",
+            "description": "16 kHz mono 16-bit PCM WAV",
+            "title": "Audio",
+            "type": "string"
+          }
+        },
+        "required": [
+          "audio"
+        ],
+        "title": "Body_transcribe_voice_transcribe_post",
+        "type": "object"
+      },
       "BusyItem": {
         "properties": {
           "done": {
@@ -2357,6 +2372,62 @@
           "text"
         ],
         "title": "Ended",
+        "type": "object"
+      },
+      "Engine": {
+        "properties": {
+          "device": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "where it is loaded ('cuda' or 'cpu'); null when not loaded",
+            "title": "Device"
+          },
+          "engine": {
+            "description": "'stt' (speech to text) or 'tts' (text to speech)",
+            "title": "Engine",
+            "type": "string"
+          },
+          "installed": {
+            "description": "false until `make voice-setup` has installed it",
+            "title": "Installed",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "loaded": {
+            "description": "true once a request has loaded it; it stays loaded until a training job needs the GPU",
+            "title": "Loaded",
+            "type": "boolean"
+          },
+          "missing": {
+            "description": "a sentence naming what is missing and the command that fixes it; empty when installed",
+            "title": "Missing",
+            "type": "string"
+          },
+          "model": {
+            "description": "the model's name on Hugging Face",
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "engine",
+          "label",
+          "model",
+          "installed",
+          "loaded",
+          "device",
+          "missing"
+        ],
+        "title": "Engine",
         "type": "object"
       },
       "EnoughText": {
@@ -11011,6 +11082,19 @@
         "title": "SourcesUpdate",
         "type": "object"
       },
+      "SpeakRequest": {
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "SpeakRequest",
+        "type": "object"
+      },
       "SpecBody": {
         "properties": {
           "spec": {
@@ -12319,6 +12403,19 @@
         "title": "Tower",
         "type": "object"
       },
+      "Transcript": {
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "Transcript",
+        "type": "object"
+      },
       "Tried": {
         "properties": {
           "choices": {
@@ -12673,6 +12770,22 @@
           }
         },
         "title": "VersionRequest",
+        "type": "object"
+      },
+      "VoiceStatus": {
+        "properties": {
+          "engines": {
+            "items": {
+              "$ref": "#/components/schemas/Engine"
+            },
+            "title": "Engines",
+            "type": "array"
+          }
+        },
+        "required": [
+          "engines"
+        ],
+        "title": "VoiceStatus",
         "type": "object"
       },
       "Warm": {
@@ -22073,6 +22186,116 @@
         "summary": "Version Weights Meta",
         "tags": [
           "versions"
+        ]
+      }
+    },
+    "/voice": {
+      "get": {
+        "description": "Both engines, speech to text first.",
+        "operationId": "status_voice_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Status",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/voice/speak": {
+      "post": {
+        "description": "The text spoken in the default voice, as WAV. The first call loads the model, which takes a while.",
+        "operationId": "speak_voice_speak_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpeakRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "audio/wav": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Speak",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/voice/transcribe": {
+      "post": {
+        "description": "The words in the recording. The first call loads the model, which takes a while.",
+        "operationId": "transcribe_voice_transcribe_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_transcribe_voice_transcribe_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Transcript"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Transcribe",
+        "tags": [
+          "voice"
         ]
       }
     }

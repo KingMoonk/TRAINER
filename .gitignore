@@ -17,3 +17,4 @@ __pycache__/
 /web/.next/
 /web/out/
 .env
+/.voice/

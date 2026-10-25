@@ -10,6 +10,7 @@
     python tasks.py web:e2e                   Playwright e2e flows against web/out. CI only: run web:build first, and `pnpm exec playwright install chromium` once.
     python tasks.py web:fixtures              re-record web/src/contract/fixtures from FakeServices (tests/web_fixtures.py); then run web:test.
     python tasks.py web:build                 next build: the static export in web/out.
+    python tasks.py voice:setup               voice mode's optional engines: pip-installs requirements-voice.txt into .venv, clones the Breeze TTS code, fetches both models' weights (several GB). Run by the person, never by the app.
     python tasks.py setup                     once per machine: .venv, the right torch (MPS on a Mac, CUDA with nvidia-smi), requirements, pnpm install; prints the device. Any Python 3.12+.
     python tasks.py dev                       the live loop: the API (restarts on a .py change) and `pnpm dev` on 127.0.0.1, one terminal, Ctrl+C stops both; points `tailscale serve` at them. docs/node.md, "Developing".
     python tasks.py run                       the built app (app.py on 127.0.0.1:8787); points `tailscale serve` at it.
@@ -156,6 +157,12 @@ def web_e2e():
 
 def web_fixtures():
     run(PY, "-m", "tests.web_fixtures")
+
+
+def voice_setup():
+    """Install voice mode's engines into .venv and fetch their weights (studio_voice.py, requirements-voice.txt)."""
+    run(PY, "-m", "pip", "install", "-r", "requirements-voice.txt")
+    run(PY, "studio_voice.py")
 
 
 def web_build():
@@ -528,7 +535,7 @@ def network_bench(args):
 
 TASKS = {"test": test, "test:ci": test_ci, "test:ci:e2e": test_ci_e2e, "profile": profile,
          "web:lint": web_lint, "web:test": web_test, "web:e2e": web_e2e, "web:fixtures": web_fixtures,
-         "web:build": web_build, "network:bench": network_bench, "setup": setup, "dev": dev, "run": run_app}
+         "web:build": web_build, "network:bench": network_bench, "voice:setup": voice_setup, "setup": setup, "dev": dev, "run": run_app}
 
 if __name__ == "__main__":
     name, args = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ("", [])

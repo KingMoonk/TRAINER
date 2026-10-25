@@ -551,6 +551,19 @@ class Services:
         """ablate: optional [(block, head), ...] mean-ablated for this reply only."""
         raise NotImplementedError
 
+    # voice mode (studio_voice): speech in, speech out ------------------------------------------------------------
+    def voice_status(self):
+        """[{engine, label, model, installed, loaded, device, missing}], speech to text then text to speech."""
+        raise NotImplementedError
+
+    def transcribe(self, wav_bytes):
+        """The text in 16 kHz mono 16-bit PCM WAV bytes. ValueError for audio that cannot be read, RuntimeError while the engine cannot run."""
+        raise NotImplementedError
+
+    def speak(self, text):
+        """WAV bytes of `text` in the one default voice. ValueError for no text, RuntimeError while the engine cannot run."""
+        raise NotImplementedError
+
     # inspect (S7): thin wrappers over studio_inspect, numpy out; version is a Version or number -----------------
     def inspect_forward(self, version, text, hooks=True):
         """{'ids' [1,T], 'tokens' [[str]], 'logits' [1,T,V], 'hooks' {name: array}} (studio_inspect.forward)."""
@@ -1230,6 +1243,28 @@ class FakeServices(Services):
     def chat(self, version, messages, on_text, stop, ablate=None):
         return f"[reply with {len(ablate)} heads off]" if ablate else "[reply]"
 
+    def voice_status(self):
+        return [{"engine": "stt", "label": "Speech to text", "model": "nvidia/parakeet-tdt-0.6b-v3", "installed": True, "loaded": False,
+                 "device": None, "missing": ""},
+                {"engine": "tts", "label": "Text to speech", "model": "BreezeBlue/Breeze-TTS-2", "installed": True, "loaded": False,
+                 "device": None, "missing": ""}]
+
+    def transcribe(self, wav_bytes):
+        import studio_voice
+        studio_voice.wav_samples(wav_bytes)  # the same refusals as the real engine
+        return "This is a test transcript."
+
+    def speak(self, text):
+        import math
+
+        import numpy as np
+
+        import studio_voice
+        if not (text or "").strip():
+            raise ValueError("There is no text to speak.")
+        t = np.arange(int(0.2 * 24000)) / 24000
+        return studio_voice.wav_bytes_from(0.2 * np.sin(2 * math.pi * 440 * t), 24000)  # a short tone
+
     def teach_correction(self, version, messages, correction, whole_answer=False):
         pass
 
@@ -1528,6 +1563,8 @@ class WorkspaceServices(Services):
         self.ledger = studio_memory.Ledger()  # the bytes of the chat models in _models
         self._chat_lock = threading.RLock()  # _models, _using, _job_running and where each model is
         self._using, self._job_running = {}, False  # per model, the lock a reply holds so the model is not moved under it
+        import studio_voice
+        self._voice = studio_voice.Voice(busy=lambda label: self.busy(label))  # voice mode's engines, loaded on first use
         self._lock = threading.RLock()
         self._made = {}  # cache key -> the lock held while it is being made
         self._data = {}  # reads of the stored data, kept until it next changes
@@ -3362,6 +3399,15 @@ class WorkspaceServices(Services):
         with using:  # a move to another device waits for the reply: its cache lives on the device it started on
             return model.generate(messages, on_text=on_text, stop=stop, ablate=[tuple(h) for h in ablate] if ablate else None)
 
+    def voice_status(self):
+        return self._voice.status()
+
+    def transcribe(self, wav_bytes):
+        return self._voice.transcribe(wav_bytes)
+
+    def speak(self, text):
+        return self._voice.speak(text)
+
     def _chat_device(self):
         """Where a chat model should live now (the chat lock is held): the CUDA GPU while no job runs, the CPU otherwise, and on
         a Mac (MPS shares the CPU's memory) or a machine without a GPU always the CPU."""
@@ -3406,12 +3452,14 @@ class WorkspaceServices(Services):
         with self._chat_lock:
             self._job_running = True
             self._move_chat("cpu")
+        self._voice.job_started()  # voice leaves the GPU too
 
     def chat_job_ended(self, job):
         """The queue's call after a job ended, on the runner thread: chat may use the CUDA GPU again."""
         with self._chat_lock:
             self._job_running = False
             self._move_chat(self._chat_device())
+        self._voice.job_ended()
 
     def inspect_forward(self, version, text, hooks=True):
         import studio_inspect
