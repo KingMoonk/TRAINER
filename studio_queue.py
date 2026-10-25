@@ -21,6 +21,7 @@ KINDS = ("pretrain", "quicktest", "compare", "post_round", "restore_answers", "c
          "pretrain_distributed", "diloco_member", "rlhf_loop", "mlperf")
 MEMORY = {"half": .5, "most": .75, "all": 1.}
 QUEUED = ("waiting", "held")  # jobs listed under Up next, in order; only "waiting" ones are picked to run
+SIZING_PERCENT = "sizing_percent"  # with SIZING: how far the size of the text is worked out, in percent (set in memory; not saved on its own)
 SIZING = "sizing"  # a param of a job added before the size of its text was known: it keeps its place but is not run until fill() gives its steps
 FAILED_SHOWN = 5
 MIN_FREE = 2 * 2 ** 30  # a job needs at least this much free disk to start
@@ -335,6 +336,20 @@ class Runner:
         self._emit("queue", {"job": job_id})
         return True
 
+    def size_progress(self, job_id, percent):
+        """Note how far the size of the text is worked out (0-100) for a job still waiting for it (params[SIZING]), and announce it when
+        the percent moved. Set on the job without a save, since a restart fails a sizing job anyway. False when it is gone."""
+        with self.lock:
+            job = next((j for j in self._queued() if j.id == job_id and j.params.get(SIZING)), None)
+            if job is None:
+                return False
+            percent = max(0, min(100, int(percent)))
+            if job.params.get(SIZING_PERCENT) == percent:
+                return True
+            job.params[SIZING_PERCENT] = percent
+        self._emit("queue", {"job": job_id})
+        return True
+
     def fail(self, job_id, error):
         """End a job still waiting for its size (params[SIZING]) as failed, with `error` as its reason."""
         with self.lock:
@@ -458,6 +473,11 @@ class Runner:
         handler = self.handlers.get("checkpoint_now")
         if not main or not handler:
             return False
+        run = main.params.get("output_dir")
+        if run and not (Path(run) / "last.npz").is_file():  # nothing saved yet to cool down from
+            if not then_stop:
+                self._emit("checkpoint", {"job": main.id, "phase": "failed", "error": "The run has not saved a checkpoint yet."})
+            return False
         child = Job("checkpoint_now", f"Checkpoint of {main.label or main.kind}", params={**main.params, "parent": main.id})
 
         def work():
@@ -468,11 +488,8 @@ class Runner:
                 error = handle.error
             except Exception as exc:  # noqa: BLE001
                 error = explain(exc)[0]
-            if error:
-                self._emit("checkpoint", {"job": main.id, "phase": "failed", "error": error})
-                return
-            self._emit("checkpoint", {"job": main.id, "phase": "done"})
-            if then_stop:
+            self._emit("checkpoint", {"job": main.id, **({"phase": "failed", "error": error} if error else {"phase": "done"})})
+            if then_stop:  # a failed cool-down still stops: the person asked for the run to end
                 self.stop_event.set()
                 self.wake.set()
         threading.Thread(target=work, daemon=True).start()

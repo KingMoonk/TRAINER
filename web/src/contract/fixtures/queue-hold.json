@@ -41,6 +41,7 @@
         "note": "First try",
         "owner": "",
         "params": {},
+        "sizing": null,
         "status": "waiting"
       },
       {
@@ -56,6 +57,7 @@
         "note": "",
         "owner": "",
         "params": {},
+        "sizing": null,
         "status": "held"
       }
     ]

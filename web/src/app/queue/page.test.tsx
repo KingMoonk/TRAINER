@@ -8,7 +8,7 @@ import QueuePage from "./page";
 
 // The Queue page against a mocked API (the component tier of tests/queue.spec.ts, which keeps the browser-only flows: drag and keyboard reorder).
 
-type Job = { id: string; kind: string; label: string; note: string; params: object; status: string; eta_s: number | null; created_at: number; error: string; details?: string };
+type Job = { id: string; kind: string; label: string; note: string; params: object; status: string; eta_s: number | null; created_at: number; error: string; details?: string; sizing?: number | null };
 const job = (id: string, label: string, over: Partial<Job> = {}): Job => ({ id, kind: "pretrain", label, note: "", params: {}, status: "waiting", eta_s: 1800, created_at: 0, error: "", ...over });
 
 const PLAN = { hours: "any", start_hour: 22, end_hour: 7, memory: "most", idle_only: true, idle_after_s: 60, pause_on_battery: true, keep_awake: false, chat_follows_best: true };
@@ -311,6 +311,21 @@ describe("Queue page", () => {
     expect(rows()[1]).toBe(row);
     expect(screen.getByTestId("progress-line")).toBe(progress);
     expect(screen.getByRole("progressbar", { name: "Job progress" })).not.toHaveAttribute("aria-valuenow", "10");
+  });
+
+  test("a run still waiting for the size of its text shows a progress bar with the percent, and none once it is filled", async () => {
+    const { state } = server();
+    state.up_next = [job("s1", "Version 4, once the size of its text is known", { params: { sizing: true }, sizing: 40 }), job("b", "Second waiting")];
+    renderPage(<QueuePage />);
+    const bar = await screen.findByRole("progressbar", { name: "Size check progress" });
+    expect(bar).toHaveAttribute("aria-valuenow", "40");
+    expect(screen.getByTestId("sizing")).toHaveTextContent("Working out the size of the text: 40%");
+    expect(within(rows()[1]).queryByTestId("sizing")).toBeNull();
+
+    state.up_next = [job("s1", "Version 4 from scratch", { sizing: null }), job("b", "Second waiting")];
+    emit("queue", {});
+    await waitFor(() => expect(screen.queryByTestId("sizing")).toBeNull());
+    expect(screen.queryByRole("progressbar", { name: "Size check progress" })).toBeNull();
   });
 
   test("a failed call is a toast, not a broken page", async () => {

@@ -457,7 +457,7 @@ def pretrain_start(body: PlanRequest, request: Request, services: Services) -> S
         try:
             ids = list(dict.fromkeys(body.dataset_ids))
             if services.cached_preview(ids, body.preview_rows) is None:
-                services.pretrain_preview(ids, body.preview_rows)
+                services.pretrain_preview(ids, body.preview_rows, progress=lambda percent: services.size_progress(added.id, percent))
             if stop.is_set():
                 raise RuntimeError("Working out the size of the text was stopped. Add the run again.")
             ready = pretrain_plan(body, services)

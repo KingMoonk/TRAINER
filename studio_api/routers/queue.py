@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from studio_api.app import get_services
 from studio_api.models_queue_data import Model
@@ -33,6 +33,13 @@ class JobModel(Model):
     node: str = ""  # the peer it runs or ran on; "" when it runs here
     epoch: int = 0  # the lease epoch it was last placed at
     owner: str = ""  # a job another node queued and this one runs: how to reach that node
+
+    @computed_field  # percent of the text's size worked out while a queued job still waits for it (params.sizing); null for any other job
+    @property
+    def sizing(self) -> int | None:
+        if self.status not in ("waiting", "held") or not self.params.get("sizing"):
+            return None
+        return int(self.params.get("sizing_percent") or 0)
 
 
 class NewJob(BaseModel):

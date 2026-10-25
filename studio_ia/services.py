@@ -278,6 +278,11 @@ class Services:
         """End a job still waiting for the size of its text as failed, with `error` as its reason."""
         raise NotImplementedError
 
+    def size_progress(self, job_id, percent):
+        """Note that the size of the text a job (params["sizing"]) waits for is `percent` (0-100) worked out, so the queue shows it
+        on that job. False when it has left the queue meanwhile."""
+        raise NotImplementedError
+
     def move_up(self, job_id):
         raise NotImplementedError
 
@@ -391,10 +396,11 @@ class Services:
         lora: settings dict ({} for the defaults) to fine-tune small adapters instead of every weight. Returns the new Version."""
         raise NotImplementedError
 
-    def pretrain_preview(self, dataset_ids, rows=16):
+    def pretrain_preview(self, dataset_ids, rows=16, progress=None):
         """{pieces, params, context, first_rows}: pieces = tokenised size of the chosen text, params = current
         version's parameter count, first_rows = first `rows` rows of token groups, each a list of example numbers
-        with -1 where an example ends."""
+        with -1 where an example ends. `progress(percent)`, when given, is called as the work moves along (0-100, rising; not called
+        when the answer is already known)."""
         raise NotImplementedError
 
     def cached_preview(self, dataset_ids, rows=16):
@@ -857,6 +863,16 @@ class FakeServices(Services):
         self.emit("queue", self._queue)
         return True
 
+    def size_progress(self, job_id, percent):
+        job = next((j for j in self._queue.up_next if j.id == job_id and j.params.get("sizing")), None)
+        if job is None:
+            return False
+        percent = max(0, min(100, int(percent)))
+        if job.params.get("sizing_percent") != percent:
+            job.params["sizing_percent"] = percent
+            self.emit("queue", self._queue)
+        return True
+
     def fail_job(self, job_id, error):
         job = next((j for j in self._queue.up_next if j.id == job_id and j.params.get("sizing")), None)
         if job is not None:
@@ -1070,7 +1086,9 @@ class FakeServices(Services):
     def text_size(self, dataset_ids, spec):
         return {"characters": 8_000_000, "params": 1_000_000, "chars_per_piece": None}
 
-    def pretrain_preview(self, dataset_ids, rows=16):
+    def pretrain_preview(self, dataset_ids, rows=16, progress=None):
+        for percent in (10, 40, 100) if progress else ():
+            progress(percent)
         row = [(i // 7) % 4 if i % 7 else -1 for i in range(32)]
         return {"pieces": 2_000_000, "params": 1_000_000, "context": 256, "first_rows": [row[r:] + row[:r] for r in range(rows)]}
 
@@ -1956,6 +1974,9 @@ class WorkspaceServices(Services):
     def fail_job(self, job_id, error):
         self.runner.fail(job_id, error)
 
+    def size_progress(self, job_id, percent):
+        return self.runner.size_progress(job_id, percent)
+
     def continue_run(self, number, kind, steps, dataset_ids=(), width=None, layers=None, spec=None, rows=16, hold=.05):
         from studio_ia import continue_run as cont
         from studio_ia import pretraining_plan as plan
@@ -2252,7 +2273,7 @@ class WorkspaceServices(Services):
         from studio_data_cache import SummaryCache
         return SummaryCache(self.root / "data" / "summaries.sqlite", SUMMARY_FORMAT)
 
-    def pretrain_preview(self, dataset_ids, rows=16):
+    def pretrain_preview(self, dataset_ids, rows=16, progress=None):
         import studio_estimate
         import studio_spec
         from studio_model import read_metrics
@@ -2262,20 +2283,30 @@ class WorkspaceServices(Services):
         spec = studio_spec.validate_spec(v.spec)
         context = spec["dims"]["n_ctx"]
 
+        def report(percent):
+            if progress:
+                progress(percent)
+
         def make(task):
             import studio_data_kinds as dk
+            report(0)
             self.note("Reading a sample of the chosen text")
             ids = dataset_ids or [d["id"] for d in self.workspace.state["datasets"]]
             # Never the whole corpus: about 5M evenly spread characters build the word list and are counted; the
             # total size comes from stored character counts, so pieces are scaled up ("estimated") for larger text.
             sample, total = dk.text_sample(self.workspace, ids, PREVIEW_CHARS, exclude=set(self._heldout()))
             task.step()
+            report(10)  # the sample is read; the word list takes the next stretch, then counting fills the rest
             self.note("Building the word list")
             module, cfg = studio_spec.module_of("tokenizer", spec["tokenizer"])
             tok = module.fit(cfg, [{"text": d} for d in sample])
             task.step()
+            report(40)
             self.note("Counting word pieces")
-            encoded = [tok.encode(d) for d in sample]
+            encoded = []
+            for n, d in enumerate(sample, 1):
+                encoded.append(tok.encode(d))
+                report(40 + 60 * n // len(sample))
             task.step()
             counted, chars = sum(map(len, encoded)) + len(sample), sum(map(len, sample))
             estimated = total > chars
