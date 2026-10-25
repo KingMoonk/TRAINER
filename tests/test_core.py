@@ -326,13 +326,9 @@ class SelfLaunch(unittest.TestCase):
     def test_module_command_from_source_is_python_dash_m(self):
         self.assertEqual(module_command("studio_worker", "run", "id", "--root", "/r"), [sys.executable, "-m", "studio_worker", "run", "id", "--root", "/r"])
 
-    def test_workspace_root_is_the_source_folder_but_a_user_folder_when_frozen(self):
+    def test_workspace_root_is_the_source_folder(self):
         self.assertEqual(studio_core.ROOT, ROOT)
-        with tempfile.TemporaryDirectory() as home, patch.object(sys, "frozen", True, create=True), patch("pathlib.Path.home", return_value=Path(home)), \
-                patch.dict("os.environ", {"APPDATA": home, "XDG_DATA_HOME": home}):
-            root = studio_core._root()
-            self.assertEqual((root.name, root.parent.is_relative_to(home), root.is_dir()), ("Groundwork", True, True))
-            self.assertNotEqual(root, ROOT)
+        self.assertEqual(studio_core._root(), ROOT)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 
 Takes the flags of `python -m studio_api` (which starts the API alone, for development and for a node without a screen).
 
-python app.py --smoke REPORT: the release check on the frozen build. Imports the modules PyInstaller cannot see, serves FakeServices on a free port,
+python app.py --smoke REPORT: the release check on the release build. Imports the modules, serves FakeServices on a free port,
 waits for /node to answer, stops, and writes what it found to REPORT; the exit code is 0 only when everything came up, the web build included. No browser opens."""
 import importlib
 import io
@@ -21,7 +21,7 @@ OPEN_WITHIN = 60.  # seconds to wait for the server to answer before giving up o
 BUILD_HINT = "The web UI is not built yet: run .venv/bin/python tasks.py web:build, then start the app again."
 
 
-HIDDEN = ("studio_worker",)  # the --hidden-import list in .github/workflows/release.yml: launched by name, so the import scan misses them
+HIDDEN = ("studio_worker",)  # modules launched by name, so the smoke check tests them explicitly
 
 
 def split_smoke(argv):
@@ -72,7 +72,7 @@ def smoke(argv, report):
         lines = [traceback.format_exc().rstrip()]
     failed = bool(lines)
     text = "\n".join(lines + ["FAIL" if failed else "OK"]) + "\n"
-    with open(report, "w", encoding="utf-8") as f:  # a windowed build has no console, so the report file is the only output
+    with open(report, "w", encoding="utf-8") as f:
         f.write(text)
     if sys.stdout:
         print(text, end="")

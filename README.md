@@ -232,9 +232,9 @@ Workspace datasets and drafts live in `data/workspace.json`. Existing exports ar
 
 ## Releases
 
-Push a `v*` tag (for example `git tag v1.0.0 && git push origin v1.0.0`) and `.github/workflows/release.yml` builds the app with PyInstaller on macOS and Windows and attaches `Groundwork-macos.zip` and `Groundwork-windows.zip` to a GitHub Release for that tag. Running the workflow by hand (Actions, Release, Run workflow) builds and uploads the zips as workflow artifacts without creating a release.
+Push a `v*` tag (for example `git tag v1.0.0 && git push origin v1.0.0`) and `.github/workflows/release.yml` builds `web/out` and attaches `Groundwork.zip` to a GitHub Release for that tag. Running the workflow by hand (Actions, Release, Run workflow) builds and uploads the zip as a workflow artifact without creating a release.
 
-The builds are unsigned, so macOS Gatekeeper (right-click the app, Open) and Windows SmartScreen (More info, Run anyway) will warn on first launch. A packaged app keeps `data/` and `runs/` in your user data folder (`~/Library/Application Support/Groundwork` on macOS, `%APPDATA%\Groundwork` on Windows) so they survive an upgrade.
+Unpack `Groundwork.zip`, install dependencies with `pip install -r requirements.txt`, and run `python app.py` to start the server and open the web UI.
 
 ## Agent PRs
 
@@ -256,7 +256,7 @@ How it is contained: the job that runs the model has a read-only `GITHUB_TOKEN`,
 
 ## Codebase structure
 
-Entry points and engine services sit in the repository root; swappable model/training modules live in `studio_modules/`, tests in `tests/`, and packaging hooks in `packaging/`.
+Entry points and engine services sit in the repository root; swappable model/training modules live in `studio_modules/`, and tests in `tests/`.
 
 ### Layers
 
@@ -302,4 +302,4 @@ Created at run time and git-ignored:
 make test
 ```
 
-Tests cover data preservation, reproducible recipes, causal attention, numerical gradient checking, learning, inference, module estimates and checkpoint resumption. CUDA tests compare supported GPU operations against CPU and skip when CUDA is unavailable. The PyInstaller hook `packaging/hook-studio_modules.py` collects all discovered modules so registry lookup also works in packaged builds.
+Tests cover data preservation, reproducible recipes, causal attention, numerical gradient checking, learning, inference, module estimates and checkpoint resumption. CUDA tests compare supported GPU operations against CPU and skip when CUDA is unavailable.
