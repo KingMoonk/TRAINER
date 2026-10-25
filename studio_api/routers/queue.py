@@ -77,6 +77,7 @@ class QueueStateModel(Model):
     step: int = 0
     total: int = 0
     phase: str = ""
+    prepare: int | None = None  # percent of the text prepared while phase is "preparing"
     lr: float | None = None
     eta_s: float | None = None
     paused: bool = False

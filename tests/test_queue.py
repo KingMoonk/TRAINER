@@ -39,6 +39,16 @@ def long_job(job, context, emit, stop, pause):
         time.sleep(.005)
 
 
+def preparing_job(job, context, emit, stop, pause):
+    """Prepares its text (reported as a percent, with no step yet) until the test creates the 'gate' file, then trains."""
+    emit({"type": "prepare", "percent": 40, "done": 4, "of": 10})
+    while not ((Path(context.root) / "gate").exists() or stop.is_set()):
+        time.sleep(.005)
+    emit({"type": "metric", "step": 1, "total": 1000, "lr": .001})
+    while not stop.is_set():
+        time.sleep(.005)
+
+
 def quick(job, context, emit, stop, pause):
     _note(context, job.label)
 
@@ -106,6 +116,19 @@ class QueueTests(unittest.TestCase):
         self.assertTrue(wait(lambda: self.fake.ran == ["a", "b", "c"] and r.state().job is None and not r.state().up_next))
         # the last job's save can land just after the queue reads idle
         self.assertTrue(wait(lambda: [j.status for j in Runner(self.path, self.handlers).jobs] == ["done"] * 3))
+
+    def test_the_state_reports_the_text_being_prepared_until_the_first_step(self):
+        self.handlers["pretrain"] = preparing_job
+        r = self.runner()
+        r.enqueue(self.job("prep", "pretrain"))
+        r.start()
+        self.assertTrue(wait(lambda: r.state().phase == "preparing"))
+        state = r.state()
+        self.assertEqual((state.prepare, state.step, state.total), (40, 0, 0))
+        self.fake.gate.set()
+        self.assertTrue(wait(lambda: r.state().step == 1))
+        state = r.state()
+        self.assertEqual((state.phase, state.prepare, state.total), ("", None, 1000))  # the first step ends the phase
 
     def test_a_reason_a_watchdog_left_on_the_job_becomes_its_error(self):
         r = self.runner()

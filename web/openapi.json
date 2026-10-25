@@ -7678,6 +7678,17 @@
               "start_hour": 22
             }
           },
+          "prepare": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prepare"
+          },
           "step": {
             "default": 0,
             "title": "Step",

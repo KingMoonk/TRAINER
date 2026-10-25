@@ -23,6 +23,7 @@
       "pause_on_battery": true,
       "start_hour": 22
     },
+    "prepare": null,
     "step": 0,
     "stopping": false,
     "total": 0,

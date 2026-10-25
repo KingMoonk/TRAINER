@@ -7,7 +7,7 @@ import type { ClusterQueue } from "@/lib/cluster";
 import { inviteFor, useInvites } from "@/lib/join";
 import { MemberRow } from "./member-row";
 import { T } from "./copy";
-import { placeText, progressLine, rowFor, stateLine, type Queue } from "./logic";
+import { jobFraction, placeText, progressLine, rowFor, stateLine, type Queue } from "./logic";
 import { MembersLine } from "./nodes";
 import type { QueueActions } from "./use-queue";
 
@@ -58,7 +58,7 @@ export function NowCard({ queue, actions, cluster }: { queue: Queue | undefined;
 function Running({ queue, actions, cluster }: { queue: Queue; actions: QueueActions; cluster?: ClusterQueue }) {
   const job = queue.job!;
   const row = rowFor(cluster, job.id);
-  const fraction = queue.total ? Math.min(1, queue.step / queue.total) : 0;
+  const fraction = jobFraction(queue);
   const invite = inviteFor(useInvites().data, job.id);
   return (
     <>

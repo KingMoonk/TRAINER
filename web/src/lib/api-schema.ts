@@ -6815,6 +6815,8 @@ export interface components {
              *     }
              */
             plan: components["schemas"]["PlanModel"];
+            /** Prepare */
+            prepare?: number | null;
             /**
              * Step
              * @default 0
