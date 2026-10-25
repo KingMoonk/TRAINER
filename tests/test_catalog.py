@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from studio_catalog import (ALL_CATALOG, approve_catalog_rows, CATALOG, LEGACY_CATALOG, STAGES, DownloadCancelled, _fetch, clean_wikitext, convert_record, default_catalog_ids,
+from studio_catalog import (ALL_CATALOG, STARTER_IDS, approve_catalog_rows, CATALOG, LEGACY_CATALOG, STAGES, DownloadCancelled, _fetch, clean_wikitext, convert_record, default_catalog_ids,
                             download_dataset, file_sha256, iter_json_array, iter_stories, list_downloads, register_download,
                             source_records, wikitext_paragraphs)
 from studio_core import Workspace, fingerprint, normalize, parse_file
@@ -264,16 +264,32 @@ class CatalogMetadataTests(unittest.TestCase):
                     self.assertFalse(entry["default"])
                     self.assertIn("NON-COMMERCIAL", entry["description"])
 
-    def test_default_ids_are_a_compact_focused_starter_and_stay_in_stage_order(self):
+    def test_default_ids_are_the_nanochat_recipe_and_stay_in_stage_order(self):
         defaults = default_catalog_ids()
-        self.assertEqual(set(defaults), {"dolly15k", "squad2", "gsm8k", "oasst1", "toolace"})
-        self.assertLessEqual(len(defaults), 5)
+        self.assertEqual(defaults, ["fineweb_edu_00", "fineweb_edu_01", "fineweb_edu_02", "fineweb_edu_03", "cosmopedia_khan", "cosmopedia_openstax",
+                                    "mmlu_auxiliary", "gsm8k", "smol_smoltalk", "toolace"])
+        self.assertEqual(STARTER_IDS, tuple(defaults))
         for catalog_id in defaults:
             self.assertTrue(_entry(catalog_id)["license"])
         stages = [STAGES.index(_entry(i)["stage"]) for i in defaults]
         self.assertEqual(stages, sorted(stages))
-        self.assertEqual({e["stage"] for e in CATALOG}, {"instructions", "knowledge", "reasoning", "conversation"})
+        self.assertEqual({e["stage"] for e in CATALOG}, {"language", "instructions", "knowledge", "reasoning", "conversation"})
         self.assertTrue(all(not e["default"] for e in LEGACY_CATALOG))
+        optional = {e["id"] for e in CATALOG if not e["default"]}
+        self.assertEqual(optional, {"fineweb_edu_04", "fineweb_edu_05", "fineweb_edu_06", "fineweb_edu_07", "cosmopedia_openstax_b",
+                                    "dolly15k", "squad2", "oasst1", "smol_smoltalk_b"})
+
+    def test_hugging_face_entries_are_hashed_pinned_and_under_the_download_cap(self):
+        for entry in CATALOG:
+            if entry.get("repo"):
+                with self.subTest(entry["id"]):
+                    self.assertTrue(entry["id"] in {"dolly15k", "oasst1"} or "sha256" in entry)
+                    if "sha256" in entry:
+                        self.assertRegex(entry["sha256"], r"^[0-9a-f]{64}$")
+        shard = _entry("fineweb_edu_00")
+        self.assertEqual((shard["repo"], shard["filename"], shard["size_hint"]), ("karpathy/fineweb-edu-100b-shuffle", "shard_00000.parquet", "95 MB download (one shard)"))
+        self.assertEqual(_entry("fineweb_edu_07")["filename"], "shard_00007.parquet")
+        self.assertEqual(_entry("mmlu_auxiliary")["filename"], "auxiliary_train/train-00000-of-00001.parquet")
 
     def test_existing_entries_keep_their_pinned_revisions(self):
         self.assertEqual(_entry("dolly15k")["revision"], "bdd27f4d94b9c1f951818a7da7fd7aeea5dbff1a")
@@ -438,7 +454,7 @@ class HigherQualityCorpusTests(unittest.TestCase):
 
     def test_large_legacy_sources_are_not_in_the_replacement_catalog(self):
         defaults = set(default_catalog_ids())
-        for catalog_id in ("fineweb_edu", "openwebmath", "cosmopedia_khan", "gutenberg", "orca_math",
+        for catalog_id in ("fineweb_edu", "openwebmath", "gutenberg", "orca_math",
                            "stackexchange_math", "magicoder_oss", "stackexchange_unix", "smoltalk_magpie", "reddit_instruct"):
             self.assertNotIn(catalog_id, defaults)
             self.assertNotIn(catalog_id, {entry["id"] for entry in CATALOG})
@@ -478,6 +494,9 @@ class HigherQualityCorpusTests(unittest.TestCase):
                                         "language_score": 0.9, "token_count": 80, "score": 3.2, "int_score": 3})[0]
         self.assertEqual((fine["text"], fine["intent"], fine["sourceId"]), (page.strip(), "web_text", "<urn:uuid:1>"))
         self.assertEqual(_convert("fineweb_edu", {"text": "short", "id": "x"}), [])
+        shuffle = [_convert("fineweb_edu_00", {"text": page + str(n)})[0] for n in (1, 2)]  # the shuffle shards carry only "text"
+        self.assertNotEqual(shuffle[0]["sourceId"], shuffle[1]["sourceId"])
+        self.assertEqual(shuffle[0]["groupId"], "fineweb_edu_00:" + shuffle[0]["sourceId"])
         math = _convert("openwebmath", {"url": "http://m.org/bayes", "text": "Bayes. $P(A|B)$ " * 20, "date": "2020-01-01", "metadata": "{}"})[0]
         self.assertEqual((math["intent"], math["metadata"]["url"]), ("math_text", "http://m.org/bayes"))
         self.assertTrue(math["groupId"].startswith("openwebmath:"))
@@ -596,13 +615,44 @@ class BoundedDownloadTests(unittest.TestCase):
             self.assertEqual([c["assistant"] for c in converted], ["B) y", "A) p"])
 
 
+class NanochatRecipeParserTests(unittest.TestCase):
+    def test_smol_smoltalk_keeps_the_chat_and_its_source(self):
+        chat = {"messages": [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello."}], "source": "smol-rewrite"}
+        row = _convert("smol_smoltalk", chat)[0]
+        self.assertEqual(([m["role"] for m in row["messages"]], row["intent"], row["metadata"]), (["system", "user", "assistant"], "smol-rewrite", {"source": "smol-rewrite"}))
+        self.assertTrue(row["sourceId"].startswith("smol_smoltalk:") and row["groupId"] == row["sourceId"])
+        self.assertEqual(_convert("smol_smoltalk", {**chat, "source": ""})[0]["intent"], "conversation")
+        self.assertEqual(_convert("smol_smoltalk", {"messages": [], "source": "x"}), [])
+        self.assertEqual(_convert("smol_smoltalk", {"messages": [{"role": "assistant", "content": "Hello."}]}), [])
+
+    def test_mmlu_auxiliary_unwraps_the_train_column_into_lettered_choices(self):
+        inner = {"answer": 1, "choices": ["Adams only.", "Brooks only.", "Case only."], "question": " Who was hurt? ", "subject": ""}
+        row = _convert("mmlu_auxiliary", {"train": inner})[0]
+        self.assertEqual(row["assistant"], "B) Brooks only.")
+        self.assertTrue(row["user"].endswith("Question: Who was hurt?\n\nA) Adams only.\nB) Brooks only.\nC) Case only."))
+        self.assertEqual((row["intent"], row["sourceId"]), ("multiple_choice", row["groupId"]))
+        self.assertEqual(_convert("mmlu_auxiliary", inner)[0]["assistant"], "B) Brooks only.")  # a flat row works too
+        for bad in ({**inner, "answer": 3}, {**inner, "answer": -1}, {**inner, "answer": None}, {**inner, "question": " "}, {**inner, "choices": ["a", ""]}, {**inner, "choices": ["a"]}):
+            self.assertEqual(_convert("mmlu_auxiliary", {"train": bad}), [])
+
+    def test_mmlu_auxiliary_reads_the_real_parquet_layout(self):
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        inner = {"answer": 0, "choices": ["x", "y"], "question": "Q?", "subject": ""}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "train.parquet"
+            pq.write_table(pa.table({"train": pa.array([inner])}), path)
+            rows = list(source_records(path, _entry("mmlu_auxiliary")))
+        self.assertEqual([r["assistant"] for raw in rows for r in convert_record(raw, _entry("mmlu_auxiliary"))], ["A) x"])
+
+
 class LanguageCorpusSizeTests(unittest.TestCase):
-    def test_replacement_catalog_has_no_general_language_corpus(self):
+    def test_replacement_catalog_language_text_is_fineweb_edu_and_cosmopedia(self):
         defaults = {e["id"] for e in CATALOG if e["stage"] == "language" and e["default"]}
-        self.assertEqual(defaults, set())
+        self.assertEqual(defaults, {"fineweb_edu_00", "fineweb_edu_01", "fineweb_edu_02", "fineweb_edu_03", "cosmopedia_khan", "cosmopedia_openstax"})
 
     def test_whole_shards_are_unbounded_pinned_hashed_and_licensed(self):
-        for catalog_id in ("fineweb_edu", "openwebmath", "openwebmath_b", "wikipedia_en_a", "wikipedia_en_b", "gutenberg", "gutenberg_b"):
+        for catalog_id in ("fineweb_edu_00", "fineweb_edu_07", "cosmopedia_openstax", "smol_smoltalk", "mmlu_auxiliary", "fineweb_edu", "openwebmath", "openwebmath_b", "wikipedia_en_a", "wikipedia_en_b", "gutenberg", "gutenberg_b"):
             with self.subTest(catalog_id):
                 entry = _entry(catalog_id)
                 self.assertNotIn("max_records", entry)

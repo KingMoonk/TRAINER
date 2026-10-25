@@ -31,7 +31,7 @@ def _hf(repo, revision, filename):
 
 # An entry may carry "sha256": the expected hash of the fetched source bytes (the range_bytes prefix when
 # bounded). When present, a mismatching download is rejected; without it the receipt is trust-on-first-use.
-CATALOG = [
+LEGACY_CATALOG = [
     # --- stage "language": plain text for the first, next-character-prediction stage -------------
     {"id": "tinystories", "name": "TinyStories · simple stories", "domain": "Language foundation", "stage": "language", "default": True,
      "description": "The ideal first-stage corpus for tiny models: short, simple GPT-4-written children's stories. Bounded to the first ~64 MB of the V2 training file (whole stories only) as plain text.",
@@ -309,29 +309,91 @@ CATALOG = [
      "repo": "allenai/winogrande", "filename": "winogrande_xl/train-00000-of-00001.parquet", "format": "parquet", "parser": "winogrande_check", "split": "train", "synthetic": False},
 ]
 STAGES = ("language", "instructions", "knowledge", "reasoning", "code", "conversation", "problems")
-STARTER_IDS = ("dolly15k", "squad2", "gsm8k", "oasst1", "toolace")
-
-# Keep old definitions available for recovery of existing downloads, while the
-# built-in catalog below contains only the focused assistant-training corpus.
-LEGACY_CATALOG = CATALOG
 _legacy_by_id = {entry["id"]: entry for entry in LEGACY_CATALOG}
-CATALOG = [dict(_legacy_by_id[catalog_id]) for catalog_id in ("dolly15k", "squad2", "gsm8k", "oasst1")]
-CATALOG.append({"id": "toolace", "name": "ToolACE · tool-use dialogues", "domain": "Tool use", "stage": "conversation", "default": True,
-                "description": "English tool-use dialogues with API schemas, assistant calls, simulated tool responses and final answers. Calls and results are retained as tagged assistant/user turns.",
-                "license": "Apache 2.0", "source_url": "https://huggingface.co/datasets/Team-ACE/ToolACE",
-                "size_hint": "36 MB download", "records_hint": "English tool-call dialogues", "revision": "6bda777c88d21e5a204703c1ee45597a8fa4f734",
-                "repo": "Team-ACE/ToolACE", "filename": "data.json", "format": "json", "parser": "toolace",
-                "sha256": "ba12c083fca7e8da48c67ad5b895e495447da7c66e39a2e19742c082e6cb537e", "split": "train", "synthetic": True})
-DEFAULT_IDS = frozenset(entry["id"] for entry in CATALOG)
+# karpathy/fineweb-edu-100b-shuffle at its pinned revision: shard -> (bytes, LFS sha256, rows), read from the Hugging Face tree API and the parquet footers.
+FINEWEB_SHARDS = {
+    0: (94_511_680, "6a3450ea745ee6b6830c09819c0f2c72682eba443022de595bcb50ceb3092c22", 53_248),
+    1: (94_233_382, "30a72934cb85581f88c701fc4b6f389a7215d2af99ee1d3f65e1a99d16c06adf", 53_248),
+    2: (93_549_094, "3f90859d36510630529c32990b0269a867bb6967652ddca9e8c8ee69879360e6", 53_248),
+    3: (93_774_109, "0116631ad3c33debdf292328b24133a9ef5ef35517a844dfa8f08bf62166cf52", 53_248),
+    4: (94_940_492, "f214985a443999a3599b11a01b6e241ee1b9da51f948e72334a5442c2a374d37", 54_272),
+    5: (93_623_778, "ddb7eeb20b64e290d68238e9e9ea3651fc123d0ec4fbce3884e7a4f8f9a0a10f", 53_248),
+    6: (93_479_271, "f88599776e4351a6338242b437683d7162e4a176763a0314b4c2696abef68ca8", 53_248),
+    7: (93_672_088, "2aca70545cc310fb09b94de74ef23af3f4f442f5b68dfd5cb68578096f0c91d1", 53_248),
+}
+FINEWEB_STARTER_SHARDS = 4  # shards 0-3 are downloaded by default; the rest are optional
+
+
+def _fineweb_shard(number):
+    size, digest, rows = FINEWEB_SHARDS[number]
+    starter = number < FINEWEB_STARTER_SHARDS
+    return {"id": f"fineweb_edu_{number:02d}", "name": f"FineWeb-Edu · educational web text, shard {number}", "domain": "Language foundation", "stage": "language",
+            "default": starter,
+            "description": "Educational web pages (rated 3 or more by an LLM classifier, shuffled) from the FineWeb-Edu shuffle that nanochat pretrains on. One whole shard: about 250M characters, "
+                           "roughly 55M tokens; pages under 200 characters are skipped." + ("" if starter else " Optional extra pretraining text, not downloaded by default."),
+            "license": "ODC-By 1.0", "source_url": "https://huggingface.co/datasets/karpathy/fineweb-edu-100b-shuffle",
+            "size_hint": f"{size / 1e6:.0f} MB download (one shard)", "records_hint": f"up to {rows:,} pages (the whole shard)",
+            "revision": "4c8f30d6756da75362432a4d5569e1b229263b71", "repo": "karpathy/fineweb-edu-100b-shuffle", "filename": f"shard_{number:05d}.parquet",
+            "format": "parquet", "parser": "fineweb_edu", "sha256": digest, "split": "train", "synthetic": False}
+
+
+# The nanochat-style starter recipe: FineWeb-Edu and Cosmopedia text, then Smol-SmolTalk chats, MMLU auxiliary multiple choice, GSM8K maths and ToolACE
+# tool use, in stage order. Entries with "default": False are offered in Your data but not downloaded by default. LEGACY_CATALOG keeps the older
+# definitions so existing downloads still open; none of them is a default.
+CATALOG = [_fineweb_shard(number) for number in range(len(FINEWEB_SHARDS))] + [
+    dict(_legacy_by_id["cosmopedia_khan"], default=True, records_hint="24,123 textbook units"),
+    {"id": "cosmopedia_openstax", "name": "Cosmopedia · OpenStax-style textbooks", "domain": "Language foundation", "stage": "language", "default": True,
+     "description": "Textbook units on college subjects written by Mixtral-8x7B from OpenStax outlines (the openstax config of Cosmopedia, first of two shards): about 244M characters, roughly 55M tokens of explanatory prose.",
+     "license": "Apache 2.0", "source_url": "https://huggingface.co/datasets/HuggingFaceTB/cosmopedia",
+     "size_hint": "174 MB download (one shard)", "records_hint": "63,166 textbook units (the whole shard)", "revision": "0ae6ec63f91742bd2d1eaef4f02232c55d719385",
+     "repo": "HuggingFaceTB/cosmopedia", "filename": "data/openstax/train-00000-of-00002.parquet", "format": "parquet", "parser": "cosmopedia",
+     "sha256": "bb0d51bf863f11feafb99ea9af56acec1b8b6837413f51a7498282c7e8f37381", "split": "train", "synthetic": True},
+    {"id": "cosmopedia_openstax_b", "name": "Cosmopedia · OpenStax-style textbooks, part 2", "domain": "Language foundation", "stage": "language", "default": False,
+     "description": "The second shard of the openstax config of Cosmopedia: more synthetic college textbook units. Optional, not downloaded by default.",
+     "license": "Apache 2.0", "source_url": "https://huggingface.co/datasets/HuggingFaceTB/cosmopedia",
+     "size_hint": "174 MB download (one shard)", "records_hint": "the whole second shard", "revision": "0ae6ec63f91742bd2d1eaef4f02232c55d719385",
+     "repo": "HuggingFaceTB/cosmopedia", "filename": "data/openstax/train-00001-of-00002.parquet", "format": "parquet", "parser": "cosmopedia",
+     "sha256": "05ed6afca68a93f1ec1f062165a49c08dd6d29b2b728165fce7ab96a7f702e24", "split": "train", "synthetic": True},
+    dict(_legacy_by_id["dolly15k"], default=False),
+    dict(_legacy_by_id["squad2"], default=False),
+    {"id": "mmlu_auxiliary", "name": "MMLU auxiliary train · multiple-choice questions", "domain": "Knowledge and reading", "stage": "knowledge", "default": True,
+     "description": "The auxiliary training set that ships with MMLU (about 100K reading and science questions drawn from ARC, MC_TEST, OBQA and RACE; not the MMLU test questions), which nanochat uses in mid-training. "
+                    "Each row becomes a question with lettered options and an answer such as \"B) food\". The mixed sources keep their own licences.",
+     "license": "MIT (dataset card); mixes ARC, MC_TEST, OBQA and RACE, each under its own licence", "source_url": "https://huggingface.co/datasets/cais/mmlu",
+     "size_hint": "48 MB download", "records_hint": "99,842 questions", "revision": "c30699e8356da336a370243923dbaf21066bb9fe",
+     "repo": "cais/mmlu", "filename": "auxiliary_train/train-00000-of-00001.parquet", "format": "parquet", "parser": "mmlu_auxiliary",
+     "sha256": "ae6662576ef989fed82a9289da1b89e950499c320f6849b052ec344dfcb709eb", "split": "train", "synthetic": False},
+    dict(_legacy_by_id["gsm8k"], default=True),
+    dict(_legacy_by_id["oasst1"], default=False),
+    {"id": "smol_smoltalk", "name": "Smol-SmolTalk · chats for small models", "domain": "Conversation", "stage": "conversation", "default": True,
+     "description": "SmolTalk adapted for models under 1B parameters (what SmolLM2-135M and 360M were fine-tuned on): multi-turn chats on writing, advice, coding and everyday questions, with shorter answers and little task-specific data. "
+                    "First of four training shards: about 440M characters, roughly 100M tokens.",
+     "license": "Apache 2.0", "source_url": "https://huggingface.co/datasets/HuggingFaceTB/smol-smoltalk",
+     "size_hint": "230 MB download (one shard)", "records_hint": "115,086 chats (the whole shard)", "revision": "f73fe857d519ff6ac5af2ea67c4d3834da7b8bcc",
+     "repo": "HuggingFaceTB/smol-smoltalk", "filename": "data/train-00000-of-00004.parquet", "format": "parquet", "parser": "smol_smoltalk",
+     "sha256": "498cd4580014f42c40cfde066573564ed28e3e1548a5566715b615f5ea932856", "split": "train", "synthetic": True},
+    {"id": "smol_smoltalk_b", "name": "Smol-SmolTalk · chats for small models, part 2", "domain": "Conversation", "stage": "conversation", "default": False,
+     "description": "The second of four training shards of Smol-SmolTalk. Optional, not downloaded by default.",
+     "license": "Apache 2.0", "source_url": "https://huggingface.co/datasets/HuggingFaceTB/smol-smoltalk",
+     "size_hint": "230 MB download (one shard)", "records_hint": "115,085 chats (the whole shard)", "revision": "f73fe857d519ff6ac5af2ea67c4d3834da7b8bcc",
+     "repo": "HuggingFaceTB/smol-smoltalk", "filename": "data/train-00001-of-00004.parquet", "format": "parquet", "parser": "smol_smoltalk",
+     "sha256": "5412c03df579fc7dd7d06c7f5249627d99d0621882fb8f2cd5c13582eb2a80f6", "split": "train", "synthetic": True},
+    {"id": "toolace", "name": "ToolACE · tool-use dialogues", "domain": "Tool use", "stage": "conversation", "default": True,
+     "description": "English tool-use dialogues with API schemas, assistant calls, simulated tool responses and final answers. Calls and results are retained as tagged assistant/user turns.",
+     "license": "Apache 2.0", "source_url": "https://huggingface.co/datasets/Team-ACE/ToolACE",
+     "size_hint": "37 MB download", "records_hint": "English tool-call dialogues", "revision": "6bda777c88d21e5a204703c1ee45597a8fa4f734",
+     "repo": "Team-ACE/ToolACE", "filename": "data.json", "format": "json", "parser": "toolace",
+     "sha256": "ba12c083fca7e8da48c67ad5b895e495447da7c66e39a2e19742c082e6cb537e", "split": "train", "synthetic": True},
+]
+DEFAULT_IDS = frozenset(entry["id"] for entry in CATALOG if entry["default"])
+STARTER_IDS = tuple(entry["id"] for entry in CATALOG if entry["id"] in DEFAULT_IDS)
 for entry in LEGACY_CATALOG:
     entry["default"] = False
-for entry in CATALOG:
-    entry["default"] = True
 ALL_CATALOG = list({entry["id"]: entry for entry in LEGACY_CATALOG + CATALOG}.values())
 
 
 def default_catalog_ids():
-    """Focused starter sources downloaded by default, in catalogue order."""
+    """The starter recipe downloaded by default, in catalogue (stage) order."""
     return [entry["id"] for entry in CATALOG if entry["id"] in DEFAULT_IDS]
 FORMAT_VERSION = 5  # 2: line endings normalised to \n. 3: OpenAssistant keeps English trees only; HellaSwag text is capitalised and punctuated. 4: GSM8K and MetaMathQA rows share a group per source question. 5: whole-shard sources. Existing conversions remain compatible; ToolACE is new.
 MAX_DOWNLOAD_BYTES = 1_000_000_000
@@ -705,7 +767,7 @@ def convert_record(raw, entry):
     elif parser in {"fineweb_edu", "web_math"}:
         text = str(raw.get("text") or "").strip()
         if len(text) >= 200:
-            source = str(raw.get("id") or hashlib.sha256(str(raw.get("url", "")).encode()).hexdigest()[:16])
+            source = str(raw.get("id") or hashlib.sha256(str(raw.get("url") or text).encode()).hexdigest()[:16])  # a shuffle shard has only "text"
             yield {"text": text, "intent": "web_text" if parser == "fineweb_edu" else "math_text", "sourceId": source,
                    "groupId": f"{entry['id']}:{source}", "metadata": {"url": raw.get("url", "")}}
     elif parser == "cosmopedia":
@@ -732,6 +794,17 @@ def convert_record(raw, entry):
             digest = hashlib.sha256(str(first).encode()).hexdigest()[:16]
             yield {"messages": raw["messages"], "intent": str(raw.get("category") or "conversation"), "sourceId": "smoltalk:" + digest,
                    "groupId": "smoltalk:" + digest, "metadata": {"difficulty": raw.get("difficulty", ""), "quality": raw.get("quality", "")}}
+    elif parser == "smol_smoltalk":
+        messages = raw.get("messages") or []
+        first = next((m.get("content", "") for m in messages if isinstance(m, dict) and m.get("role") == "user"), "")
+        if first:
+            digest = hashlib.sha256(str(first).encode()).hexdigest()[:16]
+            yield {"messages": messages, "intent": str(raw.get("source") or "conversation"), "sourceId": "smol_smoltalk:" + digest,
+                   "groupId": "smol_smoltalk:" + digest, "metadata": {"source": raw.get("source", "")}}
+    elif parser == "mmlu_auxiliary":
+        converted = _mmlu_auxiliary(raw)
+        if converted:
+            yield converted
     elif parser == "openbookqa":
         converted = _multiple_choice({**raw, "question": raw.get("question_stem")}, "mcq")
         if converted:
@@ -854,6 +927,21 @@ def _multiple_choice(raw, parser):
     lines = [f"{_LETTERS[i]}) {text}" for i, text in enumerate(options)]
     return {"user": f"{intro}Question: {question}\n\n" + "\n".join(lines), "assistant": lines[index], "intent": intent,
             "sourceId": source_id}
+
+
+def _mmlu_auxiliary(raw):
+    """An MMLU auxiliary_train row (its fields sit under a "train" column) -> question with lettered options and the right letter and text."""
+    row = raw.get("train") if isinstance(raw.get("train"), dict) else raw
+    question = str(row.get("question") or "").strip()
+    options = [str(text or "").strip() for text in row.get("choices") or []]
+    index = row.get("answer")
+    if (not question or not 2 <= len(options) <= len(_LETTERS) or not all(options)
+            or isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(options)):
+        return None
+    lines = [f"{_LETTERS[i]}) {text}" for i, text in enumerate(options)]
+    digest = hashlib.sha256((question + "\n" + "\n".join(options)).encode()).hexdigest()[:16]
+    return {"user": "Answer the question. Reply with the letter and the option text.\n\nQuestion: " + question + "\n\n" + "\n".join(lines),
+            "assistant": lines[index], "intent": "multiple_choice", "sourceId": "mmlu_auxiliary:" + digest, "groupId": "mmlu_auxiliary:" + digest}
 
 
 NUMBER_ASK = "\n\nGive the final answer as a number."

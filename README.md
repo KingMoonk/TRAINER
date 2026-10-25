@@ -164,7 +164,19 @@ The web UI has areas in the sidebar, then Queue and Resources, and a machine str
 
 **Resources** holds Your data, Make extra data, **Storage**, which shows the free disk space and deletes old run history (and, if you ask, your datasets) to free it.
 
-The built-in assistant-training catalog is a compact, paper-backed set: Dolly 15K for human-written instructions, SQuAD 2 for passage-grounded QA with abstention, GSM8K for worked reasoning, OpenAssistant for rated conversations, and ToolACE for tool-use dialogues. ToolACE's Apache-2.0, paper-backed release is pinned and filtered to tool-call conversations. Each source row remains one example with its own group; the importer retains the API schema in its system turn, tags assistant calls with `<tool_call>` and tool results with `<tool_response>`, and stores tool results as tagged user turns because the current model schema supports only system/user/assistant roles. No tools execute during training, and ToolACE tool outputs are synthetic rather than verified live facts. The source papers/cards are [Dolly](https://huggingface.co/datasets/databricks/databricks-dolly-15k), [SQuAD 2](https://arxiv.org/abs/1806.03822), [GSM8K](https://arxiv.org/abs/2110.14168), [OpenAssistant](https://arxiv.org/abs/2304.07327), and [ToolACE](https://arxiv.org/abs/2409.00920). Their published licenses are CC BY-SA 3.0, CC BY-SA 4.0, MIT, Apache 2.0, and Apache 2.0 respectively; follow each source's attribution and share-alike terms. Older downloaded corpus files and personal workspace datasets remain in place.
+The built-in starter catalogue follows the recipe of Karpathy's [nanochat](https://github.com/karpathy/nanochat) for a small, useful assistant on little compute (one 8 GB laptop GPU is enough): pretrain on educational web text, then train on chat, multiple-choice, maths and tool-use data. Every source is pinned to a Hugging Face commit and checked against its SHA-256. The starter set (about 920 MB to download) is:
+
+| Source | Stage | Download | Roughly |
+| --- | --- | --- | --- |
+| FineWeb-Edu shuffle, shards 0-3 (`karpathy/fineweb-edu-100b-shuffle`, ODC-By) | text | 4 x 94 MB | 213K pages, about 220M tokens |
+| Cosmopedia Khan Academy-style textbooks (Apache 2.0) | text | 49 MB | 24K units, about 20M tokens |
+| Cosmopedia OpenStax-style textbooks, shard 0 (Apache 2.0) | text | 174 MB | 63K units, about 55M tokens |
+| MMLU auxiliary train (`cais/mmlu`; ARC, MC_TEST, OBQA and RACE keep their own licences) | multiple choice | 48 MB | 100K questions, about 40M tokens |
+| GSM8K (MIT) | maths | 4 MB | 7.5K worked problems |
+| Smol-SmolTalk, shard 0 (Apache 2.0) | chat | 230 MB | 115K chats, about 100M tokens |
+| ToolACE (Apache 2.0) | tool use | 37 MB | English tool-call dialogues |
+
+Token counts are estimates (about 4.4 characters per token of English text), not tokenizer output. That is roughly 300M tokens of pretraining text and 140M of chat and question data, which is more than a small model on one laptop GPU gets through in a session; download less if you want a shorter run. Optional, not downloaded by default: FineWeb-Edu shards 4-7, the second Cosmopedia OpenStax shard, the second Smol-SmolTalk shard, Dolly 15K, SQuAD 2 and OpenAssistant. Cosmopedia v2 (`HuggingFaceTB/smollm-corpus`) is not offered because its shards are over 1 GB, above the downloader's size cap; see #715. ToolACE keeps the API schema in its system turn, tags assistant calls with `<tool_call>` and tool results with `<tool_response>`, and stores tool results as tagged user turns because the model schema supports only system, user and assistant roles. No tools execute during training, and ToolACE tool outputs are synthetic rather than verified live facts. Catalogue rows import as Good, so nothing waits in Review. Older downloaded corpus files and personal workspace datasets remain in place.
 
 The file picker is the supported import method; operating-system drag-and-drop is not required or installed.
 
