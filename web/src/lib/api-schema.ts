@@ -4035,13 +4035,55 @@ export interface components {
             V: number;
             /** W */
             W: number;
+            /**
+             * Accumulation
+             * @default 1
+             */
+            accumulation: number;
+            /**
+             * Batch Size
+             * @default 4
+             */
+            batch_size: number;
             /** D */
             d: number;
+            /**
+             * Dropout
+             * @default 0.1
+             */
+            dropout: number;
+            /**
+             * Eval Every
+             * @default 25
+             */
+            eval_every: number;
+            /**
+             * Learning Rate
+             * @default 0.001
+             */
+            learning_rate: number;
+            /**
+             * Precision
+             * @default fp32
+             */
+            precision: string;
+            /**
+             * Seed
+             * @default 42
+             */
+            seed: number;
             /**
              * Token Limit Millions
              * @default 0
              */
             token_limit_millions: number;
+            /** Warmup */
+            warmup?: number | null;
+            /**
+             * Weight Decay
+             * @default 0.01
+             */
+            weight_decay: number;
         };
         /** ChoicesBody */
         ChoicesBody: {
@@ -6419,6 +6461,15 @@ export interface components {
                 [key: string]: components["schemas"]["RoundState"];
             };
         };
+        /** Precision */
+        Precision: {
+            /** Blurb */
+            blurb: string;
+            /** Name */
+            name: string;
+            /** Short */
+            short: string;
+        };
         /** Prediction */
         Prediction: {
             /** Error */
@@ -7248,6 +7299,8 @@ export interface components {
             heads: number[];
             /** Part Slots */
             part_slots: string[];
+            /** Precisions */
+            precisions: components["schemas"]["Precision"][];
             /** Slots */
             slots: components["schemas"]["SlotInfo"][];
             /** Widths */

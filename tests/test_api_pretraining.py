@@ -104,6 +104,15 @@ class PretrainingRouterTests(ApiCase):
         job = self.plan(version=2)["job"]
         self.assertEqual(job["params"]["token_budget"], 9_000_000)
 
+    def test_the_run_carries_the_saved_training_settings(self):
+        _v1, v2 = self.save_versions()
+        v2.spec["train"]["run"] = {"batch_size": 32, "accumulation": 4}
+        v2.spec["train"]["optimizer"]["config"]["lr"] = 0.0005
+        v2.spec["train"]["schedule"]["config"]["warmup"] = 50
+        v2.spec["dims"]["dropout"] = 0.2
+        cfg = self.plan(version=2, rows=32)["job"]["params"]["config"]
+        self.assertEqual((cfg["batch_size"], cfg["accumulation"], cfg["learning_rate"], cfg["warmup"], cfg["dropout"]), (32, 4, 0.0005, 50, 0.2))
+
     def test_the_params_match_the_ones_the_tk_page_built(self):
         from studio_ia.pretraining_plan import pretrain_config
         v1, v2 = self.save_versions()

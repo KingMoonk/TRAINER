@@ -605,10 +605,87 @@
             "title": "W",
             "type": "integer"
           },
+          "accumulation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "default": 1,
+            "title": "Accumulation"
+          },
+          "batch_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "default": 4,
+            "title": "Batch Size"
+          },
           "d": {
             "minimum": 1.0,
             "title": "D",
             "type": "integer"
+          },
+          "dropout": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "default": 0.1,
+            "title": "Dropout"
+          },
+          "eval_every": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "default": 25,
+            "title": "Eval Every"
+          },
+          "learning_rate": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "default": 0.001,
+            "title": "Learning Rate"
+          },
+          "precision": {
+            "default": "fp32",
+            "title": "Precision",
+            "type": "string"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "default": 42,
+            "title": "Seed"
           },
           "token_limit_millions": {
             "default": 0,
@@ -616,6 +693,32 @@
             "minimum": 0.0,
             "title": "Token Limit Millions",
             "type": "integer"
+          },
+          "warmup": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warmup"
+          },
+          "weight_decay": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "default": 0.01,
+            "title": "Weight Decay"
           }
         },
         "required": [
@@ -6537,6 +6640,29 @@
         "title": "PostTrainingOut",
         "type": "object"
       },
+      "Precision": {
+        "properties": {
+          "blurb": {
+            "title": "Blurb",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "short": {
+            "title": "Short",
+            "type": "string"
+          }
+        },
+        "required": [
+          "short",
+          "name",
+          "blurb"
+        ],
+        "title": "Precision",
+        "type": "object"
+      },
       "Prediction": {
         "properties": {
           "error": {
@@ -8551,6 +8677,13 @@
             "title": "Part Slots",
             "type": "array"
           },
+          "precisions": {
+            "items": {
+              "$ref": "#/components/schemas/Precision"
+            },
+            "title": "Precisions",
+            "type": "array"
+          },
           "slots": {
             "items": {
               "$ref": "#/components/schemas/SlotInfo"
@@ -8574,6 +8707,7 @@
           }
         },
         "required": [
+          "precisions",
           "part_slots",
           "block_slots",
           "slots",

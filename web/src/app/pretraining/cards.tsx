@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { T, fill } from "./copy";
-import { END, HOLD, PALETTE, ROWS, enoughView, perStepLine, readoutView, selectedLine, type Plan, type Preview, type TextSet } from "./logic";
+import { END, HOLD, PALETTE, enoughView, rowChoices, perStepLine, readoutView, selectedLine, type Plan, type Preview, type TextSet } from "./logic";
 import { optionBox } from "@/components/option-box";
 
 /** A row of choices (rows per step, held back, how long) as a labelled radio group. */
@@ -158,6 +158,7 @@ export function BatchesCard({
   preview,
   estimating,
   rows,
+  savedRows,
   hold,
   onRows,
   onHold,
@@ -165,9 +166,10 @@ export function BatchesCard({
   plan: Plan | undefined;
   preview: Preview | null | undefined;
   estimating: boolean;
-  rows: (typeof ROWS)[number];
+  rows: string;
+  savedRows: string | null;
   hold: (typeof HOLD)[number];
-  onRows: (v: (typeof ROWS)[number]) => void;
+  onRows: (v: string) => void;
   onHold: (v: (typeof HOLD)[number]) => void;
 }) {
   const first = preview?.first_rows ?? [];
@@ -180,7 +182,7 @@ export function BatchesCard({
       <CardContent className="flex flex-col gap-4">
         <p className="text-sm">{fill(T.oneStep, { rows, context: plan?.context ?? 256 })}</p>
         {estimating ? <Skeleton className="h-24 w-full" aria-label={T.estimating} /> : first.length ? <RowsGrid rows={first} /> : <p className="text-sm text-muted-foreground">{T.noRowsYet}</p>}
-        <Choice label={T.rowsPerStep} hint={T.rowsDesc} value={rows} items={ROWS} onChange={onRows} />
+        <Choice label={T.rowsPerStep} hint={T.rowsDesc} value={rows} items={rowChoices(savedRows)} onChange={onRows} />
         <Choice label={T.heldBack} hint={T.heldBackDesc} value={hold} items={HOLD} onChange={onHold} />
         <p className="text-sm text-muted-foreground" data-testid="per-step">
           {perStepLine(plan, estimating)}

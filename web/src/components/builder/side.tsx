@@ -43,7 +43,7 @@ import { cn } from "@/lib/utils";
 
 const AMBER = "text-warning";
 
-function Panel({ title, tip, children, testId }: { title: string; tip?: string; children: React.ReactNode; testId?: string }) {
+export function Panel({ title, tip, children, testId }: { title: string; tip?: string; children: React.ReactNode; testId?: string }) {
   return (
     <Card size="sm" data-testid={testId}>
       <CardHeader>

@@ -24,6 +24,8 @@ class DesignRouterTests(ApiCase):
         self.assertEqual(attention["tip"], D.module_tip("mixer", "attention"))
         self.assertEqual({f["name"] for f in attention["fields"]}, D.fields_of("mixer", "attention"))
         self.assertEqual((reg["words"], reg["heads"]), (list(D.WORDS), list(D.HEADS)))
+        self.assertEqual([p["short"] for p in reg["precisions"]], [m.short for m in D.registry.for_slot("precision")])
+        self.assertIn("fp32", [p["short"] for p in reg["precisions"]])
 
         cur = self.call("POST", "/design/read", json={"spec": base})
         s = D.read_spec(base)
@@ -98,6 +100,29 @@ class DesignRouterTests(ApiCase):
         written = self.call("POST", "/design/write", json={"base": spec, "choices": older, "was": older})
         self.assertEqual(written["tokenizer"]["config"]["vocab_size"], 4096)
         self.assertEqual(written["train"]["run"]["token_limit_millions"], 8)
+
+    def test_training_settings_round_trip_and_a_bad_one_is_a_plain_422(self):
+        base = small_spec()
+        cur = self.call("POST", "/design/read", json={"spec": base})
+        self.assertEqual((cur["batch_size"], cur["accumulation"], cur["precision"]), (4, 1, "fp32"))
+        draft = {**cur, "batch_size": 32, "learning_rate": 0.0005, "dropout": 0.2, "precision": "bf16", "seed": 7}
+        written = self.call("POST", "/design/write", json={"base": base, "choices": draft, "was": cur})
+        again = self.call("POST", "/design/read", json={"spec": written})
+        self.assertEqual({k: again[k] for k in ("batch_size", "learning_rate", "dropout", "precision", "seed")},
+                         {"batch_size": 32, "learning_rate": 0.0005, "dropout": 0.2, "precision": "bf16", "seed": 7})
+        changes = self.call("POST", "/design/changes", json={"base": base, "draft_spec": written, "cur": cur, "draft": draft})
+        self.assertIn("batch size 4 → 32", changes["chips"])
+        self.assertEqual(changes["warm"]["kind"], "same")
+        for patch, text in (({"batch_size": 500}, "Batch size must be between 1 and 128."), ({"batch_size": 2.5}, "Batch size must be a whole number."),
+                            ({"dropout": 0.9}, "Dropout must be between 0 and 0.5."), ({"precision": "fp8"}, "Unknown precision module: 'fp8'.")):
+            answer = self.call("POST", "/design/write", 422, json={"base": base, "choices": {**cur, **patch}, "was": cur})
+            self.assertEqual(answer["detail"], text)
+
+    def test_an_older_choices_payload_leaves_the_training_settings_alone(self):
+        base = D.write_spec(small_spec(), {**D.read_spec(small_spec()), "batch_size": 16, "dropout": 0.3})
+        cur = self.call("POST", "/design/read", json={"spec": base})
+        older = {k: v for k, v in cur.items() if k not in D.TRAINING_SETTINGS}
+        self.assertEqual(self.call("POST", "/design/write", json={"base": base, "choices": older, "was": older}), base)
 
     def learning_routes(self):
         base = small_spec()
