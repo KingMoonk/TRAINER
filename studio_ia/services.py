@@ -4,6 +4,7 @@ from __future__ import annotations
 import errno
 import io
 import logging
+import os
 import socket
 import tempfile
 import threading
@@ -1486,9 +1487,13 @@ from pathlib import Path  # noqa: E402
 VERSION_JOBS = ("pretrain", "import_pretrained", "pretrain_distributed")  # queue jobs that carry a version through queued, training and trained
 SUMMARY_FORMAT = 4  # data/summaries.sqlite layout; 4: entries, rows and signatures kept apart (was data/summaries.json); 3: one entry per dataset, each with its rev. A saved summary of another format is rebuilt
 RUN_DOC_CHARS = 5_000_000  # characters of a run's own text read for reference numbers (unigram baseline, characters per piece)
-PREVIEWS_KEPT = 16  # Pretraining previews kept in data/previews.json (one per choice of sets and design)
+PREVIEWS_KEPT = 16  # step rates kept in data/step_rates.json
 RANGE_CHARS = 400_000  # characters of the chosen text the learning-rate test trains on: a hundred small steps never read more
-PREVIEW_CHARS = 5_000_000  # characters of the chosen text the Pretraining preview reads, however large the text is
+SET_SAMPLE_CHARS = 500_000  # characters of one set the preview measures (fit and encode), however large the set is
+SET_ROWS_KEPT = 400  # first documents' encoded lengths kept per set measurement, for the batch picture
+SET_SIZES_KEPT = 200  # set measurements kept in data/set_sizes.json
+PRECACHE_POLL_S = 30  # seconds between the background precacher's passes
+PRECACHE_QUIET_S = 600  # seconds a set's rev must hold still before an older measurement of it is redone
 CHAT_MODELS = 3  # most chat models kept loaded; their bytes are also in the ledger, which the queue takes off a job's share
 FEW_SHOT_ITEMS = 100  # problems one few-shot check asks, each with every choice at 0, 1 and k worked examples
 
@@ -1598,6 +1603,10 @@ class WorkspaceServices(Services):
         return self
 
     def close(self):
+        stop = getattr(self, "_precache_stop", None)
+        if stop is not None:
+            stop.set()
+            self._precacher.join(5)
         self.runner.shutdown(timeout=2)
         import studio_distributed
         studio_distributed.unload(self.root)
@@ -2274,59 +2283,184 @@ class WorkspaceServices(Services):
         return SummaryCache(self.root / "data" / "summaries.sqlite", SUMMARY_FORMAT)
 
     def pretrain_preview(self, dataset_ids, rows=16, progress=None):
-        import studio_estimate
+        """The chosen text's size from per-set measurements: a set without one is measured now (just that set, with `progress`),
+        and every combination after that is arithmetic over stored character counts."""
         import studio_spec
-        from studio_model import read_metrics
         v = self.current_version()
         if v is None or not v.spec:
             return {}
         spec = studio_spec.validate_spec(v.spec)
-        context = spec["dims"]["n_ctx"]
+        ids = self._preview_ids(dataset_ids)
+        missing = [i for i in ids if self._set_size(i, spec) is None]
+        if missing:
+            with self.busy("Reading and counting your text", total=3 * len(missing)) as task:
+                for n, set_id in enumerate(missing):
+                    def part(percent, n=n):
+                        if progress:
+                            progress((100 * n + percent) // len(missing))
+                    self.measure_set(set_id, spec, task=task, progress=part)
+        if progress:
+            progress(100)
+        return self._compose_preview(spec, ids, rows)
+
+    def cached_preview(self, dataset_ids, rows=16):
+        """pretrain_preview's answer when every chosen set has a measurement (even one of an older rev), else None. Never reads,
+        fits or encodes text: the only work is the SUM of the sets' stored character counts."""
+        import studio_spec
+        v = self.current_version()
+        if v is None or not v.spec:
+            return {}
+        spec = studio_spec.validate_spec(v.spec)
+        ids = self._preview_ids(dataset_ids)
+        if any(self._set_size(i, spec) is None for i in ids):
+            return None
+        return self._compose_preview(spec, ids, rows)
+
+    def _preview_ids(self, dataset_ids):
+        return list(dict.fromkeys(dataset_ids or [d["id"] for d in self.workspace.state["datasets"]]))
+
+    def _set_key(self, set_id, spec):
+        return json.dumps([set_id, spec["tokenizer"], self._heldout_stamp()], sort_keys=True, default=str)
+
+    def _set_size(self, set_id, spec):
+        """The stored measurement of one set for this design's tokenizer, whatever rev it was taken at, or None."""
+        self._heldout()  # makes the held-back file first (if it is missing) so its stamp is final
+        return self._set_sizes().get(self._set_key(set_id, spec))
+
+    def _set_rev(self, set_id):
+        return (self.workspace._dataset(set_id) or {}).get("rev", 0)
+
+    def measure_set(self, set_id, spec, task=None, progress=None):
+        """Read a modest sample (SET_SAMPLE_CHARS) of one set, fit the design's tokenizer on it, encode it and store characters per
+        piece, the vocab it made and the first documents' lengths, keyed by set, tokenizer and held-back stamp."""
+        import studio_data_kinds as dk
+        import studio_spec
+        from studio_core import atomic_json
 
         def report(percent):
             if progress:
                 progress(percent)
 
-        def make(task):
-            import studio_data_kinds as dk
-            report(0)
-            self.note("Reading a sample of the chosen text")
-            ids = dataset_ids or [d["id"] for d in self.workspace.state["datasets"]]
-            # Never the whole corpus: about 5M evenly spread characters build the word list and are counted; the
-            # total size comes from stored character counts, so pieces are scaled up ("estimated") for larger text.
-            sample, total = dk.text_sample(self.workspace, ids, PREVIEW_CHARS, exclude=set(self._heldout()))
-            task.step()
-            report(10)  # the sample is read; the word list takes the next stretch, then counting fills the rest
+        def step(times=1):
+            for _ in range(times if task is not None else 0):
+                task.step()
+        exclude = set(self._heldout())
+        rev = self._set_rev(set_id)
+        report(0)
+        self.note("Reading a sample of the chosen text")
+        sample, total = dk.text_sample(self.workspace, [set_id], SET_SAMPLE_CHARS, exclude=exclude)
+        step()
+        report(10)
+        chars = sum(map(len, sample))
+        found = {"rev": rev, "characters": total, "sample_characters": chars, "measured_at": time.time(),
+                 "chars_per_piece": None, "vocab": None, "lengths": []}
+        if sample:
             self.note("Building the word list")
             module, cfg = studio_spec.module_of("tokenizer", spec["tokenizer"])
             tok = module.fit(cfg, [{"text": d} for d in sample])
-            task.step()
+            step()
             report(40)
             self.note("Counting word pieces")
-            encoded = []
+            lengths = []
             for n, d in enumerate(sample, 1):
-                encoded.append(tok.encode(d))
+                lengths.append(len(tok.encode(d)) + 1)
                 report(40 + 60 * n // len(sample))
-            task.step()
-            counted, chars = sum(map(len, encoded)) + len(sample), sum(map(len, sample))
-            estimated = total > chars
-            pieces = round(counted * total / max(1, chars)) if estimated else counted
-            return {"pieces": pieces if sample else None, "estimated": estimated,
-                    "chars_per_piece": chars / counted if counted else None,
-                    "params": studio_estimate.estimate(spec, tok.vocab_size)["total"], "vocab": tok.vocab_size,
-                    "context": context, "first_rows": layout_rows([len(e) + 1 for e in encoded], context, rows)}
-        key = self._preview_key(v, dataset_ids, rows)
-        store = self._previews()
-        if key not in store:
-            with self.busy("Reading and counting your text", total=3) as task:
-                preview = make(task)
-            from studio_core import atomic_json
-            with self._lock:
-                store[key] = preview
-                while len(store) > PREVIEWS_KEPT:
-                    store.pop(next(iter(store)))
-                atomic_json(self.root / "data" / "previews.json", store)
-        return {**store[key], "tokens_per_second": self._speed(read_metrics)}
+            step()
+            found.update(chars_per_piece=chars / sum(lengths), vocab=tok.vocab_size, lengths=lengths[:SET_ROWS_KEPT])
+        else:
+            step(2)
+        store = self._set_sizes()
+        with self._lock:
+            store[self._set_key(set_id, spec)] = found
+            while len(store) > SET_SIZES_KEPT:
+                store.pop(next(iter(store)))
+            atomic_json(self.root / "data" / "set_sizes.json", store)
+        return found
+
+    def _compose_preview(self, spec, ids, rows):
+        """Combine the sets' measurements: pieces = sum of (the set's live characters / its characters per piece). A measurement
+        of an older rev still counts, with the live character count."""
+        import studio_data_kinds as dk
+        import studio_estimate
+        from itertools import chain, zip_longest
+        from studio_model import read_metrics
+        exclude = set(self._heldout())
+        context = spec["dims"]["n_ctx"]
+        pieces, chars, vocab, lengths, estimated = 0.0, 0, None, [], False
+        for set_id in ids:
+            found = self._set_size(set_id, spec)
+            live = dk.text_characters(self.workspace, [set_id], exclude=exclude)
+            chars += live
+            estimated = estimated or found["rev"] != self._set_rev(set_id) or found["sample_characters"] < live
+            if found["chars_per_piece"]:
+                pieces += live / found["chars_per_piece"]
+                vocab = max(vocab or 0, found["vocab"])
+            lengths.append(found["lengths"])
+        ordered = [n for n in chain.from_iterable(zip_longest(*lengths)) if n is not None]  # the sets' first documents taken in turn
+        params = studio_estimate.estimate(spec, vocab)["total"] if vocab else studio_estimate.estimate(spec)["total"]
+        pieces = round(pieces)
+        return {"pieces": pieces or None, "estimated": estimated, "chars_per_piece": chars / pieces if pieces else None,
+                "params": params, "vocab": vocab, "context": context, "first_rows": layout_rows(ordered, context, rows),
+                "tokens_per_second": self._speed(read_metrics)}
+
+    def precache_set_sizes(self, now=None, quiet=PRECACHE_QUIET_S):
+        """One pass of the background precacher: measure each text set that has no measurement for the current design, or only one
+        of an older rev, one set at a time. A set whose rev changed less than `quiet` seconds ago keeps its older measurement (the
+        collector bumps it all the time) unless it has none. Returns the ids measured."""
+        import studio_spec
+        v = self.current_version()
+        if v is None or not v.spec:
+            return []
+        try:
+            spec = studio_spec.validate_spec(v.spec)
+        except (ValueError, KeyError, TypeError):
+            return []
+        now = time.time() if now is None else now
+        seen = self.__dict__.setdefault("_rev_seen", {})
+        done = []
+        for entry in self.text_sets():
+            set_id, rev = entry["id"], self._set_rev(entry["id"])
+            if seen.get(set_id, (None,))[0] != rev:
+                seen[set_id] = (rev, now if set_id in seen else 0)  # the first sighting after startup counts as old
+            have = self._set_size(set_id, spec)
+            if have is not None and (have["rev"] == rev or now - seen[set_id][1] < quiet):
+                continue
+            self.measure_set(set_id, spec)
+            done.append(set_id)
+        return done
+
+    def start_precacher(self, interval=PRECACHE_POLL_S):
+        """Start the daemon thread that keeps every text set measured for the current design (precache_set_sizes every `interval`
+        seconds). It works alone on its own thread at low priority, so no request or training waits for it; a failed pass is logged
+        and tried again at the next one. close() stops it."""
+        if getattr(self, "_precacher", None) is not None:
+            return self._precacher
+        self._precache_stop = stop = threading.Event()
+
+        def run():
+            try:
+                os.nice(10)  # lowers this thread only on Linux; not available on Windows
+            except (AttributeError, OSError):
+                pass
+            while not stop.is_set():
+                try:
+                    self.precache_set_sizes()
+                except Exception:  # noqa: BLE001 - a broken pass must not end the thread
+                    logging.getLogger(__name__).exception("precaching set sizes failed")
+                stop.wait(interval)
+        self._precacher = start_thread(run)
+        return self._precacher
+
+    def _set_sizes(self):
+        """{set, tokenizer and held-back stamp -> measurement}, kept in data/set_sizes.json."""
+        if getattr(self, "_set_size_store", None) is None:
+            path = self.root / "data" / "set_sizes.json"
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            except (OSError, ValueError):
+                loaded = {}
+            self._set_size_store = loaded if isinstance(loaded, dict) else {}
+        return self._set_size_store
 
     def word_lists(self):
         def make():
@@ -2355,16 +2489,6 @@ class WorkspaceServices(Services):
         except ValueError:
             return None
 
-    def cached_preview(self, dataset_ids, rows=16):
-        """pretrain_preview's answer when it is already known (this session or data/previews.json), else None. Never
-        computes, so the page can open at once and ask for the rest in the background."""
-        from studio_model import read_metrics
-        v = self.current_version()
-        if v is None or not v.spec:
-            return {}
-        hit = self._previews().get(self._preview_key(v, dataset_ids, rows))
-        return None if hit is None else {**hit, "tokens_per_second": self._speed(read_metrics)}
-
     def text_size(self, dataset_ids, spec):
         import studio_data_kinds as dk
         import studio_estimate
@@ -2374,14 +2498,17 @@ class WorkspaceServices(Services):
             params = studio_estimate.estimate(studio_spec.validate_spec(spec))["total"]
         except (ValueError, KeyError, TypeError):
             params = None
-        same = json.loads(json.dumps(spec, default=str))
         measured = None
-        for key, found in list(self._previews().items()):  # the newest preview of this design that counted its text
-            try:
-                if json.loads(key)[2] == same and found.get("chars_per_piece"):
-                    measured = found["chars_per_piece"]
-            except (ValueError, IndexError, TypeError, AttributeError):
-                continue
+        try:
+            ids = self._preview_ids(dataset_ids)
+            sized = [self._set_size(i, studio_spec.validate_spec(spec)) for i in ids]
+            if sized and all(sized):  # every chosen set measured: characters per piece over the whole choice
+                exclude = set(self._heldout())
+                parts = [(dk.text_characters(self.workspace, [i], exclude=exclude), m["chars_per_piece"]) for i, m in zip(ids, sized) if m["chars_per_piece"]]
+                pieces = sum(c / cpp for c, cpp in parts)
+                measured = sum(c for c, _ in parts) / pieces if pieces else None
+        except (ValueError, KeyError, TypeError):
+            measured = None
         return {"characters": characters, "params": params, "chars_per_piece": measured}
 
     def cached_step_rate(self, spec, rows):
@@ -2443,23 +2570,6 @@ class WorkspaceServices(Services):
             return gpu_status()
         except Exception:  # noqa: BLE001 - a broken driver is "no GPU" here
             return None
-
-    def _preview_key(self, version, dataset_ids, rows):
-        """Same chosen sets, design and data of those sets (each set's rev) and held-back text -> same preview. Not the files' stamp:
-        the collector and every other set's edits write to them all the time, and the preview reads millions of characters."""
-        chosen = set(dataset_ids)
-        revs = sorted((d["id"], d.get("rev", 0)) for d in list(self.workspace.state["datasets"]) if not chosen or d["id"] in chosen)
-        return json.dumps([sorted(dataset_ids), rows, version.spec, revs, self._heldout_stamp()], sort_keys=True, default=str)
-
-    def _previews(self):
-        if getattr(self, "_preview_store", None) is None:
-            path = self.root / "data" / "previews.json"
-            try:
-                loaded = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-            except (OSError, ValueError):
-                loaded = {}
-            self._preview_store = loaded if isinstance(loaded, dict) else {}
-        return self._preview_store
 
     def _speed(self, read_metrics):
         """Pieces per second of the newest run that logged one (for the time estimate)."""
