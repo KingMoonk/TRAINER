@@ -156,6 +156,21 @@ class PretrainingRouterTests(ApiCase):
                          (3, "Version 2 catch-up from version 3", v3.best_checkpoint, v1.best_checkpoint))
         self.call("POST", "/pretraining/plan", json={"dataset_ids": ["Your files"], "version": 2, "from_version": 2}, expect=400)
 
+    def test_a_trained_version_trains_further_from_its_own_checkpoint_by_default(self):
+        v1, v2 = self.save_versions(parent_trained=False)
+        self.trained_run(v2, {"status": "completed", "step": 900, "steps": 900})
+        plan = self.plan(version=2, mode="catch_up")
+        self.assertEqual(([s["version"] for s in plan["sources"]], plan["continue_from"], plan["can_continue"], plan["mode"]),
+                         ([2], 2, True, "catch_up"))
+        self.assertEqual((plan["sources"][0]["this_version"], plan["sources"][0]["parent"]), (True, False))
+        self.assertEqual((plan["job"]["label"], plan["job"]["params"]["init_from"]), ("Version 2 catch-up", v2.best_checkpoint))
+
+        self.trained_run(v1, {"status": "completed", "step": 100, "steps": 100})
+        both = self.plan(version=2)
+        self.assertEqual(([s["version"] for s in both["sources"]], both["continue_from"]), ([2, 1], 2))
+        parent = self.plan(version=2, from_version=1)
+        self.assertEqual((parent["job"]["label"], parent["job"]["params"]["init_from"]), ("Version 2 catch-up", v1.best_checkpoint))
+
     def test_a_run_with_no_run_file_is_still_listed(self):
         v1, _ = self.save_versions()
         v1.best_checkpoint = str(Path(tempfile.mkdtemp()) / "best.npz")

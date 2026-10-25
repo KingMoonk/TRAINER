@@ -85,13 +85,17 @@ test("durationText reads a wall time in plain words", () => {
 describe("sourceFacts", () => {
   const source = (over: Partial<Source> = {}): Source => ({
     version: 4, name: "deep", change: "", status: "stopped", finished_at: "2026-10-19T08:00:00", steps: 300, steps_planned: null, seconds: 600, tokens: null,
-    params: 2_500_000, best_val_loss: 1.98765, train_loss: null, device: null, rounds: null, inner_steps: null, same_design: true, parent: false, ...over,
+    params: 2_500_000, best_val_loss: 1.98765, train_loss: null, device: null, rounds: null, inner_steps: null, same_design: true, parent: false, this_version: false, ...over,
   });
 
   test("names the run and lists only what it recorded", () => {
     expect(sourceFacts(source())).toEqual({
       title: "Version 4 · deep", when: "Stopped 19 Oct 2026", facts: ["300 steps", "10 min", "Held-out loss 1.988", "2.5M params"], design: "Same design: every weight is copied",
     });
+  });
+
+  test("the version itself says a run from it trains it further", () => {
+    expect(sourceFacts(source({ this_version: true })).title).toBe("Version 4 · deep · this version: trains it further");
   });
 
   test("a run with no record says so", () => {

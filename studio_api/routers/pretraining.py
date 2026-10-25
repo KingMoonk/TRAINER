@@ -239,6 +239,7 @@ class ContinueSource(BaseModel):
     inner_steps: int | None = None
     same_design: bool  # every tensor is copied; otherwise only the ones whose shapes match
     parent: bool  # the version this one was saved from
+    this_version: bool = False  # the version itself: a catch-up from it trains it further
 
 
 class PretrainPlan(BaseModel):
@@ -247,7 +248,7 @@ class PretrainPlan(BaseModel):
     mode: Literal["catch_up", "from_scratch"]  # the mode a run may use: catch_up only when continuing is valid
     can_continue: bool
     sources: list[ContinueSource] = []  # what a catch-up may start from, newest first
-    continue_from: int | None = None  # the one a catch-up starts from: `from_version`, else the parent, else the newest
+    continue_from: int | None = None  # the one a catch-up starts from: `from_version`, else the version itself when trained, else the parent, else the newest
     continue_blocked: Literal["word_list_changed", "no_trained_parent"] | None = None
     estimating: bool  # the size preview is not known yet: POST /pretraining/preview, then ask again
     pieces: int | None = None
@@ -318,7 +319,8 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
     numbers = [s["version"] for s in sources]
     if body.from_version is not None and body.from_version not in numbers:
         raise HTTPException(400, f"Version {body.from_version} has no trained weights with this version's word list to start from.")
-    chosen = body.from_version if body.from_version is not None else parent.number if parent and parent.number in numbers else next(iter(numbers), None)
+    default = v.number if v is not None and v.number in numbers else parent.number if parent and parent.number in numbers else next(iter(numbers), None)
+    chosen = body.from_version if body.from_version is not None else default
     source = next((p for p in versions if p.number == chosen), None)
     ok = source is not None
     blocked = (None if ok else "word_list_changed" if parent is not None and parent.best_checkpoint and plan.word_list_changed(v, parent)

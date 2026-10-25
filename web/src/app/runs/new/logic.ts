@@ -101,7 +101,7 @@ const DAY = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", y
 
 /** What one earlier run did, for its row under "Start from": a title, then the facts it recorded (each left out when it is unknown). */
 export function sourceFacts(s: Source): { title: string; when: string; facts: string[]; design: string } {
-  const title = [fill(T.sourceTitle, { number: s.version }), s.name, s.parent ? T.sourceParent : ""].filter(Boolean).join(" · ");
+  const title = [fill(T.sourceTitle, { number: s.version }), s.name, s.this_version ? T.sourceSelf : s.parent ? T.sourceParent : ""].filter(Boolean).join(" · ");
   const status = s.status ? (T.statuses[s.status] ?? s.status) : "";
   const date = s.finished_at && !Number.isNaN(Date.parse(s.finished_at)) ? DAY.format(new Date(s.finished_at)) : "";
   const when = status || date ? fill(T.sourceFinished, { status: status || T.statuses.completed, date }).trim() : "";

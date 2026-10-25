@@ -42,6 +42,7 @@ export const NEW_RUN = {
   sourcesLoading: "Reading the earlier runs...",
   sourceTitle: "Version {number}",
   sourceParent: "saved from it",
+  sourceSelf: "this version: trains it further",
   sourceFinished: "{status} {date}",
   sourceSteps: "{done} of {planned} steps",
   sourceStepsDone: "{done} steps",
