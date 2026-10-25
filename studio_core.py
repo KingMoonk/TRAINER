@@ -52,17 +52,8 @@ _COUNT_TRIGGERS = {
 
 
 def _root():
-    """The folder holding data/ and runs/. Next to the code when run from source; a frozen bundle is read-only and replaced on upgrade, so it goes in the user's data folder."""
-    if not getattr(sys, "frozen", False):
-        return Path(__file__).resolve().parent
-    if sys.platform == "darwin":
-        base = Path.home() / "Library" / "Application Support"
-    elif sys.platform == "win32":
-        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
-    else:
-        base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
-    (base / "Groundwork").mkdir(parents=True, exist_ok=True)
-    return base / "Groundwork"
+    """The folder holding data/ and runs/."""
+    return Path(__file__).resolve().parent
 
 
 def module_command(module, *args):

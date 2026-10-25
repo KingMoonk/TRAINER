@@ -1,7 +1,7 @@
 name: Auto Release
 
 # Run by hand (Actions -> Auto Release -> Run workflow) on main: read the Conventional Commits since the last v* tag, pick the semver bump,
-# tag the tested commit and dispatch release.yml (which builds the macOS and Windows executables).
+# tag the tested commit and dispatch release.yml (which packages the source and built web assets).
 #   feat -> minor · fix/perf/revert/refactor/style -> patch · docs/chore/test/ci/build -> no release
 #   `!` or BREAKING CHANGE -> major, but only after approval on the `breaking-release` environment
 # Nothing releasable -> the run does nothing. "Run workflow" forces a bump or dry-runs the version math.

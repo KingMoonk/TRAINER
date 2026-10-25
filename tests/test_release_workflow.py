@@ -1,40 +1,37 @@
-"""release.yml and the frozen app agree: the hidden imports app.py checks are the ones PyInstaller is given, and web/out is bundled where the API looks for it."""
-import re
+"""release.yml packages the source and built web/out into Groundwork.zip, smoke tests the unpacked archive, and attaches it on release."""
 import unittest
 from pathlib import Path
 
-import app
-from studio_api import app as api_app
-
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-
-
-def pyinstaller_command():
-    return next(line for line in WORKFLOW.splitlines() if "-m PyInstaller" in line)
+RELEASE_WORKFLOW = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+AUTO_RELEASE_WORKFLOW = (ROOT / ".github" / "workflows" / "auto-release.yml").read_text(encoding="utf-8")
 
 
 class ReleaseWorkflow(unittest.TestCase):
-    def test_hidden_imports_match_what_the_smoke_test_checks(self):
-        self.assertEqual(set(re.findall(r"--hidden-import (\S+)", pyinstaller_command())), set(app.HIDDEN))
+    def test_the_web_bundle_is_built_before_packaging(self):
+        self.assertIn("pnpm install --frozen-lockfile", RELEASE_WORKFLOW)
+        self.assertIn("pnpm build", RELEASE_WORKFLOW)
+        self.assertLess(RELEASE_WORKFLOW.index("pnpm build"), RELEASE_WORKFLOW.index("Groundwork.zip"))
 
-    def test_the_routers_studio_api_imports_by_name_are_collected(self):
-        self.assertIn("--collect-submodules studio_api.routers", pyinstaller_command())
+    def test_web_out_and_app_are_packaged_in_groundwork_zip(self):
+        self.assertIn('"web" / "out"', RELEASE_WORKFLOW)
+        self.assertIn("requirements*.txt", RELEASE_WORKFLOW)
+        self.assertIn("Groundwork.zip", RELEASE_WORKFLOW)
 
-    def test_web_out_is_bundled_where_the_api_looks_for_it(self):
-        """Frozen, studio_api/app.py lives under the bundle root (sys._MEIPASS), so WEB_OUT is <root>/web/out whatever the checkout."""
-        wanted = api_app.WEB_OUT.relative_to(ROOT).as_posix()
-        self.assertEqual(wanted, "web/out")
-        found = re.findall(r'--add-data "([^"$]*)\$\{\{ matrix\.sep \}\}([^"]*)"', pyinstaller_command())
-        self.assertEqual(found, [(wanted, wanted)])
+    def test_smoke_test_runs_on_unpacked_release(self):
+        self.assertIn('app.py", "--smoke"', RELEASE_WORKFLOW)
 
-    def test_the_add_data_separator_is_the_platform_path_separator(self):
-        self.assertIn('{os: macos-latest, name: macos, sep: ":"}', WORKFLOW)
-        self.assertIn('{os: windows-latest, name: windows, sep: ";"}', WORKFLOW)
+    def test_artifact_and_release_attachment(self):
+        self.assertIn("name: Groundwork", RELEASE_WORKFLOW)
+        self.assertIn("path: Groundwork.zip", RELEASE_WORKFLOW)
+        self.assertIn("dist/Groundwork.zip", RELEASE_WORKFLOW)
 
-    def test_the_web_bundle_is_built_before_pyinstaller(self):
-        self.assertLess(WORKFLOW.index("pnpm build"), WORKFLOW.index("-m PyInstaller"))
-        self.assertIn("pnpm install --frozen-lockfile", WORKFLOW)
+    def test_auto_release_dispatches_release_workflow(self):
+        self.assertIn("gh workflow run release.yml", AUTO_RELEASE_WORKFLOW)
+
+    def test_no_legacy_packaging_or_frozen_references_in_workflow(self):
+        for term in ("py" + "installer", "sys." + "frozen", "pack" + "aging/"):
+            self.assertNotIn(term, RELEASE_WORKFLOW.lower())
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ between a handful of laptops over WAN.
 
 Non-goals: per-step gradient sync across machines (DDP over WAN is slower than the fastest single box; one run spans
 machines with DiLoCo instead, see `docs/distributed.md`); a public
-deployment (the tailnet is the perimeter until Phase 7); keeping the desktop packaging (`packaging/`, frozen builds) alive.
+deployment (the tailnet is the perimeter until Phase 7); keeping desktop packaging (frozen builds) alive.
 
 ## Repository layout (monorepo)
 
@@ -124,7 +124,7 @@ Done: the viewer works in Safari and Chrome against a live run; CI no longer nee
 ### Phase 5 — remove Tk, merge to master (#97)
 
 - [ ] Delete `studio_ia/shell.py`, `widgets.py`, `theme.py`, `pages/`, `studio_widgets.py`, `studio_ux.py`,
-      `studio_ui_guard.py`'s Tk parts, `tests/gui_*.py`, `packaging/`, `start_studio.bat`, the `--run-module` trick in
+      `studio_ui_guard.py`'s Tk parts, `tests/gui_*.py`, the packaging hooks, `start_studio.bat`, the `--run-module` trick in
       `app.py`. `app.py` starts the API and opens the browser.
 - [x] `Services` loses `bind_ui`/`pump`/`ready`; `copy.py` is gone; `tasks.py test:ci` drops the window level.
 - [ ] Optional: move the Python package under `server/`.
