@@ -2,7 +2,6 @@
 import type { components } from "@/lib/api-schema";
 import type { QueueRow } from "@/lib/cluster";
 import { nodeName } from "@/lib/node-name";
-import type { Plan } from "../../pretraining/logic";
 import { fill, NEW_RUN as T } from "./copy";
 
 export type Node = components["schemas"]["ClusterNode"];
@@ -72,11 +71,6 @@ export function shapeOf(workers: string[], nodes: Node[]): { label: string; tip:
 /** "Start" when the queue would start the job at once, else "Add to queue". */
 export function ctaLabel(outlook: string | undefined): string {
   return outlook === STARTS_NOW ? T.startNow : T.addToQueue;
-}
-
-/** The pretrain job the plan built, kept on `address` when one peer is the only worker ("it runs there or waits"). */
-export function pinnedJob(job: NonNullable<Plan["job"]>, address: string | null) {
-  return { ...job, note: "", params: address ? { ...job.params, pinned: address } : job.params };
 }
 
 /** The version SFT starts from when none is chosen: the best trained one, else the latest (as the Post-training page does). */
