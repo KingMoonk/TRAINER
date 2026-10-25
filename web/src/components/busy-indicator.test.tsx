@@ -62,7 +62,7 @@ describe("busy indicator", () => {
     expect(screen.getByTestId("busy-indeterminate")).toBeInTheDocument();
     answer();
     await waitFor(() => expect(screen.queryByTestId("busy-indicator")).toBeNull());
-  });
+  }, 15_000);  // longer than the 5 s search above, so a slow runner fails on what it found, not on the test's own clock
 
   test("a read that answers at once never shows", async () => {
     mockApi({ "GET /distributed/runs": { body: [] } });
