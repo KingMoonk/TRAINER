@@ -95,6 +95,8 @@ class InTheQueue(unittest.TestCase):
         self.assertTrue(wait(lambda: job.status == "failed"))
         self.assertEqual((job.error, job.details), (RAM, "MemoryError"))
         self.assertEqual(runner.state().failed, [job])
+        with runner.lock:  # the status is set before the queue is saved, under the same lock
+            pass
         again = Runner(self.root / "data" / "queue.json", {})  # kept across a restart
         self.assertEqual((again.jobs[0].error, again.jobs[0].details), (RAM, "MemoryError"))
 
