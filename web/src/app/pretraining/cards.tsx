@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { T, fill } from "./copy";
-import { END, HOLD, PALETTE, ROWS, enoughView, perStepLine, selectedLine, type Plan, type Preview, type TextSet } from "./logic";
+import { END, HOLD, PALETTE, ROWS, enoughView, perStepLine, readoutView, selectedLine, type Plan, type Preview, type TextSet } from "./logic";
 import { optionBox } from "@/components/option-box";
 
 /** A row of choices (rows per step, held back, how long) as a labelled radio group. */
@@ -91,6 +91,7 @@ export function SetsCard({ sets, loading, chosen, onToggle }: { sets: TextSet[] 
 export function EnoughCard({ plan, estimating }: { plan: Plan | undefined; estimating: boolean }) {
   const view = enoughView(plan, estimating);
   const expectation = plan?.expectation;
+  const readout = readoutView(plan);
   return (
     <Card>
       <CardHeader>
@@ -111,6 +112,19 @@ export function EnoughCard({ plan, estimating }: { plan: Plan | undefined; estim
             </p>
             <p className="text-xs text-muted-foreground">{view.tip}</p>
           </>
+        )}
+        {readout && (
+          <div className="flex flex-col gap-1" data-testid="readout">
+            <p className="text-sm font-medium" data-testid="readout-size">
+              {readout.size}
+            </p>
+            <p className="text-xs text-muted-foreground" data-testid="readout-source">
+              {readout.source}
+            </p>
+            <p className="text-sm" data-testid="readout-advice">
+              {readout.advice}
+            </p>
+          </div>
         )}
         {expectation && (
           <div data-testid="expectation">

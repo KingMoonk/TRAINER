@@ -188,6 +188,19 @@ class PretrainingRouterTests(ApiCase):
         self.assertEqual((none["can_add"], none["job"], none["steps"], none["enough"]), (False, None, None, None))
         self.assertEqual(none["reason"], "Choose some text first.")
 
+    def test_the_readout_is_there_while_estimating_and_uses_the_real_count_once_known(self):
+        self.save_versions()
+        self.services.cached_preview = lambda ids, rows=16: None
+        estimating = self.plan()
+        self.assertTrue(estimating["estimating"])
+        self.assertEqual(estimating["readout"], {"characters": 8_000_000, "pieces": 2_000_000, "counted": False, "chars_per_piece": 4.0,
+                                                  "params": 1_000_000, "ratio": 2.0, "ratio_text": "2.00", "verdict": "few", "target_params": 100_000})
+        self.services.cached_preview = lambda ids, rows=16: {"pieces": 50_000_000, "params": 1_000_000, "context": 256, "first_rows": []}
+        known = self.plan()["readout"]
+        self.assertEqual((known["counted"], known["pieces"], known["chars_per_piece"], known["verdict"], known["target_params"]),
+                         (True, 50_000_000, 0.16, "many", 2_500_000))
+        self.assertIsNone(self.call("POST", "/pretraining/plan", json={"dataset_ids": []})["readout"])
+
     def test_an_unknown_size_is_estimating_and_adds_nothing(self):
         self.save_versions()
         self.services.cached_preview = lambda ids, rows=16: None

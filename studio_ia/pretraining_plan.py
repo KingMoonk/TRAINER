@@ -73,6 +73,21 @@ HOLD = ("2%", "5%", "10%")
 LENGTHS = {"Short": 1, "Medium": 2, "Long": 4}  # passes over the chosen text
 RULE = 20  # word pieces per parameter, a rule of thumb only
 ABOUT_RIGHT = (0.8 * RULE, 1.5 * RULE)  # ratios in this band read "about right"; below it too little, above it plenty
+FEW_BELOW, MANY_ABOVE = 10, 40  # word pieces per parameter: under the first the text is short for the model, over the second the model could be bigger
+CHARS_PER_PIECE = 4.0  # characters in a word piece when the tokenizer has not been measured on this text (English prose with a 12k-piece list is near it)
+
+
+def estimated_pieces(characters, chars_per_piece=None):
+    """Word pieces in `characters` of text, from the tokenizer's measured characters per piece, else CHARS_PER_PIECE. Never tokenizes."""
+    return round(characters / (chars_per_piece or CHARS_PER_PIECE))
+
+
+def size_advice(pieces, params):
+    """(verdict, ratio, target_params) for `pieces` word pieces against a model of `params` parameters: "few" under FEW_BELOW pieces
+    per parameter, "right" up to MANY_ABOVE, "many" above. target_params is the size at which this text is RULE pieces per parameter."""
+    ratio = pieces / params
+    verdict = "few" if ratio < FEW_BELOW else "right" if ratio <= MANY_ABOVE else "many"
+    return verdict, ratio, round(pieces / RULE)
 
 
 def word_list_changed(v, parent):

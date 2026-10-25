@@ -3,6 +3,7 @@ import { ApiError } from "@/lib/api";
 import { T, fill } from "./copy";
 import {
   chosenIds,
+  countText,
   enoughView,
   errorText,
   lrLine,
@@ -10,6 +11,7 @@ import {
   modeTexts,
   perStepLine,
   queueNote,
+  readoutView,
   selectedLine,
   specLr,
   stepsLine,
@@ -179,5 +181,36 @@ describe("errorText", () => {
     expect(errorText(new Error("offline"))).toBe("offline");
     expect(errorText("boom")).toBe("boom");
     expect(errorText(null)).toBe("null");
+  });
+});
+
+describe("countText", () => {
+  it("says counts the way the server does", () => {
+    expect([999, 1_000, 133_312, 4_200_000, 18_000_000, 545_000_000, 2_500_000_000].map(countText)).toEqual(["999", "1.0k", "133k", "4.2M", "18M", "545M", "2.5B"]);
+  });
+});
+
+describe("readoutView", () => {
+  const readout = (extra: Record<string, unknown> = {}) =>
+    plan({ readout: { characters: 8_000_000, pieces: 2_000_000, counted: false, chars_per_piece: 4, params: 18_000_000, ratio: 0.11, ratio_text: "0.11", verdict: "few", target_params: 100_000, ...extra } });
+  it("is absent without a readout", () => {
+    expect(readoutView(undefined)).toBeNull();
+    expect(readoutView(plan())).toBeNull();
+  });
+  it("shows an estimate as about, with the characters per piece it used", () => {
+    const view = readoutView(readout())!;
+    expect(view.size).toBe("8.0M characters · about 2.0M word pieces · 18M parameters");
+    expect(view.source).toBe(fill(T.readoutEstimated, { chars: "4" }));
+    expect(view.advice).toBe(fill(T.adviceFew, { ratio: "about 0.11", target: "100k" }));
+  });
+  it("shows the counted pieces plainly once the preview is known", () => {
+    const view = readoutView(readout({ counted: true, pieces: 1_900_000 }))!;
+    expect(view.size).toBe("8.0M characters · 1.9M word pieces · 18M parameters");
+    expect(view.source).toBe(T.readoutCounted);
+    expect(view.advice).toBe(fill(T.adviceFew, { ratio: "0.11", target: "100k" }));
+  });
+  it("gives the advice for each verdict", () => {
+    expect(readoutView(readout({ verdict: "right", ratio_text: "20.0" }))!.advice).toBe(fill(T.adviceRight, { ratio: "about 20.0" }));
+    expect(readoutView(readout({ verdict: "many", ratio_text: "90.0", target_params: 100_000_000 }))!.advice).toBe(fill(T.adviceMany, { ratio: "about 90.0", target: "100M" }));
   });
 });

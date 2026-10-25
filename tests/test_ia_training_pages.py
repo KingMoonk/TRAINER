@@ -7,7 +7,7 @@ from unittest import mock
 import studio_gate
 from studio_core import Workspace
 from studio_data_kinds import add_problems
-from studio_ia.pretraining_plan import enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, word_list_changed
+from studio_ia.pretraining_plan import estimated_pieces, size_advice, enough_text, held_out, ratio_text, source_action, source_status, can_continue, forced_mode, word_list_changed
 from studio_ia.services import WorkspaceServices
 from studio_spec import default_spec
 
@@ -189,6 +189,17 @@ class WorkspaceRows(unittest.TestCase):
         self.ws.add(self.text, [{"text": "a new story changes the stored data"}])
         self.assertIsNone(self.svc.cached_preview([self.text], rows=6))
 
+    def test_text_size_is_fast_and_measured_once_a_preview_has_counted(self):
+        spec = default_spec()
+        self.svc.save_version(spec, "first design")
+        first = self.svc.text_size([self.text], spec)
+        self.assertEqual(first["characters"], sum(len((f"story number {i} " * 5).strip()) for i in range(20)))
+        self.assertGreater(first["params"], 0)
+        self.assertIsNone(first["chars_per_piece"])
+        self.assertIsNone(self.svc.cached_preview([self.text], rows=6))  # reading the size did no tokenizing
+        preview = self.svc.pretrain_preview([self.text], rows=6)
+        self.assertEqual(self.svc.text_size([self.text], spec)["chars_per_piece"], preview["chars_per_piece"])
+
     def test_preview_normalizes_legacy_specs_without_changing_the_version(self):
         version = self.svc.save_version(default_spec(), "first design")
         for sparse, context in (({"tokenizer": BYTE}, 256), ({"dims": {"n_ctx": 128}}, 128)):
@@ -261,6 +272,22 @@ def _problems():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SizeAdviceTest(unittest.TestCase):
+    def verdict(self, ratio):
+        return size_advice(ratio * 1_000_000, 1_000_000)[0]
+
+    def test_thresholds(self):
+        self.assertEqual([self.verdict(r) for r in (0.5, 9.9, 10, 20, 40, 40.1, 500)], ["few", "few", "right", "right", "right", "many", "many"])
+
+    def test_target_is_the_size_that_makes_twenty_per_parameter(self):
+        self.assertEqual(size_advice(200_000_000, 100_000_000), ("few", 2.0, 10_000_000))
+        self.assertEqual(size_advice(2_000_000_000, 18_000_000)[2], 100_000_000)
+
+    def test_pieces_are_a_quarter_of_the_characters_unless_measured(self):
+        self.assertEqual(estimated_pieces(8_000_000), 2_000_000)
+        self.assertEqual(estimated_pieces(8_000_000, 3.2), 2_500_000)
 
 
 class EnoughTextTest(unittest.TestCase):

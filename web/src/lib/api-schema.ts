@@ -6431,6 +6431,7 @@ export interface components {
              * @default
              */
             plateau_line: string;
+            readout?: components["schemas"]["SizeReadout"] | null;
             /**
              * Reason
              * @default
@@ -7925,6 +7926,33 @@ export interface components {
             pages: number;
             /** Seeds */
             seeds?: string[];
+        };
+        /**
+         * SizeReadout
+         * @description The text against the design, from stored character counts: ready at once, before the slow size preview is known.
+         */
+        SizeReadout: {
+            /** Characters */
+            characters: number;
+            /** Chars Per Piece */
+            chars_per_piece: number;
+            /** Counted */
+            counted: boolean;
+            /** Params */
+            params: number;
+            /** Pieces */
+            pieces: number;
+            /** Ratio */
+            ratio: number;
+            /** Ratio Text */
+            ratio_text: string;
+            /** Target Params */
+            target_params: number;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "few" | "right" | "many";
         };
         /** Sizes */
         Sizes: {

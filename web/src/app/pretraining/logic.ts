@@ -2,6 +2,7 @@ import type { components } from "@/lib/api-schema";
 import { T, fill } from "./copy";
 
 export type Plan = components["schemas"]["PretrainPlan"];
+export type Readout = NonNullable<Plan["readout"]>;
 export type TextSet = components["schemas"]["TextSet"];
 export type Preview = components["schemas"]["PreviewModel"];
 export type RangeResult = components["schemas"]["RangeResult"];
@@ -109,6 +110,28 @@ export function enoughView(plan: Plan | undefined, estimating: boolean): { headl
     return { headline: plan.enough.headline, tip: fill(tip, { ratio: plan.enough.ratio_text }) };
   }
   return { headline: T.textUnknown, tip: T.wordPiecesPlain };
+}
+
+/** A count the way a person says it: 133k, 4.2M, 545M (as the server's studio_ia.sizing.count_text). */
+export function countText(value: number): string {
+  for (const [size, mark] of [[1e9, "B"], [1e6, "M"], [1e3, "k"]] as const) {
+    if (value >= size) return value >= 10 * size ? `${Math.round(value / size)}${mark}` : `${(value / size).toFixed(1)}${mark}`;
+  }
+  return String(Math.round(value));
+}
+
+/** The quick readout under "Enough text?": the sizes of the text and the design, and the advice, ready before the size preview is. */
+export function readoutView(plan: Plan | undefined): { size: string; source: string; advice: string; verdict: Readout["verdict"] } | null {
+  const r = plan?.readout;
+  if (!r) return null;
+  const about = r.counted ? "" : T.readoutAbout;
+  const advice = { few: T.adviceFew, right: T.adviceRight, many: T.adviceMany }[r.verdict];
+  return {
+    size: fill(T.readoutSize, { characters: countText(r.characters), pieces: about + countText(r.pieces), params: countText(r.params) }),
+    source: r.counted ? T.readoutCounted : fill(T.readoutEstimated, { chars: Number(r.chars_per_piece.toFixed(1)).toString() }),
+    advice: fill(advice, { ratio: about + r.ratio_text, target: countText(r.target_params) }),
+    verdict: r.verdict,
+  };
 }
 
 export function perStepLine(plan: Plan | undefined, estimating: boolean): string {
