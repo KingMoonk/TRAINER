@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, unwrap } from "@/lib/api";
-import { runJob, type JobLike } from "../your-data/jobs";
 import { cn } from "@/lib/utils";
 import { Choice } from "./cards";
 import { T, fill } from "./copy";
@@ -15,7 +14,7 @@ import { LENGTHS, STOP_WHEN_FLAT, errorText, lrLine, modeTexts, queueNote, steps
 import { optionBox } from "@/components/option-box";
 
 /** Continue or start over, how long, and Add to the queue: the job is the one the server's plan built. While the size of the text is
- * still being worked out, adding asks the server to finish that first and then add the job (POST /pretraining/start). */
+ * still being worked out, adding puts the run in the queue at once (POST /pretraining/start); it gets its steps once the size is known. */
 export function TrainCard({
   plan,
   body,
@@ -49,8 +48,7 @@ export function TrainCard({
     onError: (error) => toast.error(errorText(error)),
   });
   const start = useMutation({
-    mutationFn: () =>
-      runJob<{ id: string; label: string }>(() => unwrap(api.POST("/pretraining/start", { body: { ...body, version: plan!.version } })) as Promise<JobLike>),
+    mutationFn: () => unwrap(api.POST("/pretraining/start", { body: { ...body, version: plan!.version } })),
     onSuccess: (job) => {
       setJobId(job.id);
       toast.success(fill(T.added, { label: job.label }));
@@ -58,7 +56,7 @@ export function TrainCard({
     },
     onError: (error) => toast.error(errorText(error)),
   });
-  // The only thing missing is the size of the text: the run may be asked for now, and is added once that is known.
+  // The only thing missing is the size of the text: the run may be added now, and waits in the queue until that is known.
   const sizeFirst = !!plan && !plan.can_add && plan.estimating && plan.version !== null;
   const busy = add.isPending || start.isPending;
   // When the job this page added starts; before one is added (or once it has left the queue), what adding one now would do.
@@ -129,11 +127,7 @@ export function TrainCard({
               {T.addQueue}
             </Button>
           </div>
-          {start.isPending ? (
-            <p className="text-sm text-muted-foreground" data-testid="sizing-then-adding">
-              {T.sizingThenAdding}
-            </p>
-          ) : sizeFirst ? (
+          {sizeFirst ? (
             <p className="text-sm text-muted-foreground" data-testid="size-first">
               {T.sizeFirst}
             </p>

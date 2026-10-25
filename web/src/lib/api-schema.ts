@@ -2631,9 +2631,10 @@ export interface paths {
         put?: never;
         /**
          * Pretrain Start
-         * @description Add the run the plan builds for these answers to the queue, as a job: when the size of the chosen text is not known yet it
-         *     is worked out first (Services.pretrain_preview), so the run can be asked for at once. The job fails with the plan's reason
-         *     when the run still cannot be added.
+         * @description Add the run the plan builds for these answers to the queue now, even while the size of the chosen text is still being worked
+         *     out: the run then waits in the queue, marked `params.sizing` and never started, while a job works the size out
+         *     (Services.pretrain_preview) and gives the run its steps, config and label, or fails it with the plan's reason. 409 with the reason
+         *     when the run cannot be added for anything but its size.
          */
         post: operations["pretrain_start_pretraining_start_post"];
         delete?: never;
@@ -8163,34 +8164,6 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        /** StartJob */
-        StartJob: {
-            /** Created At */
-            created_at: number;
-            /**
-             * Error
-             * @default
-             */
-            error: string;
-            /** Finished At */
-            finished_at?: number | null;
-            /** Fraction */
-            fraction?: number | null;
-            /** Id */
-            id: string;
-            /** Kind */
-            kind: string;
-            /**
-             * Progress
-             * @default
-             */
-            progress: string;
-            result?: components["schemas"]["studio_api__routers__pretraining__Started"] | null;
-            /** Started At */
-            started_at?: number | null;
-            /** Status */
-            status: string;
-        };
         /**
          * StartRun
          * @description What the Training tab's form sends. The design is a version's; this computer takes part, and starts the run as its coordinator.
@@ -9056,7 +9029,7 @@ export interface components {
         };
         /**
          * Started
-         * @description The queue job POST /pretraining/start added.
+         * @description The queue job POST /pretraining/start added: its label is a provisional one while the size of its text is worked out.
          */
         studio_api__routers__pretraining__Started: {
             /** Id */
@@ -13364,7 +13337,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["StartJob"];
+                    "application/json": components["schemas"]["studio_api__routers__pretraining__Started"];
                 };
             };
             /** @description Validation Error */

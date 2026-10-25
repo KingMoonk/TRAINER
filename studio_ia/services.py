@@ -268,6 +268,15 @@ class Services:
     def enqueue(self, job):
         raise NotImplementedError
 
+    def fill_job(self, job_id, label, params):
+        """Give a job enqueued before the size of its text was known (params["sizing"]) its label and params, so it may run; False when
+        it has left the queue meanwhile."""
+        raise NotImplementedError
+
+    def fail_job(self, job_id, error):
+        """End a job still waiting for the size of its text as failed, with `error` as its reason."""
+        raise NotImplementedError
+
     def move_up(self, job_id):
         raise NotImplementedError
 
@@ -281,6 +290,8 @@ class Services:
             return "Running now"
         if job is not None and getattr(job, "status", "waiting") == "held":
             return "Held; release it to run"
+        if job is not None and (getattr(job, "params", None) or {}).get("sizing"):
+            return "Working out the size of its text first"
         if q.paused:
             return "Paused by you"
         reason = q.gate.reason or q.blocked
@@ -816,6 +827,22 @@ class FakeServices(Services):
         q.up_next.append(job)
         self.emit("queue", q)
 
+    def fill_job(self, job_id, label, params):
+        job = next((j for j in self._queue.up_next if j.id == job_id and j.params.get("sizing")), None)
+        if job is None:
+            return False
+        job.label, job.params = label, {k: v for k, v in params.items() if k != "sizing"}
+        self.emit("queue", self._queue)
+        return True
+
+    def fail_job(self, job_id, error):
+        job = next((j for j in self._queue.up_next if j.id == job_id and j.params.get("sizing")), None)
+        if job is not None:
+            self._queue.up_next.remove(job)
+            job.status, job.error = "failed", error
+            self._queue.failed.append(job)
+            self.emit("queue", self._queue)
+
     def start_queue(self):
         """Run the waiting jobs in a worker thread, unless one is already running or the queue is paused. The first job is
         already the running job when this returns."""
@@ -837,7 +864,7 @@ class FakeServices(Services):
 
     def _take_job(self):
         """The next waiting job, now the running one; None when paused or nothing waits. Hold _worker_lock."""
-        job = next((j for j in self._queue.up_next if j.status == "waiting"), None)
+        job = next((j for j in self._queue.up_next if j.status == "waiting" and not j.params.get("sizing")), None)
         if job is None or self._queue.paused:
             return None
         self._queue.up_next.remove(job)
@@ -1859,9 +1886,18 @@ class WorkspaceServices(Services):
             job = studio_queue.Job(**asdict(job))
         if self.runner.thread is None:
             self.runner.start()
-        if job.kind in VERSION_JOBS and job.params.get("version"):
+        if job.kind in VERSION_JOBS and job.params.get("version") and not job.params.get("sizing"):
             self._to(job.params["version"], "queued")
         return self.runner.enqueue(job)
+
+    def fill_job(self, job_id, label, params):
+        filled = self.runner.fill(job_id, label, params)
+        if filled and params.get("version"):
+            self._to(params["version"], "queued")
+        return filled
+
+    def fail_job(self, job_id, error):
+        self.runner.fail(job_id, error)
 
     def continue_run(self, number, kind, steps, dataset_ids=(), width=None, layers=None, spec=None, rows=16, hold=.05):
         from studio_ia import continue_run as cont

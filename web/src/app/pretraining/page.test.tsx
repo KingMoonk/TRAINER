@@ -127,7 +127,7 @@ function server({ known = true, sizing = SIZING as unknown } = {}) {
     },
     "POST /pretraining/start": ({ body }) => {
       state.starts.push(body);
-      return { status: 202, body: job("s1", "pretrain_start", null, "running") };
+      return { status: 202, body: { id: "q1", label: "Version 2, once the size of its text is known" } };
     },
     "GET /queue/jobs/*/outlook": { body: { outlook: "Starts after the run in progress" } },
     "POST /pretraining/lr_range_test": ({ body }) => {
@@ -239,7 +239,7 @@ describe("Pretraining page", () => {
     renderPage(<PretrainingPage />, { route: "/pretraining/" });
     expect((await screen.findAllByLabelText("Estimating how much text you have…")).length).toBeGreaterThan(0);
     expect(screen.queryByTestId("enough-headline")).not.toBeInTheDocument();
-    expect(await screen.findByTestId("size-first")).toHaveTextContent("You can add the run now: it goes into the queue as soon as the size is known.");
+    expect(await screen.findByTestId("size-first")).toHaveTextContent("You can add the run now: it waits in the queue until the size is known.");
     expect(screen.getByRole("button", { name: "Add to the queue" })).toBeEnabled();
 
     await waitFor(() => expect(state.known).toBe(true)); // the job was asked for
@@ -249,18 +249,13 @@ describe("Pretraining page", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Add to the queue" })).toBeEnabled());
   });
 
-  test("adding while the size is worked out asks the server to size the text first, then says the run is queued", async () => {
+  test("adding while the size is worked out puts the run in the queue at once", async () => {
     const state = server({ known: false });
     const user = userEvent.setup();
     renderPage(<PretrainingPage />, { route: "/pretraining/" });
     await user.click(await screen.findByRole("button", { name: "Add to the queue" }));
-    expect(await screen.findByTestId("sizing-then-adding")).toHaveTextContent("This carries on if you leave the page.");
-    expect(screen.getByRole("button", { name: "Add to the queue" })).toBeDisabled();
     expect(state.starts).toMatchObject([{ version: 2, dataset_ids: ["stories"], rows: 16, preview_rows: 6 }]);
-
-    act(() => emit("job", job("s1", "pretrain_start", { id: "q1", label: "Version 2 catch-up" })));
-    await waitFor(() => expect(screen.getByTestId("queue-line")).toHaveTextContent("Queued. Starts after the run in progress."));
-    expect(screen.queryByTestId("sizing-then-adding")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("queue-line")).toHaveTextContent("Queued. Starts after the run in progress."); // no job to wait for
   });
 
   test("the learning-rate range test shows a skeleton, then its chart and the sentence that reads it", async () => {

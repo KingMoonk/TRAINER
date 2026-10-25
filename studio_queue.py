@@ -21,6 +21,7 @@ KINDS = ("pretrain", "quicktest", "compare", "post_round", "restore_answers", "c
          "pretrain_distributed", "diloco_member", "rlhf_loop", "mlperf")
 MEMORY = {"half": .5, "most": .75, "all": 1.}
 QUEUED = ("waiting", "held")  # jobs listed under Up next, in order; only "waiting" ones are picked to run
+SIZING = "sizing"  # a param of a job added before the size of its text was known: it keeps its place but is not run until fill() gives its steps
 FAILED_SHOWN = 5
 MIN_FREE = 2 * 2 ** 30  # a job needs at least this much free disk to start
 
@@ -229,6 +230,9 @@ class Runner:
         self.user_paused = bool(data.get("user_paused", False))
         self.stopping_job = str(data.get("stopping") or "")
         for job in self.jobs:          # a run cut short by a restart goes back to the front
+            if job.status in QUEUED and job.params.get(SIZING):  # what was working out its size went with the app
+                job.status, job.error = "failed", "The app stopped while the size of this run's text was worked out. Add the run again."
+                continue
             if job.status == "running" and not job.owner and not job.node:
                 self.dead_runs.append(job)
             if job.status == "running" and job.id == self.stopping_job and not job.owner and not job.node:
@@ -314,6 +318,32 @@ class Runner:
         self.wake.set()
         self._emit("queue", {"job": job.id})
         return job
+
+    def fill(self, job_id, label, params):
+        """Give a job added while the size of its text was worked out (params[SIZING]) its label and params, so it may run. False when
+        it is no longer waiting for them: removed meanwhile. A pin set on it in the meantime is kept."""
+        with self.lock:
+            job = next((j for j in self._queued() if j.id == job_id and j.params.get(SIZING)), None)
+            if job is not None:
+                pinned = {"pinned": job.params["pinned"]} if job.params.get("pinned") else {}
+                job.label, job.params = label, {**{k: v for k, v in params.items() if k != SIZING}, **pinned}
+                self._save()
+        if job is None:
+            return False
+        self.wake.set()
+        self._emit("queue", {"job": job_id})
+        return True
+
+    def fail(self, job_id, error):
+        """End a job still waiting for its size (params[SIZING]) as failed, with `error` as its reason."""
+        with self.lock:
+            job = next((j for j in self._queued() if j.id == job_id and j.params.get(SIZING)), None)
+            if job is not None:
+                job.status, job.error = "failed", error
+                self._save()
+        if job is not None:
+            self._emit("queue", {"job": job_id})
+            self._emit("job", {"job": job_id, "status": "failed", "error": error})
 
     def _queued(self):
         return [j for j in self.jobs if j.status in QUEUED]
@@ -575,9 +605,10 @@ class Runner:
             self._run(job)
 
     def _next_local(self):
-        """The first waiting job that belongs on this machine: a job pinned to, or better placed on, a peer is skipped, not waited for."""
+        """The first waiting job that belongs on this machine: a job pinned to, or better placed on, a peer is skipped, not waited for, and
+        so is one still waiting for the size of its text."""
         with self.lock:
-            waiting = [j for j in self.jobs if j.status == "waiting"]
+            waiting = [j for j in self.jobs if j.status == "waiting" and not j.params.get(SIZING)]
         return next((j for j in waiting if self.cluster.place(j).where == "local"), None)
 
     def _place_waiting(self):
@@ -587,7 +618,7 @@ class Runner:
         if self.user_paused or self.blocked == "outside hours":
             return
         with self.lock:
-            waiting = [j for j in self.jobs if j.status == "waiting"]
+            waiting = [j for j in self.jobs if j.status == "waiting" and not j.params.get(SIZING)]
         for job in waiting:
             placement = self.cluster.place(job)
             if placement.where == "remote":

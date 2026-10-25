@@ -3,6 +3,7 @@ import json
 import math
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -45,7 +46,7 @@ class PretrainingRouterTests(ApiCase):
         self.assertEqual((rate["result"]["device"], rate["result"]["rows"]), ("cpu", 8))
         self.call("GET", "/pretraining/text_sets")
         self.call("POST", "/pretraining/plan", json={"dataset_ids": ["a"]})
-        self.assertEqual(self.job("POST", "/pretraining/start", json={"dataset_ids": ["a"]})["status"], "done")
+        self.assertEqual(self.call("POST", "/pretraining/start", 202, json={"dataset_ids": ["a"]})["id"], self.services.queue().up_next[-1].id)
         self.assertAllRoutesHit()
 
     def save_versions(self, parent_trained=True, tokenizer_changes=False):
@@ -204,22 +205,57 @@ class PretrainingRouterTests(ApiCase):
         self.call("POST", "/pretraining/plan", 422, json={"rows": 0})
         self.call("POST", "/pretraining/plan", 422, json={"mode": "sideways"})
 
-    def test_start_works_out_an_unknown_size_then_adds_the_run(self):
+    def until(self, ready, what):
+        end = time.monotonic() + 10
+        while not ready():
+            self.assertLess(time.monotonic(), end, f"waited for {what}")
+            time.sleep(0.02)
+
+    def test_start_queues_the_run_at_once_and_gives_it_its_steps_once_the_size_is_known(self):
         self.save_versions()
-        known, preview = {}, self.services.pretrain_preview
+        known, preview, release = {}, self.services.pretrain_preview, threading.Event()
+
+        def slow(ids, rows=16):
+            self.assertTrue(release.wait(10))
+            return known.setdefault(tuple(ids), preview(ids, rows))
         self.services.cached_preview = lambda ids, rows=16: known.get(tuple(ids))
-        self.services.pretrain_preview = lambda ids, rows=16: known.setdefault(tuple(ids), preview(ids, rows))
+        self.services.pretrain_preview = slow
         self.assertEqual(self.plan()["reason"], "The size of the text is still being worked out.")
-        done = self.job("POST", "/pretraining/start", json={"dataset_ids": ["Your files"]})
-        self.assertEqual(done["status"], "done", done["error"])
+        started = self.call("POST", "/pretraining/start", 202, json={"dataset_ids": ["Your files"]})
         queued = self.services.queue().up_next[-1]
-        self.assertEqual((done["result"]["id"], done["result"]["label"], queued.kind), (queued.id, queued.label, "pretrain"))
+        self.assertEqual((queued.id, queued.label, queued.kind, queued.params), (started["id"], started["label"], "pretrain", {"sizing": True}))
+        self.assertIn("once the size of its text is known", started["label"])
+        self.assertEqual(self.services.queue_outlook(queued), "Working out the size of its text first")
+
+        release.set()
+        self.until(lambda: "config" in queued.params, "the run's steps")
+        self.assertNotIn("sizing", queued.params)
+        self.assertEqual(queued.label, self.plan()["job"]["label"])
+        self.assertEqual(queued.params["config"], self.plan()["job"]["params"]["config"])
         self.assertIn(("Your files",), known)
 
-    def test_start_fails_with_the_reason_the_run_cannot_be_added(self):
-        done = self.job("POST", "/pretraining/start", json={"dataset_ids": ["Your files"]})
-        self.assertEqual(done["status"], "failed")
-        self.assertIn("Network designer", done["error"])
+    def test_start_fails_the_queued_run_with_the_reason_its_size_could_not_be_worked_out(self):
+        self.save_versions()
+        self.services.cached_preview = lambda ids, rows=16: None
+
+        def broken(ids, rows=16):
+            raise ValueError("The text could not be read.")
+        self.services.pretrain_preview = broken
+        started = self.call("POST", "/pretraining/start", 202, json={"dataset_ids": ["Your files"]})
+        self.until(lambda: self.services.queue().failed, "the run to fail")
+        failed = self.services.queue().failed[-1]
+        self.assertEqual((failed.id, failed.status, failed.error), (started["id"], "failed", "The text could not be read."))
+        self.assertEqual(self.services.queue().up_next, [])
+
+    def test_start_with_a_known_size_adds_the_whole_run(self):
+        self.save_versions()
+        started = self.call("POST", "/pretraining/start", 202, json={"dataset_ids": ["Your files"]})
+        queued = self.services.queue().up_next[-1]
+        self.assertEqual((queued.id, queued.label), (started["id"], self.plan()["job"]["label"]))
+        self.assertIn("config", queued.params)
+
+    def test_start_refuses_with_the_reason_the_run_cannot_be_added(self):
+        self.assertIn("Network designer", self.call("POST", "/pretraining/start", 409, json={"dataset_ids": ["Your files"]})["detail"])
         self.assertEqual(self.services.queue().up_next, [])
 
     def test_an_unknown_preview_is_null_not_computed(self):
