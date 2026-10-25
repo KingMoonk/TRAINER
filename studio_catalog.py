@@ -315,7 +315,7 @@ STARTER_IDS = ("dolly15k", "squad2", "codealpaca20k", "gsm8k", "oasst1")
 def default_catalog_ids():
     """Ids downloaded by default (commercially usable, bounded), in catalogue/stage order."""
     return [entry["id"] for entry in CATALOG if entry.get("default")]
-FORMAT_VERSION = 4  # 2: line endings normalised to \n. 3: OpenAssistant keeps English trees only; HellaSwag text is capitalised and punctuated. 4: GSM8K and MetaMathQA rows share a group per source question. Older converted files are rebuilt from the cached source
+FORMAT_VERSION = 5  # 2: line endings normalised to \n. 3: OpenAssistant keeps English trees only; HellaSwag text is capitalised and punctuated. 4: GSM8K and MetaMathQA rows share a group per source question. 5: fineweb_edu, openwebmath and gutenberg take their whole shard. Older converted files are rebuilt from the cached source
 MAX_DOWNLOAD_BYTES = 1_000_000_000
 MAX_RECORD_CHARS = 16_000_000
 _DOWNLOAD_LOCK = threading.Lock()
@@ -897,6 +897,12 @@ def _checkable(raw, parser):
     return None
 
 
+def _cap_changed(manifest, entry):
+    """True when the manifest records a max_records that differs from the entry's now (a lifted or changed cap).
+    A manifest without the key is judged by its format version alone."""
+    return "max_records" in manifest and manifest["max_records"] != entry.get("max_records")
+
+
 def _entry(catalog_id):
     entry = next((item for item in CATALOG if item["id"] == catalog_id), None)
     if entry is None:
@@ -935,7 +941,7 @@ def download_dataset(catalog_id, root=ROOT, stop=None, emit=None):
     try:
         if manifest_path.exists() and normalized.exists():
             cached = _read_state(manifest_path, {})
-            if (cached.get("status") == "complete" and cached.get("format_version") == FORMAT_VERSION
+            if (cached.get("status") == "complete" and cached.get("format_version") == FORMAT_VERSION and not _cap_changed(cached, entry)
                     and cached.get("revision") == entry["revision"] and cached.get("sha256") == file_sha256(normalized, stop)):
                 if emit:
                     emit({"text": f"Verified cached {entry['name']} · {cached['records']:,} records", "completed": cached["records"], "total": cached["records"]})
@@ -1018,7 +1024,7 @@ def download_dataset(catalog_id, root=ROOT, stop=None, emit=None):
                     "source_url": entry["source_url"], "license": entry["license"], "revision": entry["revision"],
                     "split": entry["split"], "stage": entry.get("stage", ""), "downloadedAt": now(), "invalid": invalid, "duplicates": duplicate,
                     "source": receipt, "manifest_path": str(manifest_path), "synthetic": entry["synthetic"],
-                    "license_file": license_file}
+                    "license_file": license_file, "max_records": entry.get("max_records")}
         atomic_json(manifest_path, manifest)
         if emit:
             emit({"text": f"Ready · {records:,} {entry['name']} records", "completed": records, "total": records})
@@ -1133,9 +1139,9 @@ def refresh_downloads(workspace, stop=None, emit=None):
     root, rebuilt = Path(workspace.root), []
     for old in list_downloads(root):
         catalog_id = old["catalog_id"]
-        if old.get("format_version") == FORMAT_VERSION:
-            continue
         entry = _entry(catalog_id)
+        if old.get("format_version") == FORMAT_VERSION and not _cap_changed(old, entry):
+            continue
         if not (root / "data" / "downloads" / catalog_id / Path(entry["filename"]).name).is_file():
             continue
         try:

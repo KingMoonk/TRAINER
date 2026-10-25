@@ -89,6 +89,23 @@ class RefreshDownloads(unittest.TestCase):
             (folder / Path(entry("oasst1")["filename"]).name).unlink()
             self.assertEqual(refresh_downloads(workspace), [])  # no source on disk: left alone, never fetched
 
+    def test_a_complete_download_built_under_an_old_record_cap_is_rebuilt(self):
+        with tempfile.TemporaryDirectory() as directory, patch("studio_catalog._fetch", side_effect=self.fake_fetch) as fetch:
+            result = download_dataset("oasst1", root=directory)
+            self.assertIsNone(result["max_records"])
+            folder = Path(directory) / "data" / "downloads" / "oasst1"
+            # The entry has no cap now; this manifest was written when it was capped at 25,000 records.
+            (folder / "manifest.json").write_text(json.dumps({**result, "max_records": 25_000}), encoding="utf-8")
+            fetches = fetch.call_count
+            workspace = Workspace(directory)
+            self.assertEqual(refresh_downloads(workspace), ["oasst1"])
+            self.assertIsNone(list_downloads(directory)[0]["max_records"])
+            self.assertEqual(fetch.call_count, fetches)  # rebuilt from the cached source
+            self.assertEqual(refresh_downloads(workspace), [])
+            (folder / "manifest.json").write_text(json.dumps({**result, "max_records": 25_000}), encoding="utf-8")
+            self.assertFalse(download_dataset("oasst1", root=directory).get("cached"))
+            self.assertTrue(download_dataset("oasst1", root=directory).get("cached"))
+
     def test_refresh_downloads_is_a_noop_on_the_service_protocol(self):
         from studio_ia.services import FakeServices
         self.assertEqual(FakeServices().refresh_downloads(), [])
