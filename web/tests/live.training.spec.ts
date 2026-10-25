@@ -60,5 +60,5 @@ test("the Queue links to the Training tab once other machines are listed", async
   await expect(page.getByTestId("queue-training-link")).toBeVisible({ timeout: 10_000 });
   await page.getByTestId("queue-training-link").click();
   await expect(page).toHaveURL(/\/cluster\/training\/?$/);
-  await expect(page.getByRole("navigation", { name: "Cluster" }).getByRole("link", { name: "Training" })).toHaveAttribute("aria-current", "location");
+  await expect(page.getByRole("navigation", { name: "Runs pages" }).getByRole("link", { name: "Cluster training" })).toHaveAttribute("aria-current", "page");
 });

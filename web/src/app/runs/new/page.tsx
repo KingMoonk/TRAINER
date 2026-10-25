@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { PAGE_MAIN } from "@/components/page-header";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 import { buttonVariants, Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -347,10 +347,14 @@ export default function NewRunPage() {
   return (
     <TooltipProvider>
       <main className={PAGE_MAIN}>
-        <header className="flex flex-col gap-2">
-          <Link href="/runs" className="w-fit text-sm text-highlight hover:underline">← {T.back}</Link>
-          <h1 className="text-2xl font-semibold tracking-tight">{T.title}</h1>
-        </header>
+        <PageHeader
+          title={T.title}
+          breadcrumb={
+            <Link href="/runs" className="w-fit text-sm text-highlight hover:underline">
+              ← {T.back}
+            </Link>
+          }
+        />
         <Fields defaults={defaults} sets={sets} machines={machines} />
       </main>
     </TooltipProvider>

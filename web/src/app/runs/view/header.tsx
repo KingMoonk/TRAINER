@@ -3,21 +3,25 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { Hint } from "@/app/runs/hint";
+import { SectionTabs } from "@/components/section-tabs";
 import { T } from "./copy";
 
 /** The run's name, its shape line (the machines, the coordinator, the settings) and the controls that end it. */
 export function RunHeader({ title, shape, controls, freshness }: { title: string; shape: string; controls?: ReactNode; freshness?: string }) {
   return (
-    <header className="flex flex-wrap items-end justify-between gap-4">
-      <div className="flex min-w-0 flex-col gap-1.5">
-        <Link href="/runs/" className="w-fit text-sm text-highlight underline-offset-4 hover:underline">← {T.back}</Link>
-        <h1 className="truncate text-2xl font-semibold tracking-tight" data-testid="run-title">{title}</h1>
-        <Hint tip={T.shapeTip} plain>
-          <span className="font-mono text-sm text-muted-foreground" data-testid="run-shape">{shape}</span>
-        </Hint>
-        {freshness && <span className="text-xs text-muted-foreground" data-testid="run-freshness">{freshness}</span>}
+    <header className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <Link href="/runs/" className="w-fit text-sm text-highlight underline-offset-4 hover:underline">← {T.back}</Link>
+          <h1 className="truncate text-2xl font-semibold tracking-tight" data-testid="run-title">{title}</h1>
+          <Hint tip={T.shapeTip} plain>
+            <span className="font-mono text-sm text-muted-foreground" data-testid="run-shape">{shape}</span>
+          </Hint>
+          {freshness && <span className="text-xs text-muted-foreground" data-testid="run-freshness">{freshness}</span>}
+        </div>
+        {controls}
       </div>
-      {controls}
+      <SectionTabs />
     </header>
   );
 }

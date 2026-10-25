@@ -12,7 +12,17 @@ export const AREAS: Area[] = [
 ];
 
 // `hidden` routes are reached from elsewhere (a link from a run) and stay out of the sidebar's page list.
-export type Route = { route: string; href: string; area: string; title: string; lead: string; hidden?: boolean };
+// `parent` is the route whose tab stays active when viewing a hidden route (e.g. `runs` for `run_view`).
+export type Route = {
+  route: string;
+  href: string;
+  area: string;
+  title: string;
+  tabTitle?: string;
+  lead: string;
+  hidden?: boolean;
+  parent?: string;
+};
 
 export const ROUTES: Route[] = [
   { route: "builder", href: "/builder", area: "models", title: "Build your model", lead: "Change the picture. See what it costs and what it does." },
@@ -22,13 +32,13 @@ export const ROUTES: Route[] = [
   { route: "pretraining", href: "/pretraining", area: "data", title: "Pretraining", lead: "Feed it text. It learns by predicting the next word, over and over." },
   { route: "collect", href: "/collect", area: "data", title: "Collect data", lead: "Gather open datasets and question-and-answer data in the background, only from sources whose terms allow it." },
   { route: "storage", href: "/storage", area: "data", title: "Storage", lead: "What the app keeps on this computer's disk, and what you can delete to free space." },
-  { route: "runs", href: "/runs", area: "runs", title: "Runs", lead: "Every training run on this computer and the cluster: what it is doing now and how the last ones ended." },
+  { route: "runs", href: "/runs", area: "runs", title: "Runs", tabTitle: "All runs", lead: "Every training run on this computer and the cluster: what it is doing now and how the last ones ended." },
   { route: "new_run", href: "/runs/new", area: "runs", title: "New run", lead: "Pick a model, the data, and the machines to train it on." },
-  { route: "run_view", href: "/runs/view", area: "runs", title: "Run", lead: "One run in detail: its rounds, its loss, and each machine's part.", hidden: true },
-  { route: "training_run", href: "/training-run", area: "runs", title: "Training run", lead: "Step k of n, the schedule phase and the error so far." },
-  { route: "post_training", href: "/post-training", area: "runs", title: "Post-training", lead: "Four rounds, always in this order. Same design throughout; only the weights shift." },
   { route: "queue", href: "/queue", area: "runs", title: "Queue", lead: "What it's training now, what's waiting, and when it's allowed to work." },
-  { route: "cluster_training", href: "/cluster/training", area: "runs", title: "Training", lead: "Start a training run that spreads over several machines, and watch each one: its round, its speed, and why one fell behind." },
+  { route: "training_run", href: "/training-run", area: "runs", title: "Training run", lead: "Step k of n, the schedule phase and the error so far." },
+  { route: "cluster_training", href: "/cluster/training", area: "runs", title: "Training", tabTitle: "Cluster training", lead: "Start a training run that spreads over several machines, and watch each one: its round, its speed, and why one fell behind." },
+  { route: "post_training", href: "/post-training", area: "runs", title: "Post-training", lead: "Four rounds, always in this order. Same design throughout; only the weights shift." },
+  { route: "run_view", href: "/runs/view", area: "runs", title: "Run", lead: "One run in detail: its rounds, its loss, and each machine's part.", hidden: true, parent: "runs" },
   { route: "chat", href: "/chat", area: "eval", title: "Chat", lead: "Talk to any trained version. Compare two to see what a change really did." },
   { route: "benchmark", href: "/benchmark", area: "eval", title: "Benchmark", lead: "Score a version on a fixed set of questions." },
   { route: "machines", href: "/cluster/machines", area: "machines", title: "Machines", lead: "What is running where on the machines this one works with, and who may call this computer." },

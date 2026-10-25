@@ -47,6 +47,7 @@ import {
 import { BUILDER, fill } from "@/lib/copy/builder";
 import { useEvent } from "@/lib/events";
 import { routeFor } from "@/lib/routes";
+import { PageHeader } from "@/components/page-header";
 
 const MAX_BLOCKS = 12;
 
@@ -307,11 +308,7 @@ export function Builder() {
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 sm:p-8">
-      <header className="space-y-2">
-        <p className="text-xs font-medium uppercase tracking-widest text-muted-foreground">{BUILDER.workspace}</p>
-        <h1 className="text-2xl font-semibold tracking-tight">{route.title}</h1>
-        <p className="max-w-2xl text-sm text-muted-foreground">{BUILDER.lead}</p>
-      </header>
+      <PageHeader title={route.title} lead={BUILDER.lead} />
       {failed ? (
         <p role="alert" className="rounded-md border border-destructive/40 p-2 text-sm text-destructive">
           {BUILDER.loading_failed} {detailOf(failed)}

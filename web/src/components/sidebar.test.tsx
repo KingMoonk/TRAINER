@@ -9,32 +9,25 @@ describe("Sidebar", () => {
   test("lists the five areas in order, with the open one marked", () => {
     renderPage(<TrafficProvider><Sidebar /></TrafficProvider>, { route: "/runs/new" });
     const studio = screen.getByRole("navigation", { name: "Studio" });
-    const areas = within(studio).getAllByRole("link").filter((a) => a.hasAttribute("href") && a.getAttribute("href") !== "/settings");
+    const areas = within(studio).getAllByRole("link");
     expect(areas.map((a) => a.textContent)).toEqual(["Models", "Data", "Runs", "Eval", "Machines"]);
     expect(within(studio).getByRole("link", { name: "Runs" })).toHaveAttribute("aria-current", "page");
   });
 
-  test("lists the Runs pages in the page list, and leaves run_view out", () => {
-    renderPage(<TrafficProvider><Sidebar /></TrafficProvider>, { route: "/runs/view" });
-    const group = screen.getByRole("group", { name: "Pages in this area" });
-    expect(within(group).getAllByRole("link").map((a) => a.textContent)).toEqual([
-      "Runs", "New run", "Training run", "Post-training", "Queue", "Training",
-    ]);
-  });
-
-  test("pins a Settings gear at the foot of the nav", () => {
+  test("pins Settings and traffic console at the foot of the nav", () => {
     renderPage(<TrafficProvider><Sidebar /></TrafficProvider>, { route: "/builder" });
     const gears = screen.getAllByRole("link", { name: "Settings" });
     expect(gears.length).toBeGreaterThan(0);
     for (const gear of gears) expect(gear).toHaveAttribute("href", "/settings");
+    const consoles = screen.getAllByRole("button", { name: /traffic/i });
+    expect(consoles.length).toBeGreaterThan(0);
   });
 
-  test("lists the model pages with no look-inside group", () => {
+  test("contains only the five area links in the studio navigation", () => {
     renderPage(<TrafficProvider><Sidebar /></TrafficProvider>, { route: "/builder" });
-    const group = screen.getByRole("group", { name: "Pages in this area" });
-    expect(within(group).getAllByRole("link").map((link) => link.textContent)).toEqual([
-      "Build your model", "Quick test", "Compare runs",
-    ]);
-    expect(within(group).queryByRole("button", { name: "Look inside" })).toBeNull();
+    const studio = screen.getByRole("navigation", { name: "Studio" });
+    const links = within(studio).getAllByRole("link");
+    expect(links).toHaveLength(5);
+    expect(screen.queryByRole("group", { name: "Pages in this area" })).toBeNull();
   });
 });

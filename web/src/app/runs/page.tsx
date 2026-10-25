@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect } from "react";
 import { toast } from "sonner";
 import { useQueueActions } from "@/app/queue/use-queue";
-import { PAGE_MAIN } from "@/components/page-header";
+import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ActiveCard } from "./active-card";
@@ -33,15 +33,15 @@ export default function RunsPage() {
 
   return (
     <main className={PAGE_MAIN}>
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex flex-col gap-1.5">
-          <h1 className="text-2xl font-semibold tracking-tight">{T.title}</h1>
-          <p className="max-w-prose text-muted-foreground">{T.lead}</p>
-        </div>
-        <Button asChild>
-          <Link href="/runs/new/">{T.newRun}</Link>
-        </Button>
-      </header>
+      <PageHeader
+        title={T.title}
+        lead={T.lead}
+        actions={
+          <Button asChild>
+            <Link href="/runs/new/">{T.newRun}</Link>
+          </Button>
+        }
+      />
 
       {nodes && nodes.length > 0 && <NodeChips nodes={nodes} active={active} />}
 
