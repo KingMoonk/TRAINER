@@ -17,6 +17,24 @@ class FakeJobTests(ApiCase):
         second = self.job("POST", "/data/text/import", files=payload)
         self.assertIn("0 added, 1 duplicates", second["result"][0])
 
+    def test_a_job_with_its_own_thread_does_not_wait_behind_a_slow_one(self):
+        import threading
+        from studio_api.jobs import Jobs
+        release, started, finished = threading.Event(), threading.Event(), threading.Event()
+        jobs = Jobs(FakeServices(job_steps=STEPS, step_seconds=0, sleep=lambda s: None))
+        self.addCleanup(jobs.close)
+        self.addCleanup(release.set)
+        jobs.submit("slow", lambda stop: (started.set(), release.wait(10)))
+        self.assertTrue(started.wait(5))
+        waiting = jobs.submit("shared", lambda stop: "late")
+        quick = jobs.submit("quick", lambda stop: finished.set() or "now", own_thread=True)
+        self.assertTrue(finished.wait(5))
+        for _ in range(100):
+            if quick.status == "done":
+                break
+            threading.Event().wait(.05)
+        self.assertEqual((quick.status, quick.result, waiting.status), ("done", "now", "queued"))
+
     def test_snapshot_events_are_opt_in_and_name_a_step(self):
         self.assertEqual(self.services.snapshot_every, 0)  # the default fake emits only stats, so the sequence above is unchanged
         seen = []

@@ -477,7 +477,7 @@ def pretrain_start(body: PlanRequest, request: Request, services: Services) -> S
             raise
         services.fill_job(added.id, ready.job.label, ready.job.params)
         return {"id": added.id, "label": ready.job.label}
-    submit(request, "pretrain_start", work, StartJob)
+    submit(request, "pretrain_start", work, StartJob, own_thread=True)  # not behind a slow read: the run waits in the queue for this
     return Started(id=added.id, label=added.label)
 
 
