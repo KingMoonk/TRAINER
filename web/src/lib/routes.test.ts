@@ -51,15 +51,16 @@ describe("the five sidebar areas", () => {
     const pagesIn = (area: string) => ROUTES.filter((r) => r.area === area).map((r) => r.route);
     expect(pagesIn("models")).toEqual(["builder", "quicktest", "compare"]);
     expect(pagesIn("data").sort()).toEqual(["collect", "pretraining", "storage", "your_data"]);
-    expect(pagesIn("runs")).toEqual(["runs", "new_run", "run_view", "training_run", "post_training", "queue", "cluster_training"]);
+    expect(pagesIn("runs")).toEqual(["runs", "new_run", "queue", "training_run", "cluster_training", "post_training", "run_view"]);
     expect(pagesIn("eval")).toEqual(["chat", "benchmark"]);
     expect(pagesIn("machines")).toEqual(["machines"]);
   });
 
-  test("the new run pages are routes, and run_view is hidden from the nav", () => {
-    expect(routeFor("runs")).toMatchObject({ href: "/runs", area: "runs" });
+  test("the new run pages are routes, and run_view is hidden from the nav with parent runs", () => {
+    expect(routeFor("runs")).toMatchObject({ href: "/runs", area: "runs", title: "All runs" });
+    expect(routeFor("cluster_training")).toMatchObject({ href: "/cluster/training", area: "runs", title: "Cluster training" });
     expect(routeFor("new_run")).toMatchObject({ href: "/runs/new", area: "runs" });
-    expect(routeFor("run_view")).toMatchObject({ href: "/runs/view", area: "runs", hidden: true });
+    expect(routeFor("run_view")).toMatchObject({ href: "/runs/view", area: "runs", hidden: true, parent: "runs" });
     expect(ROUTES.filter((r) => r.hidden).map((r) => r.route)).toEqual(["run_view"]);
   });
 

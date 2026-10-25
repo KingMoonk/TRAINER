@@ -23,8 +23,8 @@ test("import text, queue pretraining, watch progress and see the trained version
   await page.getByRole("button", { name: "Browse examples", exact: true }).click();
   await expect(page.getByRole("main").getByText(text, { exact: true })).toBeVisible();
 
-  // Pretraining is a page of the Data area, so it is listed in the page list, not the Studio nav.
-  await page.getByRole("group", { name: "Pages in this area" }).getByRole("link", { name: "Pretraining", exact: true }).click();
+  // Pretraining is a page of the Data area, so it is listed in the section tabs, not the Studio nav.
+  await page.getByRole("navigation", { name: "Data pages" }).getByRole("link", { name: "Pretraining", exact: true }).click();
   const sets = page.getByRole("list", { name: "Text sets" });
   const imported = sets.getByRole("checkbox", { name: new RegExp(source) });
   await expect(imported).toBeVisible();

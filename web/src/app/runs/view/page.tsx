@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { PAGE_MAIN } from "@/components/page-header";
+import { SectionTabs } from "@/components/section-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { problem } from "@/lib/cluster";
 import { T, fill } from "./copy";
@@ -12,10 +13,13 @@ import { useRunView } from "./use-run-view";
 
 function Message({ title, lead }: { title: string; lead?: string }) {
   return (
-    <div className="flex flex-col gap-2" role="status">
-      <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-      {lead && <p className="max-w-prose text-muted-foreground">{lead}</p>}
-      <Link href="/runs/" className="w-fit text-sm text-highlight underline-offset-4 hover:underline">← {T.back}</Link>
+    <div className="flex flex-col gap-3" role="status">
+      <header className="flex flex-col gap-3">
+        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+        {lead && <p className="max-w-prose text-muted-foreground">{lead}</p>}
+        <Link href="/runs/" className="w-fit text-sm text-highlight underline-offset-4 hover:underline">← {T.back}</Link>
+        <SectionTabs />
+      </header>
     </div>
   );
 }
