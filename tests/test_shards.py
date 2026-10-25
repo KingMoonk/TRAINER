@@ -1,6 +1,7 @@
 """Token shards: windows on disk read through np.memmap give the batches the in-memory windows give, and are cached by data and tokenizer."""
 import random
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -256,6 +257,21 @@ class TrainFromShards(unittest.TestCase):
             self.assertLess(max(i for i, k in enumerate(kinds) if k == "prepare"), kinds.index("metric"))
         small, _ = self.run_training("small")
         self.assertNotIn("prepare", [e["type"] for e in small])  # under the threshold nothing is sharded
+
+    def test_a_stop_while_the_text_is_prepared_ends_the_run_early_and_leaves_no_unfinished_folder(self):
+        stop, shards, seen = threading.Event(), self.root / "shards", []
+
+        def emit(event):
+            if event["type"] == "prepare":
+                seen.append(event["percent"])
+                if event["percent"] > 0:
+                    stop.set()  # pressed partway through the preparation
+        with self.assertRaises(InterruptedError):
+            train(TINY, TRAINING + VALIDATION, self.root / "stopped", emit, stop=stop, telemetry_every=0, shard_dir=shards, stream_chars=0)
+        self.assertLess(max(seen), 100)
+        self.assertEqual(window_folders(shards), [])  # no finished windows and no .part folder
+        self.assertEqual([p for p in shards.glob("tokens-*/*") if p.name.endswith(".part")], [])
+        self.assertFalse((self.root / "stopped" / "last.npz").exists())
 
     def test_resuming_a_run_reads_the_same_batches_from_shards_as_from_memory(self):
         shards = self.root / "shards"
