@@ -184,6 +184,8 @@ class WorkspaceRows(unittest.TestCase):
         again = WorkspaceServices(Workspace(self.tmp.name))  # a new session, as after a restart
         self.addCleanup(again.close)
         self.assertEqual(again.cached_preview([self.text], rows=6)["pieces"], preview["pieces"])
+        self.ws.add(self.conv, [{"user": "another question", "assistant": "another answer"}])   # a set not chosen
+        self.assertEqual(self.svc.cached_preview([self.text], rows=6)["pieces"], preview["pieces"])
         self.ws.add(self.text, [{"text": "a new story changes the stored data"}])
         self.assertIsNone(self.svc.cached_preview([self.text], rows=6))
 
