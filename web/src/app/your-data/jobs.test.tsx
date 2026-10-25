@@ -53,6 +53,25 @@ describe("runJob", () => {
     await rejected;
   });
 
+  test("an abort cancels the job on the server only when asked", async () => {
+    const cancelled: string[] = [];
+    mockApi({
+      "GET /jobs/job-1": () => ({ body: record({ status: "queued" }) }),
+      "DELETE /jobs/job-1": () => {
+        cancelled.push("job-1");
+        return { body: record({ status: "cancelled" }) };
+      },
+    });
+    for (const cancel of [false, true]) {
+      const controller = new AbortController();
+      const waiting = runJob(async () => record(), controller.signal, { cancel });
+      const rejected = expect(waiting).rejects.toMatchObject({ name: "AbortError" });
+      controller.abort();
+      await rejected;
+    }
+    await vi.waitFor(() => expect(cancelled).toEqual(["job-1"]));
+  });
+
   test("a quiet stream is not read on a short interval", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     try {

@@ -16,9 +16,10 @@ function settle<T>(job: JobLike): T {
  * Start a long read (a POST that answers with a job) and resolve with the job's result, or reject with its error sentence.
  * The result arrives as a `job` event; GET /jobs/{id} backs that up for an event that came before the page listened, and is read
  * again when the stream reconnects, the tab is shown again and every few seconds (a lost event), never on a short fixed interval.
- * `signal` stops waiting (the job keeps running on the server).
+ * `signal` stops waiting; the job keeps running on the server unless `cancel` is set, for a read nobody needs once the page
+ * stops waiting (a queued one is then skipped, so a stale read does not hold up the ones after it).
  */
-export async function runJob<T>(start: () => Promise<JobLike>, signal?: AbortSignal): Promise<T> {
+export async function runJob<T>(start: () => Promise<JobLike>, signal?: AbortSignal, { cancel = false }: { cancel?: boolean } = {}): Promise<T> {
   const started = await start();
   if (FINISHED.includes(started.status)) return settle<T>(started);
   return new Promise<T>((resolve, reject) => {
@@ -37,7 +38,10 @@ export async function runJob<T>(start: () => Promise<JobLike>, signal?: AbortSig
         reject(error);
       }
     };
-    const aborted = () => end(null, new DOMException("Aborted", "AbortError"));
+    const aborted = () => {
+      if (cancel && !over) void api.DELETE("/jobs/{job_id}", { params: { path: { job_id: started.id } } }).catch(() => {});
+      end(null, new DOMException("Aborted", "AbortError"));
+    };
     if (signal?.aborted) return aborted();
     signal?.addEventListener("abort", aborted);
     off = watchEvents((event) => {

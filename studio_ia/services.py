@@ -2301,8 +2301,11 @@ class WorkspaceServices(Services):
             return None
 
     def _preview_key(self, version, dataset_ids, rows):
-        """Same chosen sets, design and stored data (records, held-back text) -> same preview."""
-        return json.dumps([sorted(dataset_ids), rows, version.spec, self._stamp(), self._heldout_stamp()], sort_keys=True, default=str)
+        """Same chosen sets, design and data of those sets (each set's rev) and held-back text -> same preview. Not the files' stamp:
+        the collector and every other set's edits write to them all the time, and the preview reads millions of characters."""
+        chosen = set(dataset_ids)
+        revs = sorted((d["id"], d.get("rev", 0)) for d in list(self.workspace.state["datasets"]) if not chosen or d["id"] in chosen)
+        return json.dumps([sorted(dataset_ids), rows, version.spec, revs, self._heldout_stamp()], sort_keys=True, default=str)
 
     def _previews(self):
         if getattr(self, "_preview_store", None) is None:

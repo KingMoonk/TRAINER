@@ -57,6 +57,7 @@ export default function PretrainingPage() {
       const found = await runJob<Preview>(
         () => unwrap(api.POST("/pretraining/preview", { body: { dataset_ids: ids, rows: PREVIEW_ROWS } })) as Promise<JobLike>,
         signal,
+        { cancel: true }, // sets chosen again: the old read is not needed
       );
       queryClient.setQueryData(previewKey, found);
       queryClient.invalidateQueries({ queryKey: ["pretraining", "plan"] });
