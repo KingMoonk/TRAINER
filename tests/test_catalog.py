@@ -547,5 +547,38 @@ class BoundedDownloadTests(unittest.TestCase):
             self.assertEqual([c["assistant"] for c in converted], ["B) y", "A) p"])
 
 
+# Estimated characters each default language-stage entry yields: measured on the downloaded text (smaller sets), or read from the
+# Parquet footer of the pinned file (text column, uncompressed bytes minus length prefixes) for the larger shards.
+LANGUAGE_CHARS = {"tinystories": 62_800_000, "wikitext2": 10_300_000, "simplewiki": 260_000_000, "wikitext103_a": 251_600_000,
+                  "wikitext103_b": 251_500_000, "wikipedia_en_a": 414_400_000, "wikipedia_en_b": 375_800_000, "fineweb_edu": 874_800_000,
+                  "openwebmath": 422_300_000, "openwebmath_b": 427_200_000, "cosmopedia_khan": 88_400_000, "gutenberg": 226_600_000,
+                  "gutenberg_b": 310_000_000}
+WEB_LANGUAGE_IDS = ("fineweb_edu", "openwebmath", "openwebmath_b")
+
+
+class LanguageCorpusSizeTests(unittest.TestCase):
+    def test_default_language_corpus_is_three_to_five_billion_characters_with_a_bounded_web_share(self):
+        defaults = {e["id"] for e in CATALOG if e["stage"] == "language" and e["default"]}
+        self.assertEqual(defaults, set(LANGUAGE_CHARS))
+        total = sum(LANGUAGE_CHARS.values())
+        self.assertTrue(3_000_000_000 <= total <= 5_000_000_000, total)
+        self.assertLessEqual(sum(LANGUAGE_CHARS[i] for i in WEB_LANGUAGE_IDS) / total, 0.70)
+
+    def test_whole_shards_are_unbounded_pinned_hashed_and_licensed(self):
+        for catalog_id in ("fineweb_edu", "openwebmath", "openwebmath_b", "wikipedia_en_a", "wikipedia_en_b", "gutenberg", "gutenberg_b"):
+            with self.subTest(catalog_id):
+                entry = _entry(catalog_id)
+                self.assertNotIn("max_records", entry)
+                self.assertRegex(entry["revision"], r"^[0-9a-f]{40}$")
+                self.assertRegex(entry["sha256"], r"^[0-9a-f]{64}$")
+                self.assertTrue(entry["license"])
+                self.assertTrue(entry["source_url"].startswith("https://huggingface.co/datasets/"))
+
+    def test_english_wikipedia_groups_by_its_own_entry_id(self):
+        article = _convert("wikipedia_en_a", {"id": "12", "title": "Anarchism", "text": "word " * 60})[0]
+        self.assertEqual((article["groupId"], article["sourceId"]), ("wikipedia_en_a:12", "12"))
+        self.assertEqual(_convert("simplewiki", {"id": "12", "title": "T", "text": "word " * 60})[0]["groupId"], "simplewiki:12")
+
+
 if __name__ == "__main__":
     unittest.main()
