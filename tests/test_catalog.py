@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from studio_catalog import (ALL_CATALOG, CATALOG, LEGACY_CATALOG, STAGES, DownloadCancelled, _fetch, clean_wikitext, convert_record, default_catalog_ids,
+from studio_catalog import (ALL_CATALOG, approve_catalog_rows, CATALOG, LEGACY_CATALOG, STAGES, DownloadCancelled, _fetch, clean_wikitext, convert_record, default_catalog_ids,
                             download_dataset, file_sha256, iter_json_array, iter_stories, list_downloads, register_download,
                             source_records, wikitext_paragraphs)
 from studio_core import Workspace, fingerprint, normalize, parse_file
@@ -108,6 +108,22 @@ class DownloadLifecycleTests(unittest.TestCase):
         Path(path).write_bytes(payload)
         return {"url": url, "filename": Path(path).name, "bytes": len(payload), "sha256": file_sha256(path)}
 
+    def test_catalogue_sets_registered_as_drafts_are_approved_and_other_sets_are_left_alone(self):
+        with tempfile.TemporaryDirectory() as directory, patch("studio_catalog._fetch", side_effect=self.fake_fetch):
+            workspace = Workspace(directory)
+            dataset_id = register_download(workspace, download_dataset("dolly15k", root=directory))
+            own = workspace.create_dataset("Generated", storage="sqlite")
+            workspace.add(own, [{"text": "a draft of my own", "quality": "Review", "synthetic": True}])
+            with workspace._connect({dataset_id}) as connection:  # as registered before rows were approved on import
+                connection.execute("UPDATE records SET quality='Review', payload=json_set(payload, '$.quality', 'Review') WHERE dataset_id=?", (dataset_id,))
+            self.assertEqual(workspace.review_count(dataset_id), 1)
+            rev = workspace._dataset(dataset_id)["rev"]
+            self.assertEqual(approve_catalog_rows(workspace), [dataset_id])
+            self.assertEqual((workspace.review_count(dataset_id), workspace.review_count(own)), (0, 1))
+            self.assertEqual(workspace.examples(dataset_id)[0]["quality"], "Good")
+            self.assertGreater(workspace._dataset(dataset_id)["rev"], rev)
+            self.assertEqual(approve_catalog_rows(workspace), [])
+
     def test_cache_checksums_registration_and_legacy_workspace_recovery(self):
         with tempfile.TemporaryDirectory() as directory, patch("studio_catalog._fetch", side_effect=self.fake_fetch) as fetch:
             result = download_dataset("dolly15k", root=directory)
@@ -122,6 +138,8 @@ class DownloadLifecycleTests(unittest.TestCase):
             self.assertEqual(register_download(workspace, result), dataset_id)
             self.assertEqual(workspace.count(dataset_id), 1)
             self.assertEqual(len(workspace.state["examples"]), 0)
+            self.assertEqual(workspace.examples(dataset_id)[0]["quality"], "Good")  # a catalogue corpus needs no review
+            self.assertEqual(workspace.review_count(dataset_id), 0)
             # A previous-version GUI can save old JSON without losing the disk corpus.
             workspace.path.write_text(json.dumps({"datasets": [], "examples": []}), encoding="utf-8")
             restored = Workspace(directory)
