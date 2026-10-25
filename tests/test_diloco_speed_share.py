@@ -339,7 +339,7 @@ class RealMembers(unittest.TestCase):
             stop.set()
         with mock.patch.object(studio_model, "train", train), TestClient(support.app()) as client:
             studio_diloco.run_member(support.Peer(client), "long", "node0", 0, folder / "m", folder / "out", lambda event: None, stop, wait=.5)
-        self.assertEqual(seen, [1_000_000])
+        self.assertEqual(seen, [studio_model.MAX_STEPS])
 
     def test_each_member_runs_its_dealt_steps_and_the_run_finishes(self):
         c = self.run_members(False)
