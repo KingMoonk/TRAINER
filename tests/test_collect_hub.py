@@ -7,6 +7,7 @@ from pathlib import Path
 import studio_core
 from studio_collect import config, hub, register, service
 from studio_collect.netio import Http
+from studio_collect.pipeline import shard_dir
 from studio_collect.store import Ledger, LimitReached, State
 from tests.collect_fakes import FakeWeb, hub_entry, idle_probes, jsonl, prose, serve_hub
 
@@ -236,6 +237,17 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(self.drain(), "limit")
         self.assertEqual(State(self.root).data["status"], "waiting")
         self.assertIn("disk cap", State(self.root).data["reason"])
+
+
+class Registration(unittest.TestCase):
+    def test_a_line_separator_inside_a_record_does_not_split_it(self):
+        with tempfile.TemporaryDirectory() as root:
+            folder = shard_dir(root) / "topic-poetry"
+            folder.mkdir(parents=True)
+            rows = [{"text": "one line\u2028and the next, as the page had it"}, {"text": "a plain second record"}]
+            (folder / "a.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+            self.assertEqual(register.register(studio_core.Workspace(root))["added"], 2)
+            self.assertEqual(register.pending(root), {})
 
 
 if __name__ == "__main__":
