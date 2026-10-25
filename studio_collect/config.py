@@ -11,7 +11,7 @@ TOPICS = {
     "science": ("Science", ("science", "physics", "chemistry", "biology")),
     "mathematics": ("Mathematics", ("mathematics", "math", "theorem")),
     "code": ("Code", ("code", "programming", "python")),
-    "history": ("History", ("history", "historical")),
+    "history": ("History", ("history", "ancient history", "world history")),   # not "historical": that finds price and sensor logs
     "medicine": ("Medicine", ("medicine", "medical", "clinical")),
     "law": ("Law", ("law", "legal", "court")),
     "conversation": ("Conversation", ("conversation", "dialogue", "chat")),

@@ -31,7 +31,10 @@ TEXT_FIELDS = ("text", "content", "body", "document", "article", "passage", "mar
 PAIRS = (("question", "answer"), ("prompt", "response"), ("prompt", "completion"), ("instruction", "output"), ("instruction", "response"),
          ("query", "answer"), ("input", "output"), ("problem", "solution"), ("question", "response"), ("user", "assistant"), ("human", "assistant"))
 CHAT_FIELDS = ("messages", "conversation", "conversations")
-NOT_TEXT = ("modality:image", "modality:audio", "modality:video", "modality:3d", "modality:geospatial", "modality:timeseries", "modality:tabular")
+MEDIA = ("modality:image", "modality:audio", "modality:video", "modality:3d")     # the model learns text only, for now
+NOT_TEXT = ("modality:geospatial", "modality:timeseries", "modality:tabular")    # the hub adds tabular to many text sets, so only without modality:text
+LANGUAGE = "en"
+SCREEN = 2    # in the plan key: a plan made under older screening rules is made again
 
 
 @dataclass
@@ -65,14 +68,15 @@ def licence_of(raw):
 
 
 def fit_score(raw, terms):
-    """0..1: how well the name, tags and description match the topic's search terms (the name counts most)."""
-    name = raw.get("id", "").lower().replace("-", " ").replace("_", " ")
+    """0..1: how well the name, tags and description match the topic's search terms (the name counts most). A term counts at
+    the start of a word only ("math" fits "OpenMathInstruct" and "mathematics", "code" does not fit "decode", "law" not "claw")."""
+    name = re.sub(r"([a-z])([A-Z])", r"\1 \2", raw.get("id", "")).lower().replace("-", " ").replace("_", " ")
     tags = " ".join(raw.get("tags") or []).lower() + " " + " ".join((raw.get("cardData") or {}).get("tags") or []).lower()
     about = str(raw.get("description") or "").lower()
     hit = 0.0
     for term in terms:
-        term = term.lower()
-        hit = max(hit, 1.0 if term in name else 0.0, 0.7 if term in tags else 0.0, 0.4 if term in about else 0.0)
+        word = re.compile(r"(?<![a-z0-9])" + re.escape(term.lower()))
+        hit = max(hit, 1.0 if word.search(name) else 0.0, 0.7 if word.search(tags) else 0.0, 0.4 if word.search(about) else 0.0)
     return hit
 
 
@@ -85,8 +89,14 @@ def screen(raw, config):
         return "gated: needs your own token and acceptance of its terms on the hub, which this app does not hold"
     if any(t == "benchmark" or t.startswith("benchmark:") for t in tags) or "benchmark" in (raw.get("cardData") or {}).get("tags", []):
         return "benchmark: evaluation material, kept out of training"
+    media = [t.split(":", 1)[1] for t in tags if t in MEDIA]
+    if media:
+        return f"not text only (has {', '.join(media)}): the model learns text for now"
     if any(t in NOT_TEXT for t in tags) and "modality:text" not in tags:
         return "not text"
+    languages = _tag(tags, "language")
+    if languages and LANGUAGE not in languages:
+        return f"not English ({', '.join(languages[:3])})"
     ident, klass = licences.classify(licence_of(raw))
     if not licences.allowed(klass, config["licences"]):
         return licences.refusal(ident, klass)
@@ -286,7 +296,7 @@ def iter_rows(path):
             first = stream.read(1)
             stream.seek(0)
             if first == "[":
-                for row in studio_catalog.iter_json_array(_Bytes(stream)):
+                for row in studio_catalog.iter_json_array(stream):
                     yield row if isinstance(row, dict) else {"text": row} if isinstance(row, str) else {}
             else:
                 data = json.load(stream)
@@ -300,16 +310,6 @@ def iter_rows(path):
             for block in re.split(r"\n\s*\n", stream.read()):
                 if block.strip():
                     yield {"text": block.strip()}
-
-
-class _Bytes:
-    """iter_json_array reads bytes; this reads a text stream as UTF-8 bytes."""
-
-    def __init__(self, stream):
-        self.stream = stream
-
-    def read(self, size=-1):
-        return self.stream.read(size).encode("utf-8")
 
 
 def _str(value):
@@ -357,7 +357,7 @@ class Adapter:
 
     @staticmethod
     def plan_inputs(config):
-        return {"topics": config["topics"], "custom": config["custom_topics"], "licences": config["licences"],
+        return {"screen": SCREEN, "topics": config["topics"], "custom": config["custom_topics"], "licences": config["licences"],
                 "limits": {k: config["limits"][k] for k in ("max_dataset_mb", "max_file_mb", "auto_approve_mb")}}
 
     def plan(self):
