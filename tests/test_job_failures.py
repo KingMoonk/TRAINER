@@ -100,6 +100,19 @@ class InTheQueue(unittest.TestCase):
         again = Runner(self.root / "data" / "queue.json", {})  # kept across a restart
         self.assertEqual((again.jobs[0].error, again.jobs[0].details), (RAM, "MemoryError"))
 
+    def test_a_failed_job_has_its_error_in_place_before_its_status_says_failed(self):
+        class Recorded(Job):
+            def __setattr__(self, name, value):
+                if name in ("error", "status"):
+                    self.__dict__.setdefault("order", []).append((name, value))
+                super().__setattr__(name, value)
+        runner = self.runner({"quicktest": out_of_memory})
+        job = runner.enqueue(Recorded("quicktest", "t"))
+        runner.start()
+        self.assertTrue(wait(lambda: job.status == "failed"))
+        order = job.__dict__["order"]
+        self.assertLess(order.index(("error", RAM)), order.index(("status", "failed")))  # a reader waiting for the status, without the lock, finds the error
+
     def test_a_failure_in_the_app_before_the_worker_starts_is_mapped_too(self):
         def prepare(job):
             raise OSError(errno.ENOSPC, "No space left on device")
