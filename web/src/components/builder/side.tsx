@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DiscreteControl } from "@/components/builder/discrete-control";
@@ -143,9 +144,27 @@ type ControlsProps = {
   draft: Choices;
   knobs: Tower["knobs"] | undefined;
   onKnob: (key: "H" | "W", value: number) => void;
+  onModelSetting?: (key: ModelSettingKey, value: number) => void;
 };
 
-export function Controls({ registry, cur, draft, knobs, onKnob }: ControlsProps) {
+type ModelSettingKey = "d" | "T" | "U" | "token_limit_millions";
+
+export function Controls({ registry, cur, draft, knobs, onKnob, onModelSetting = () => {} }: ControlsProps) {
+  const vocabEditable = draft.V === 1 || draft.V === 3;
+  const vocabMin = draft.V === 1 ? 1024 : 263;
+  const vocabMax = draft.V === 1 ? 65536 : 16384;
+  const mixer = registry.slots.find((slot) => slot.slot === "mixer")?.modules.find((module) => module.short === draft.M.mixer);
+  const hasHeads = mixer?.fields.some((field) => field.name === "heads") ?? false;
+  const numberInput = (label: string, key: ModelSettingKey, value: number, min: number, max: number, disabled = false) => (
+    <label className="flex flex-col gap-1 text-xs font-medium">
+      {label}
+      <Input type="number" min={min} max={max} step={1} value={value} disabled={disabled} className="h-9" onChange={(event) => {
+        const next = Number(event.currentTarget.value);
+        if (Number.isInteger(next) && next >= min && next <= max &&
+            (key !== "d" || ((!hasHeads || next % draft.H === 0) && (draft.M.position !== "rope" || next % 2 === 0)))) onModelSetting(key, next);
+      }} />
+    </label>
+  );
   return (
     <Panel title={BUILDER.model_controls} testId="controls">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
@@ -158,6 +177,13 @@ export function Controls({ registry, cur, draft, knobs, onKnob }: ControlsProps)
           {knobs && !knobs.W && <p className="mt-2 text-xs text-muted-foreground">{BUILDER.no_room}</p>}
         </div>
       </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1" data-testid="model-dimensions">
+        {numberInput("Hidden size", "d", draft.d, 16, 1024)}
+        {numberInput("Token context", "T", draft.T, 32, 2048)}
+        {numberInput("Tokenizer size", "U", draft.U ?? 263, vocabEditable ? vocabMin : 263, vocabEditable ? vocabMax : 65536, !vocabEditable)}
+        {numberInput("Training token limit (millions)", "token_limit_millions", draft.token_limit_millions ?? 0, 0, 1000000)}
+      </div>
+      <p className="text-xs text-muted-foreground">Tokenizer size is adjustable for learned tokenizers. The token limit is off at 0 and stops at an optimizer-step boundary.</p>
     </Panel>
   );
 }

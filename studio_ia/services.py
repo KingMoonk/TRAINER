@@ -567,8 +567,8 @@ class Services:
         """The text in 16 kHz mono 16-bit PCM WAV bytes. ValueError for audio that cannot be read, RuntimeError while the engine cannot run."""
         raise NotImplementedError
 
-    def speak(self, text):
-        """WAV bytes of `text` in the one default voice. ValueError for no text, RuntimeError while the engine cannot run."""
+    def speak(self, text, voice_id="lessac"):
+        """WAV bytes of `text` in the selected voice. ValueError for invalid text or voice, RuntimeError while unavailable."""
         raise NotImplementedError
 
     # inspect (S7): thin wrappers over studio_inspect, numpy out; version is a Version or number -----------------
@@ -1263,9 +1263,9 @@ class FakeServices(Services):
         return f"[reply with {len(ablate)} heads off]" if ablate else "[reply]"
 
     def voice_status(self):
-        return [{"engine": "stt", "label": "Speech to text", "model": "nvidia/parakeet-tdt-0.6b-v3", "installed": True, "loaded": False,
+        return [{"engine": "stt", "label": "Speech to text", "model": "sherpa-onnx-zipformer-small-en-2023-06-26", "installed": True, "loaded": False,
                  "device": None, "missing": ""},
-                {"engine": "tts", "label": "Text to speech", "model": "BreezeBlue/Breeze-TTS-2", "installed": True, "loaded": False,
+                {"engine": "tts", "label": "Text to speech", "model": "Piper TTS", "installed": True, "loaded": False,
                  "device": None, "missing": ""}]
 
     def transcribe(self, wav_bytes):
@@ -1273,7 +1273,7 @@ class FakeServices(Services):
         studio_voice.wav_samples(wav_bytes)  # the same refusals as the real engine
         return "This is a test transcript."
 
-    def speak(self, text):
+    def speak(self, text, voice_id="lessac"):
         import math
 
         import numpy as np
@@ -1281,6 +1281,8 @@ class FakeServices(Services):
         import studio_voice
         if not (text or "").strip():
             raise ValueError("There is no text to speak.")
+        if voice_id not in studio_voice.TTS_VOICES:
+            raise ValueError("Choose one of the available text-to-speech voices.")
         t = np.arange(int(0.2 * 24000)) / 24000
         return studio_voice.wav_bytes_from(0.2 * np.sin(2 * math.pi * 440 * t), 24000)  # a short tone
 
@@ -3201,14 +3203,21 @@ class WorkspaceServices(Services):
         """Default catalogue sources of one kind: language-stage text, problems-stage problems, every other stage conversations."""
         import studio_catalog as cat
         stage_kind = {"language": "text", "problems": "problems"}
-        return [e["id"] for e in cat.CATALOG if e["default"] and stage_kind.get(e["stage"], "conversations") == kind]
+        defaults = set(cat.default_catalog_ids())
+        return [entry["id"] for entry in cat.CATALOG if entry["id"] in defaults
+                and stage_kind.get(entry["stage"], "conversations") == kind]
 
     def collection(self, kind="text"):
         import studio_catalog as cat
         have = {d["catalog_id"]: d for d in cat.list_downloads(self.root)}
         made = {d["id"] for d in self.workspace.state["datasets"]}
+        available = {entry["id"] for entry in cat.CATALOG}
+        available.update(catalog_id for catalog_id in have if catalog_id in {entry["id"] for entry in cat.LEGACY_CATALOG})
+        available.update(dataset_id.removeprefix("catalog_") for dataset_id in made if dataset_id.startswith("catalog_"))
+        stage_kind = {"language": "text", "problems": "problems"}
         rows = []
-        for entry in (e for e in cat.CATALOG if e["id"] in self.collection_ids(kind)):
+        for entry in (e for e in cat.ALL_CATALOG if e["id"] in available and
+                      stage_kind.get(e["stage"], "conversations") == kind):
             cid, busy = entry["id"], self._busy.get(entry["id"])
             state = ("downloading" if busy is not None else "imported" if f"catalog_{cid}" in made
                      else "downloaded" if cid in have else "not downloaded")
@@ -3220,7 +3229,7 @@ class WorkspaceServices(Services):
     @staticmethod
     def _source_name(cid):
         import studio_catalog as cat
-        return next((e["name"] for e in cat.CATALOG if e["id"] == cid), cid)
+        return next((e["name"] for e in cat.ALL_CATALOG if e["id"] == cid), cid)
 
     def _background(self, ids, work, done, verb):
         with self._lock:
@@ -3546,8 +3555,8 @@ class WorkspaceServices(Services):
     def transcribe(self, wav_bytes):
         return self._voice.transcribe(wav_bytes)
 
-    def speak(self, text):
-        return self._voice.speak(text)
+    def speak(self, text, voice_id="lessac"):
+        return self._voice.speak(text, voice_id)
 
     def _chat_device(self):
         """Where a chat model should live now (the chat lock is held): the CUDA GPU while no job runs, the CPU otherwise, and on

@@ -45,13 +45,13 @@ class FakeEngine:
     def unload(self):
         self.device = None
 
-    def run(self, arg):
-        self.ran.append(arg)
+    def run(self, arg, voice_id=None):
+        self.ran.append((arg, voice_id) if voice_id else arg)
         return "hello" if self.name == "stt" else b"RIFF"
 
 
-def voice(cuda=True, stt="", tts=""):
-    return studio_voice.Voice(FakeEngine("stt", stt), FakeEngine("tts", tts), cuda=lambda: cuda)
+def voice(stt="", tts=""):
+    return studio_voice.Voice(FakeEngine("stt", stt), FakeEngine("tts", tts))
 
 
 class Wav(unittest.TestCase):
@@ -77,15 +77,22 @@ class Engines(unittest.TestCase):
                          [("stt", True, False, None), ("tts", True, False, None)])
         self.assertEqual(v.transcribe(wav()), "hello")
         self.assertEqual(v.speak(" Hi there "), b"RIFF")
-        self.assertEqual(v.tts.ran, ["Hi there"])
-        self.assertEqual([(r["loaded"], r["device"]) for r in v.status()], [(True, "cuda"), (True, "cuda")])
+        self.assertEqual(v.tts.ran, [("Hi there", "lessac")])
+        self.assertEqual([(r["loaded"], r["device"]) for r in v.status()], [(True, "cpu"), (True, "cpu")])
+
+    def test_selected_voice_is_used_and_unknown_voices_are_rejected(self):
+        v = voice()
+        self.assertEqual(v.speak("Hello", "ryan"), b"RIFF")
+        self.assertEqual(v.tts.ran, [("Hello", "ryan")])
+        with self.assertRaisesRegex(ValueError, "available text-to-speech voices"):
+            v.speak("Hello", "unknown")
 
     def test_models_load_once_and_stay(self):
         v = voice()
         with mock.patch.object(v.stt, "load", wraps=v.stt.load) as load:
             v.transcribe(wav())
             v.transcribe(wav())
-        load.assert_called_once_with("cuda")
+        load.assert_called_once_with("cpu")
 
     def test_empty_or_oversized_text_and_bad_wav_never_reach_the_engine(self):
         v = voice()
@@ -99,7 +106,7 @@ class Engines(unittest.TestCase):
         self.assertEqual((v.stt.ran, v.tts.ran), ([], []))
 
     def test_an_engine_that_is_not_installed_says_what_to_run(self):
-        v = voice(stt="Speech to text needs NeMo. Run `make voice-setup`.", tts="Text to speech needs PyTorch. Run `make voice-setup`.")
+        v = voice(stt="Speech to text needs sherpa-onnx. Run `make voice-setup`.", tts="Text to speech needs Piper. Run `make voice-setup`.")
         self.assertEqual([r["installed"] for r in v.status()], [False, False])
         self.assertIn("make voice-setup", v.status()[0]["missing"])
         for call in (lambda: v.transcribe(wav()), lambda: v.speak("hi")):
@@ -111,7 +118,7 @@ class Engines(unittest.TestCase):
             rows = studio_voice.Voice().status()
         self.assertTrue(all(not r["installed"] and "make voice-setup" in r["missing"] for r in rows))
 
-    def test_a_job_moves_speech_to_text_to_the_cpu_and_unloads_the_voice(self):
+    def test_a_job_keeps_speech_recognition_on_cpu_and_unloads_the_voice(self):
         v = voice()
         v.transcribe(wav())
         v.speak("hi")
@@ -121,9 +128,9 @@ class Engines(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "training job"):
             v.speak("hi")
         v.job_ended()
-        self.assertEqual(v.stt.device, "cuda")
+        self.assertEqual(v.stt.device, "cpu")
         self.assertEqual(v.speak("hi"), b"RIFF")  # loads again after the job
-        self.assertEqual(v.tts.device, "cuda")
+        self.assertEqual(v.tts.device, "cpu")
 
     def test_a_model_first_used_during_a_job_loads_on_the_cpu(self):
         v = voice()
@@ -131,12 +138,12 @@ class Engines(unittest.TestCase):
         v.transcribe(wav())
         self.assertEqual(v.stt.device, "cpu")
 
-    def test_no_gpu_means_no_voice_but_transcription_runs_on_the_cpu(self):
-        v = voice(cuda=False)
+    def test_voice_runs_without_a_gpu(self):
+        v = voice()
         self.assertEqual(v.transcribe(wav()), "hello")
         self.assertEqual(v.stt.device, "cpu")
-        with self.assertRaisesRegex(RuntimeError, "NVIDIA GPU"):
-            v.speak("hi")
+        self.assertEqual(v.speak("hi"), b"RIFF")
+        self.assertEqual(v.tts.device, "cpu")
 
 
 class QueueJobStarting(unittest.TestCase):
@@ -147,7 +154,7 @@ class QueueJobStarting(unittest.TestCase):
             svc._voice = v = voice()
             svc.transcribe(wav())
             svc.speak("hi")
-            self.assertEqual((v.stt.device, v.tts.device), ("cuda", "cuda"))
+            self.assertEqual((v.stt.device, v.tts.device), ("cpu", "cpu"))
             no_gpu = {"available": False, "kind": "", "name": "", "reason": "", "memory_bytes": 0}
             with mock.patch("studio_backend.gpu_status", return_value=no_gpu):
                 svc.chat_job_started(Job("pretrain"))
@@ -187,7 +194,7 @@ class Api(unittest.TestCase):
 
     def test_an_engine_that_cannot_run_is_a_conflict_with_a_sentence(self):
         services = FakeServices()
-        services.speak = mock.Mock(side_effect=RuntimeError("Text to speech needs NeMo. Run `make voice-setup`."))
+        services.speak = mock.Mock(side_effect=RuntimeError("Text to speech needs Piper. Run `make voice-setup`."))
         r = TestClient(create_app(services, open=True, hosts=ANY)).post("/voice/speak", json={"text": "hi"})
         self.assertEqual(r.status_code, 409)
         self.assertIn("make voice-setup", r.json()["detail"])

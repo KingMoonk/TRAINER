@@ -164,6 +164,8 @@ The web UI has areas in the sidebar, then Queue and Resources, and a machine str
 
 **Resources** holds Your data, Make extra data, **Storage**, which shows the free disk space and deletes old run history (and, if you ask, your datasets) to free it.
 
+The built-in assistant-training catalog is a compact, paper-backed set: Dolly 15K for human-written instructions, SQuAD 2 for passage-grounded QA with abstention, GSM8K for worked reasoning, OpenAssistant for rated conversations, and ToolACE for tool-use dialogues. ToolACE's Apache-2.0, paper-backed release is pinned and filtered to tool-call conversations. Each source row remains one example with its own group; the importer retains the API schema in its system turn, tags assistant calls with `<tool_call>` and tool results with `<tool_response>`, and stores tool results as tagged user turns because the current model schema supports only system/user/assistant roles. No tools execute during training, and ToolACE tool outputs are synthetic rather than verified live facts. The source papers/cards are [Dolly](https://huggingface.co/datasets/databricks/databricks-dolly-15k), [SQuAD 2](https://arxiv.org/abs/1806.03822), [GSM8K](https://arxiv.org/abs/2110.14168), [OpenAssistant](https://arxiv.org/abs/2304.07327), and [ToolACE](https://arxiv.org/abs/2409.00920). Their published licenses are CC BY-SA 3.0, CC BY-SA 4.0, MIT, Apache 2.0, and Apache 2.0 respectively; follow each source's attribution and share-alike terms. Older downloaded corpus files and personal workspace datasets remain in place.
+
 The file picker is the supported import method; operating-system drag-and-drop is not required or installed.
 
 ## The learning engine

@@ -364,7 +364,7 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
         known = services.cached_preview(ids, body.preview_rows) if ids else {}
     except NotImplementedError:
         known = {}
-    estimating = known is None
+    estimating = bool(ids) and (known is None or not known.get("pieces"))
     preview = known or {}
     pieces, params, context = preview.get("pieces"), preview.get("params"), preview.get("context", 256)
     per_step = body.rows * context
@@ -456,7 +456,8 @@ def pretrain_start(body: PlanRequest, request: Request, services: Services) -> S
     def work(stop):
         try:
             ids = list(dict.fromkeys(body.dataset_ids))
-            if services.cached_preview(ids, body.preview_rows) is None:
+            cached = services.cached_preview(ids, body.preview_rows)
+            if cached is None or not cached.get("pieces"):
                 services.pretrain_preview(ids, body.preview_rows, progress=lambda percent: services.size_progress(added.id, percent))
             if stop.is_set():
                 raise RuntimeError("Working out the size of the text was stopped. Add the run again.")

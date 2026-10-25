@@ -4028,10 +4028,14 @@ export interface components {
             T: number;
             /** V */
             V: number;
+            /** U */
+            U?: number;
             /** W */
             W: number;
             /** D */
             d: number;
+            /** Token Limit Millions */
+            token_limit_millions?: number;
         };
         /** ChoicesBody */
         ChoicesBody: {
@@ -8230,6 +8234,8 @@ export interface components {
         SpeakRequest: {
             /** Text */
             text: string;
+            /** Voice */
+            voice?: string;
         };
         /** SpecBody */
         SpecBody: {

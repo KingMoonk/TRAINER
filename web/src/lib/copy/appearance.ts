@@ -16,4 +16,6 @@ export const APPEARANCE = {
   accentTitle: "Accent",
   accentDesc: "The colour of buttons, links, highlights and charts. It works in both modes.",
   accents: { neutral: "Neutral", ocean: "Ocean", ember: "Ember", forest: "Forest" } satisfies Record<Accent, string>,
+  voiceTitle: "Reply voice",
+  voiceDesc: "Choose the voice used when you play a spoken reply. Kept in this browser.",
 };

@@ -33,6 +33,7 @@ import {
 } from "./logic";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 import { useLive } from "@/lib/live";
+import { engineIssue, recordSpeech, transcribe, useSpeakReplies, useSpeaker, useVoiceStatus } from "@/lib/voice";
 
 type PaneState = { text: string; status: "idle" | "streaming" | "done" | "stopped" | "error"; error?: string };
 const IDLE: PaneState = { text: "", status: "idle" };
@@ -86,12 +87,25 @@ export default function Page() {
   const [whole, setWhole] = useState(false);
   const [how, setHow] = useState(false);
   const [replyVersion, setReplyVersion] = useState<number | null>(null);
+  const [recording, setRecording] = useState(false);
+  const recordingController = useRef<AbortController | null>(null);
+  const voiceStatus = useVoiceStatus();
+  const [speakReplies, setSpeakReplies] = useSpeakReplies();
+  const speaker = useSpeaker();
+  const speechQueue = useRef(Promise.resolve());
+  const mounted = useRef(true);
   const controllers = useRef<(AbortController | null)[]>([null, null]);
 
   useEffect(() => {
+    mounted.current = true;
     const live = controllers.current;
-    return () => live.forEach((c, i) => { c?.abort(); live[i] = null; });
-  }, []);
+    return () => {
+      mounted.current = false;
+      speaker.stop();
+      recordingController.current?.abort();
+      live.forEach((c, i) => { c?.abort(); live[i] = null; });
+    };
+  }, [speaker.stop]);
 
   // A picked version that stopped being trained (or vanished) goes back to following the best one.
   const following = picked === null || !byNumber.has(picked);
@@ -138,6 +152,12 @@ export default function Page() {
       toast.error(failed);
       setPane(i, { text, status: "error", error: failed });
       return;
+    }
+    if (text && speakReplies) {
+      speechQueue.current = speechQueue.current
+        .catch(() => {})
+        .then(() => mounted.current ? speaker.play(text) : undefined)
+        .catch((error: unknown) => { toast.error(error instanceof Error ? error.message : "Could not speak the reply."); });
     }
     // Single mode keeps the conversation: the finished (or stopped) reply joins the thread and the live bubble clears.
     if (single) {
@@ -197,6 +217,23 @@ export default function Page() {
   const replies: [string, string] = [panes[0].text, panes[1].text];
   const rateEnabled = !!compare && panes.every((pane) => pane.status === "done") && canRate(replies, busy);
 
+  async function recordMessage() {
+    const controller = new AbortController();
+    recordingController.current = controller;
+    setRecording(true);
+    try {
+      const wav = await recordSpeech(controller.signal);
+      if (controller.signal.aborted) return;
+      const text = await transcribe(wav, controller.signal);
+      setDraft((current) => `${current}${current ? " " : ""}${text}`);
+    } catch (error) {
+      if (!controller.signal.aborted) toast.error(error instanceof Error ? error.message : "Could not transcribe the recording.");
+    } finally {
+      if (recordingController.current === controller) recordingController.current = null;
+      setRecording(false);
+    }
+  }
+
   const rate = useMutation({
     mutationFn: async (chosenIndex: 0 | 1) => {
       if (!compare) return chosenIndex;
@@ -252,6 +289,20 @@ export default function Page() {
   return (
     <main className={PAGE_MAIN}>
       <PageHeader title={route.title} lead={route.lead} />
+
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border p-3">
+        <div className="flex items-center gap-2">
+          <Switch id="speak-replies" checked={speakReplies} onCheckedChange={setSpeakReplies} />
+          <Label htmlFor="speak-replies">Speak replies</Label>
+        </div>
+        {voiceStatus.data && engineIssue(voiceStatus.data, "tts") && (
+          <span className="text-sm text-muted-foreground">{engineIssue(voiceStatus.data, "tts")}</span>
+        )}
+        {voiceStatus.data && engineIssue(voiceStatus.data, "stt") && (
+          <span className="text-sm text-muted-foreground">{engineIssue(voiceStatus.data, "stt")}</span>
+        )}
+        {voiceStatus.isError && <span className="text-sm text-destructive">Could not check the voice engine.</span>}
+      </div>
 
       {versionsQuery.isPending ? (
         <div className="flex flex-col gap-3" aria-label="Loading versions">
@@ -324,7 +375,7 @@ export default function Page() {
                       {version && <CheckpointStep version={version} />}
                     </CardHeader>
                     <CardContent className="flex flex-col gap-3">
-                      <ReplyText pane={panes[i]} />
+                      <ReplyText pane={panes[i]} onSpeak={() => void speaker.play(panes[i].text).catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Could not speak the reply."))} speaking={speaker.speaking} />
                       <Button
                         variant="outline"
                         size="sm"
@@ -345,9 +396,9 @@ export default function Page() {
                 <CardContent className="flex min-h-40 flex-col gap-3">
                   {thread.length === 0 && panes[0].status === "idle" && <p className="text-sm text-muted-foreground">{T.itsReply}</p>}
                   {thread.map((m, k) => (
-                    <Bubble key={k} role={m.role} text={m.content} />
+                    <Bubble key={k} role={m.role} text={m.content} onSpeak={m.role === "assistant" ? () => void speaker.play(m.content).catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Could not speak the reply.")) : undefined} speaking={speaker.speaking} />
                   ))}
-                  {panes[0].status !== "idle" && <Bubble role="assistant" text={panes[0].text} pane={panes[0]} />}
+                  {panes[0].status !== "idle" && <Bubble role="assistant" text={panes[0].text} pane={panes[0]} onSpeak={() => void speaker.play(panes[0].text).catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Could not speak the reply."))} speaking={speaker.speaking} />}
                 </CardContent>
               </Card>
             )}
@@ -373,6 +424,9 @@ export default function Page() {
               disabled={!ready}
               onChange={(e) => setDraft(e.target.value)}
             />
+            <Button type="button" variant="outline" disabled={recording ? false : !ready || busy || !!(voiceStatus.data && engineIssue(voiceStatus.data, "stt"))} onClick={() => recording ? recordingController.current?.abort() : void recordMessage()}>
+              {recording ? "Stop voice input" : "Record question (up to 15 seconds)"}
+            </Button>
             {busy ? (
               <Button type="button" variant="destructive" onClick={stop}>
                 {T.stop}
@@ -519,7 +573,7 @@ export default function Page() {
   );
 }
 
-function ReplyText({ pane }: { pane: PaneState }) {
+function ReplyText({ pane, onSpeak, speaking }: { pane: PaneState; onSpeak?: () => void; speaking?: boolean }) {
   if (pane.status === "idle") return <p className="text-sm text-muted-foreground">{T.itsReply}</p>;
   return (
     <div className="flex flex-col gap-2">
@@ -532,17 +586,23 @@ function ReplyText({ pane }: { pane: PaneState }) {
       )}
       {pane.status === "stopped" && <span className="text-xs text-muted-foreground">Stopped</span>}
       {pane.status === "error" && <span className="text-xs text-destructive">{pane.error}</span>}
+      {onSpeak && pane.text && pane.status !== "streaming" && pane.status !== "error" && (
+        <Button type="button" variant="ghost" size="sm" className="self-start" onClick={onSpeak} disabled={speaking}>
+          {speaking ? "Speaking…" : "Play reply"}
+        </Button>
+      )}
     </div>
   );
 }
 
-function Bubble({ role, text, pane }: { role: Message["role"]; text: string; pane?: PaneState }) {
+function Bubble({ role, text, pane, onSpeak, speaking }: { role: Message["role"]; text: string; pane?: PaneState; onSpeak?: () => void; speaking?: boolean }) {
   const mine = role === "user";
   return (
     <div className={`flex flex-col gap-1 ${mine ? "items-end" : "items-start"}`}>
       <div className={`max-w-[85%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm ${mine ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
-        {pane ? <ReplyText pane={pane} /> : text}
+        {pane ? <ReplyText pane={pane} onSpeak={onSpeak} speaking={speaking} /> : text}
       </div>
+      {!pane && onSpeak && <Button type="button" variant="ghost" size="sm" onClick={onSpeak} disabled={speaking}>{speaking ? "Speaking…" : "Play reply"}</Button>}
     </div>
   );
 }

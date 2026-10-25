@@ -1,10 +1,4 @@
-# Voice mode (Eval): optional, installed by `make voice-setup`, never by the app.
-# Speech to text: NVIDIA Parakeet through NeMo. Text to speech: Breeze TTS 2 through qwen-tts (its inference code is cloned by setup).
-# Breeze pins transformers==4.57.3 and qwen-tts==0.1.1; torch is the one already in .venv (Breeze's README tests torch 2.9.1).
-# qwen-tts and NeMo list Python up to 3.13; on 3.14 the install may fail (docs/voice.md).
--r requirements.txt
-nemo_toolkit[asr]
-qwen-tts==0.1.1
-transformers==4.57.3
-huggingface-hub>=0.34
-soundfile>=0.13
+# Optional, local voice engines for Eval: CPU inference on Windows, macOS and Linux.
+# Piper provides selectable neural TTS voices; sherpa-onnx provides offline speech recognition.
+piper-tts==1.8.0
+sherpa-onnx==2.0.0

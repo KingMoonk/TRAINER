@@ -31,9 +31,19 @@ describe("Costs: where the size goes", () => {
 
 
 const registry: Registry = { heads: [1, 3, 8], widths: ["small", "medium", "large"], words: [], slots: [], block_slots: [], part_slots: [] };
-const choices = { H: 3, W: 1 } as Choices;
+const choices = { H: 4, W: 1, V: 1, d: 64, T: 256, U: 1024, token_limit_millions: 0 } as Choices;
 
 describe("model controls", () => {
+  test("edits hidden size, context, tokenizer size and the optional token cap", () => {
+    const onModelSetting = vi.fn();
+    render(<Controls registry={registry} cur={choices} draft={choices} knobs={{ H: true, W: true }} onKnob={vi.fn()} onModelSetting={onModelSetting} />);
+    fireEvent.change(screen.getByLabelText("Hidden size"), { target: { value: "128" } });
+    fireEvent.change(screen.getByLabelText("Token context"), { target: { value: "512" } });
+    fireEvent.change(screen.getByLabelText("Tokenizer size"), { target: { value: "4096" } });
+    fireEvent.change(screen.getByLabelText("Training token limit (millions)"), { target: { value: "12" } });
+    expect(onModelSetting.mock.calls).toEqual([["d", 128], ["T", 512], ["U", 4096], ["token_limit_millions", 12]]);
+  });
+
   test("maps nonconsecutive head choices to actual counts and width choices to indices", () => {
     const onKnob = vi.fn();
     render(<Controls registry={registry} cur={{ ...choices, H: 1, W: 0 }} draft={choices} knobs={{ H: true, W: true }} onKnob={onKnob} />);

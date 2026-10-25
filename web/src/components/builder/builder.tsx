@@ -36,6 +36,7 @@ import {
   versionName,
   versions,
   wordChanged,
+  tokenizerDefaultSize,
   type Choices,
   type Draft,
   type Explaining,
@@ -93,7 +94,13 @@ export function Builder() {
   if (cur && !splitting && (!store || store.base !== base)) {
     // Set during render, as React suggests for state that follows a prop: the next render has the draft.
     const kept = loadDraft();
-    setStore(kept && kept.base === base ? kept : { base, draft: cur, anchor: null });
+    if (kept && kept.base === base) {
+      const draft = { ...cur, ...kept.draft };
+      const anchor = kept.anchor ? { ...kept.anchor, was: { ...cur, ...kept.anchor.was } } : null;
+      setStore({ ...kept, draft, anchor });
+    } else {
+      setStore({ base, draft: cur, anchor: null });
+    }
   }
   useEffect(() => {
     if (store) storeDraft(store);
@@ -202,7 +209,8 @@ export function Builder() {
   const knob = (key: "H" | "W", value: number) => {
     if (draftTowerQ.data?.knobs[key]) edit({ ...draft!, [key]: value });
   };
-  const setWords = (v: number) => edit({ ...draft!, V: v });
+  const setWords = (v: number) => edit({ ...draft!, V: v, U: tokenizerDefaultSize(v, draft!.d, draft!.L) });
+  const modelSetting = (key: "d" | "T" | "U" | "token_limit_millions", value: number) => edit({ ...draft!, [key]: value });
   const loadSpec = (spec: Spec) =>
     run(async () => {
       const choices = await design.read(spec);
@@ -335,7 +343,7 @@ export function Builder() {
           )}
           <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
             <div className="min-w-0 lg:col-start-2 lg:row-start-1">
-              <Controls registry={registry} cur={cur} draft={draft} knobs={draftTowerQ.data?.knobs} onKnob={knob} />
+              <Controls registry={registry} cur={cur} draft={draft} knobs={draftTowerQ.data?.knobs} onKnob={knob} onModelSetting={modelSetting} />
             </div>
             <div className="min-w-0 lg:col-start-1 lg:row-start-1 lg:row-span-2">
               <Tower

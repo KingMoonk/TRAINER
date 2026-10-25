@@ -28,6 +28,7 @@ class DesignRouterTests(ApiCase):
         cur = self.call("POST", "/design/read", json={"spec": base})
         s = D.read_spec(base)
         self.assertEqual((cur["L"], cur["d"], cur["T"], cur["M"], cur["O"]), (s["L"], s["d"], s["T"], s["M"], []))
+        self.assertEqual((cur["U"], cur["token_limit_millions"]), (s["U"], 0))
 
         more = self.call("POST", "/design/resize", json={"choices": cur, "n": 3})
         self.assertEqual(more["L"], 3)
@@ -87,6 +88,16 @@ class DesignRouterTests(ApiCase):
         self.assertEqual((changed["parts_changed"], changed["warm"]["kind"]), (True, "other"))
         self.learning_routes()
         self.assertAllRoutesHit()
+
+    def test_older_choices_payload_preserves_tokenizer_and_token_limit_settings(self):
+        base = small_spec()
+        initial = D.read_spec(base) | {"V": 1, "U": 4096, "token_limit_millions": 8}
+        spec = D.write_spec(base, initial)
+        choices = self.call("POST", "/design/read", json={"spec": spec})
+        older = {key: value for key, value in choices.items() if key not in {"U", "token_limit_millions"}}
+        written = self.call("POST", "/design/write", json={"base": spec, "choices": older, "was": older})
+        self.assertEqual(written["tokenizer"]["config"]["vocab_size"], 4096)
+        self.assertEqual(written["train"]["run"]["token_limit_millions"], 8)
 
     def learning_routes(self):
         base = small_spec()

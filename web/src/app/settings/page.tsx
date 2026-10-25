@@ -5,11 +5,13 @@ import { useTheme } from "next-themes";
 import { useSyncExternalStore } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAccent } from "@/components/theme";
 import { APPEARANCE } from "@/lib/copy/appearance";
 import Link from "next/link";
 import { ACCENTS, MODES, type Accent, type Mode } from "@/lib/theme";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
+import { TTS_VOICES, useTtsVoice, type TtsVoice } from "@/lib/voice";
 
 // The chosen button: the app-wide neutral selected look (globals.css), plus a tick.
 const SELECTED = "data-[state=on]:selected-box data-[state=on]:hover:bg-(--selected-surface)";
@@ -20,6 +22,7 @@ const mounted = () => () => {};
 export default function Page() {
   const { theme, resolvedTheme, setTheme } = useTheme();
   const [accent, setAccent] = useAccent();
+  const [ttsVoice, setTtsVoice] = useTtsVoice();
   // next-themes only knows the stored mode on the client; show nothing selected until then rather than the wrong one.
   const ready = useSyncExternalStore(mounted, () => true, () => false);
   const dark = resolvedTheme !== "light";
@@ -63,6 +66,22 @@ export default function Page() {
         </CardContent>
       </Card>
       </section>
+      <Card data-testid="settings-voice">
+        <CardHeader>
+          <CardTitle>{APPEARANCE.voiceTitle}</CardTitle>
+          <CardDescription>{APPEARANCE.voiceDesc}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Select value={ttsVoice} onValueChange={(value) => setTtsVoice(value as TtsVoice)}>
+            <SelectTrigger aria-label={APPEARANCE.voiceTitle} className="w-full max-w-md">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TTS_VOICES.map(({ id, label }) => <SelectItem key={id} value={id}>{label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </CardContent>
+      </Card>
       <Card data-testid="settings-cluster">
         <CardHeader>
           <CardTitle>{APPEARANCE.clusterTitle}</CardTitle>

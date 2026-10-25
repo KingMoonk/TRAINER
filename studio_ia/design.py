@@ -285,11 +285,22 @@ def sizes(spec, v):
     """Size, time and memory of a design under word list v, summed from every module's own estimate (studio_estimate).
     params · table: the word table, position and head · time: training work per row of T pieces · memory: weights, gradients
     and Adam state at 16 bytes per parameter · activations: bytes kept per row for the backward pass."""
-    e = estimate(spec, VS[v])
+    vocab = tokenizer_vocab_size(spec, v)
+    e = estimate(spec, vocab)
     d, t = spec["dims"]["d_model"], spec["dims"]["n_ctx"]
     # the estimate leaves the vocabulary matrices out of compute (Kaplan et al.); a step still pays for the output scores
-    return dict(params=e["total"], table=e["embedding_params"], time=(e["train_flops_per_token"] + 6 * VS[v] * d) * t,
+    return dict(params=e["total"], table=e["embedding_params"], time=(e["train_flops_per_token"] + 6 * vocab * d) * t,
                 memory=16 * e["total"], activations=e["activation_bytes_per_token"] * t, parts=param_parts(e["rows"]))
+
+
+def tokenizer_vocab_size(spec, v):
+    """The table cap selected in the tokenizer, or its fixed vocabulary size."""
+    entry = spec["tokenizer"]
+    configured = (entry.get("config") or {}).get("vocab_size")
+    if configured:
+        return configured
+    from studio_spec import vocab_of
+    return vocab_of(spec, fallback=VS[v])
 
 
 PARAM_PARTS = (("table", "violet"), ("position", "dim"), ("blocks", "blue"), ("head", "pink"))  # bar order and colour
@@ -312,14 +323,18 @@ def read_spec(spec):
     word = {"letters": 0, "small word list": 1, "large word list": 2, "whole words": 3}.get(f["words"], 1)
     parts = {slot: spec[slot]["id"] for slot in PART_SLOTS} | {slot: block[slot]["id"] for slot in BLOCK_SLOTS}
     own = {(o["index"], slot): o[slot]["id"] for o in spec["blocks"] for slot in BLOCK_SLOTS if slot in o}
+    run = spec["train"].get("run") or {}
     return dict(L=f["blocks"], H=block["mixer"]["config"].get("heads") or 4, W=room_choice(block["channel"], f["width"]), V=word,
-                d=f["width"], T=f["context"], M=parts, O=own)
+                d=f["width"], T=f["context"], U=tokenizer_vocab_size(spec, word),
+                token_limit_millions=run.get("token_limit_millions", 0), M=parts, O=own)
 
 
 def write_spec(base, s, was=None):
     """`base` with only the choices that differ between `was` (default: base's own) and `s` rewritten."""
     spec = copy.deepcopy(validate_spec(base))
-    was = was or read_spec(spec)
+    was = {**read_spec(spec), **(was or {})}
+    vocab_size = s.get("U", was["U"])
+    token_limit = s.get("token_limit_millions", was["token_limit_millions"])
     if s["L"] != was["L"]:
         spec["dims"]["n_layer"] = s["L"]
     for slot in PART_SLOTS:
@@ -329,6 +344,11 @@ def write_spec(base, s, was=None):
         if s["M"][slot] != was["M"][slot]:
             spec["block"][slot] = entry_for(slot, s["M"][slot], spec["block"][slot], s)
     resized = False
+    if s["d"] != was["d"]:
+        spec["dims"]["d_model"] = s["d"]
+        resized = True
+    if s["T"] != was["T"]:
+        spec["dims"]["n_ctx"] = s["T"]
     if s["H"] != was["H"] and "heads" in (mixer := spec["block"]["mixer"]["config"]):
         mixer["heads"] = s["H"]
         if mixer.get("kv_heads") and s["H"] % mixer["kv_heads"]:
@@ -350,6 +370,18 @@ def write_spec(base, s, was=None):
                     override.pop(slot, None)
     if s["V"] != was["V"]:
         spec["tokenizer"] = {"id": TOKENIZERS[s["V"]], "config": tokenizer_config(TOKENIZERS[s["V"]], spec)}
+    tokenizer_id = TOKENIZERS[s["V"]]
+    if vocab_size != was["U"] and tokenizer_id in ("bpe_fast", "word"):
+        spec["tokenizer"].setdefault("config", {})["vocab_size"] = vocab_size
+    run = dict((spec["train"].get("run") or {}))
+    if token_limit:
+        run["token_limit_millions"] = token_limit
+    else:
+        run.pop("token_limit_millions", None)
+    if run:
+        spec["train"]["run"] = run
+    else:
+        spec["train"].pop("run", None)
     return validate_spec(spec)
 
 
@@ -399,7 +431,14 @@ def part_changes(cur, draft):
 def change_chips(old_spec, new_spec, cur, draft):
     """The not-saved chips: spec_diff's sentences, with its catch-all replaced by the parts that changed."""
     plain = spec_diff(old_spec, new_spec)
-    out = [c for c in plain if c != OTHER_PARTS] + part_changes(cur, draft)
+    out = [c for c in plain if c != OTHER_PARTS and not (cur["d"] != draft["d"] and c.startswith(("wider words", "narrower words")))] + part_changes(cur, draft)
+    if cur["d"] != draft["d"]:
+        out.append(f"hidden size {cur['d']:,} → {draft['d']:,}")
+    if cur["U"] != draft["U"]:
+        out.append(f"tokenizer size {cur['U']:,} → {draft['U']:,}")
+    if cur["token_limit_millions"] != draft["token_limit_millions"]:
+        cap = f"{draft['token_limit_millions']:,} million tokens" if draft["token_limit_millions"] else "off"
+        out.append(f"training token limit {cap}")
     if recipe_of(validate_spec(old_spec)) != recipe_of(new_spec):
         out.append(T["recipe_change"].format(recipe=recipe_text(new_spec)))
     return out or plain
@@ -419,11 +458,11 @@ def new_issues(old_spec, new_spec):
 
 def warm_kind(cur, draft):
     """How the old weights carry into the draft: scratch | heads | other | removed | same (the studio_warmstart rules)."""
-    if draft["V"] != cur["V"]:
+    if (draft["V"], draft["U"]) != (cur["V"], cur["U"]):
         return "scratch"
     if draft["H"] != cur["H"]:
         return "heads"
-    if parts_changed(cur, draft):
+    if parts_changed(cur, draft) or draft["d"] != cur["d"]:
         return "other"
     if draft["L"] < cur["L"] or draft["W"] < cur["W"]:
         return "removed"
@@ -432,7 +471,7 @@ def warm_kind(cur, draft):
 
 def warm_outlook(cur, draft):
     """None when nothing changed, else {kind, carries, preserving, chip, state, text} for the cost panel."""
-    if all(cur[k] == draft[k] for k in ("L", "H", "W", "V", "M", "O")):
+    if all(cur[k] == draft[k] for k in ("L", "H", "W", "V", "d", "T", "U", "token_limit_millions", "M", "O")):
         return None
     kind = warm_kind(cur, draft)
     chip, state = WARM[kind]
@@ -857,11 +896,14 @@ def split_steps(cur, draft):
         s = dict(s, **patch)
         steps.append(s)
     if draft["V"] != s["V"]:
-        take(dict(V=draft["V"]))
+        take(dict(V=draft["V"], U=draft["U"]))
     if draft["L"] != s["L"]:
         take(resize(s, draft["L"]))
     for key in ("H", "W"):
         if draft[key] != s[key] and knob_applies(draft, key):
+            take({key: draft[key]})
+    for key in ("d", "T", "U", "token_limit_millions"):
+        if draft[key] != s[key]:
             take({key: draft[key]})
     for slot in (*PART_SLOTS, *BLOCK_SLOTS):
         if draft["M"][slot] != s["M"][slot]:
@@ -905,7 +947,7 @@ def split_jobs(start, plan, mode, parent_checkpoint, datasets, run_dir, new_id=l
     jobs, before = [], parent_checkpoint
     for i, (s, spec, _chips) in enumerate(plan):
         prev = plan[i - 1][0] if i else None
-        step_mode = "from_scratch" if (i == 0 and mode == "from_scratch") or (prev and s["V"] != prev["V"]) else "catch_up"
+        step_mode = "from_scratch" if (i == 0 and mode == "from_scratch") or (prev and (s["V"], s["U"]) != (prev["V"], prev["U"])) else "catch_up"
         job_id = new_id()
         job = catchup_job(job_id, start + i, spec, step_mode, before, datasets)
         out = str(Path(run_dir) / f"queue_{job_id}") if run_dir else None
@@ -1028,7 +1070,8 @@ def catchup_job(job_id, number, spec, mode, parent_checkpoint, datasets):
     scratch = mode == "from_scratch"
     return Job(job_id, "pretrain", f"Version {number} {'from scratch' if scratch else 'catch-up'}",
                params={"config": cfg_, "datasets": list(datasets), "mode": mode, "init_from": None if scratch else parent_checkpoint,
-                       "output_dir": None, "user_text": False, "version": number})
+                       "output_dir": None, "user_text": False, "version": number,
+                       **({"token_budget": cfg_["token_limit_millions"] * 1_000_000} if cfg_.get("token_limit_millions") else {})})
 
 
 # ---------------------------------------------------------------------------------------------- learn the parts (#83)
@@ -1046,7 +1089,7 @@ def example_text(part, s, short, lists=None):
 
 def example_for(part, s, short, pieces, sentence):
     """example_text with the example sentence already cut by the draft's word list: `pieces` ([label] or None) of `sentence`."""
-    d, rows = draft_width(s), VS[s["V"]]
+    d, rows = draft_width(s), s["U"]
     upto = T["up_to"] if s["V"] in (1, 3) else ""  # built from your text: the size is a cap
     last, before = (pieces[-1].strip() or pieces[-1], len(pieces) - 1) if pieces and len(pieces) > 1 else (None, 0)
     slot = "norm" if part == "final_norm" else part

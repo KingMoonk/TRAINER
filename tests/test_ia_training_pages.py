@@ -42,7 +42,12 @@ class RecommendedCollection(unittest.TestCase):
     def fake_fetch(url, path, stop=None, emit=None, maximum=None, range_bytes=None):
         from pathlib import Path
         from studio_catalog import file_sha256
-        payload = b"a first story.<|endoftext|>a second story.<|endoftext|>" if Path(path).suffix == ".txt" else b"attribution"
+        if Path(path).suffix == ".txt":
+            payload = b"a first story.<|endoftext|>a second story.<|endoftext|>"
+        elif Path(path).suffix == ".jsonl":
+            payload = b'{"instruction":"Say hello","response":"Hello","context":"","category":"greeting"}\n'
+        else:
+            payload = b"attribution"
         Path(path).write_bytes(payload)
         return {"url": url, "filename": Path(path).name, "bytes": len(payload), "sha256": file_sha256(path)}
 
@@ -54,8 +59,8 @@ class RecommendedCollection(unittest.TestCase):
         self.events = []
         self.svc.watch(lambda kind, payload: self.events.append((kind, payload)))
 
-    def states(self):
-        return {r["id"]: r["state"] for r in self.svc.collection()}
+    def states(self, kind="text"):
+        return {r["id"]: r["state"] for r in self.svc.collection(kind)}
 
     def test_row_labels(self):
         self.assertEqual(source_action({"state": "not downloaded"})[1], "download")
@@ -65,19 +70,19 @@ class RecommendedCollection(unittest.TestCase):
         self.assertEqual(source_status({"state": "downloading"}, "Downloading x · 1.0 MB"), "Downloading x · 1.0 MB")
         self.assertIn("Could not finish: no network.", source_status({"state": "not downloaded", "error": "no network"}))
 
-    def test_download_then_import_into_the_text_sets(self):
+    def test_download_then_import_into_the_conversation_sets(self):
         from unittest.mock import patch
-        self.assertEqual(set(self.states().values()), {"not downloaded"})
+        self.assertEqual(set(self.states("conversations").values()), {"not downloaded"})
         with patch("studio_catalog._fetch", side_effect=self.fake_fetch):
-            self.assertTrue(self.svc.download_sources(["tinystories"]))
+            self.assertTrue(self.svc.download_sources(["dolly15k"]))
             self.svc._worker.join(10)
-            self.assertEqual(self.states()["tinystories"], "downloaded")
-            self.assertIn(("download_done", {"id": "tinystories"}), self.events)
+            self.assertEqual(self.states("conversations")["dolly15k"], "downloaded")
+            self.assertIn(("download_done", {"id": "dolly15k"}), self.events)
             self.assertFalse(self.svc.import_source("wikitext2"))  # not downloaded
-            self.assertTrue(self.svc.import_source("tinystories"))
+            self.assertTrue(self.svc.import_source("dolly15k"))
             self.svc._worker.join(10)
-        self.assertEqual(self.states()["tinystories"], "imported")
-        self.assertEqual(self.svc.data("text").count, 2)
+        self.assertEqual(self.states("conversations")["dolly15k"], "imported")
+        self.assertEqual(self.svc.data("conversations").count, 1)
 
     def test_text_downloads_and_adds_in_one_step(self):
         from unittest.mock import patch
@@ -97,10 +102,11 @@ class RecommendedCollection(unittest.TestCase):
         from unittest.mock import patch
         import studio_catalog as cat
         stage = {e["id"]: e["stage"] for e in cat.CATALOG}
-        self.assertEqual({stage[i] for i in self.svc.collection_ids("text")}, {"language"})
-        self.assertEqual({stage[i] for i in self.svc.collection_ids("problems")}, {"problems"})
+        self.assertEqual(self.svc.collection_ids("text"), [])
+        self.assertEqual(self.svc.collection_ids("problems"), [])
         self.assertNotIn("winogrande_check", self.svc.collection_ids("problems"))
-        self.assertTrue({"ultrachat_a", "gsm8k", "oasst1"} <= set(self.svc.collection_ids("conversations")))
+        self.assertEqual(set(self.svc.collection_ids("conversations")), {"dolly15k", "squad2", "gsm8k", "oasst1", "toolace"})
+        self.assertTrue(all(stage[catalog_id] != "language" for catalog_id in self.svc.collection_ids("conversations")))
 
         def fetch(url, path, stop=None, emit=None, maximum=None, range_bytes=None):
             if Path(path).name == "train.jsonl":
@@ -120,15 +126,15 @@ class RecommendedCollection(unittest.TestCase):
         import urllib.error
         offline = "Could not reach the download server. Check the connection and try again."
         with patch("studio_catalog._fetch", side_effect=urllib.error.URLError("no network")):
-            self.svc.download_sources(["tinystories"])
+            self.svc.download_sources(["dolly15k"])
             self.svc._worker.join(10)
-        row = next(r for r in self.svc.collection() if r["id"] == "tinystories")
+        row = next(r for r in self.svc.collection("conversations") if r["id"] == "dolly15k")
         self.assertEqual((row["state"], row["error"]), ("not downloaded", offline))
-        self.assertIn(("download_failed", {"id": "tinystories", "error": offline}), self.events)
+        self.assertIn(("download_failed", {"id": "dolly15k", "error": offline}), self.events)
         with patch("studio_catalog._fetch", side_effect=self.fake_fetch):
-            self.assertTrue(self.svc.download_sources(["tinystories"]))  # nothing left running
+            self.assertTrue(self.svc.download_sources(["dolly15k"]))  # nothing left running
             self.svc._worker.join(10)
-        self.assertEqual(self.states()["tinystories"], "downloaded")
+        self.assertEqual(self.states("conversations")["dolly15k"], "downloaded")
 
 
 class GateRules(unittest.TestCase):
