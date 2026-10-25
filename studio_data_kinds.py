@@ -81,6 +81,22 @@ def text_sample(workspace, dataset_ids, budget=5_000_000, exclude=()):
     return docs, total
 
 
+def text_characters(workspace, dataset_ids, exclude=()):
+    """Total characters of the chosen sets' plain text, without tokenizing or sampling: disk sets give it from the stored per-row
+    character counts (one SUM), in-memory sets are read whole. `exclude` holds texts to leave out (the held-back documents)."""
+    total, on_disk = 0, []
+    for dataset_id in dataset_ids:
+        if (workspace._dataset(dataset_id) or {}).get("storage") == "sqlite":
+            on_disk.append(dataset_id)
+            continue
+        total += sum(len(e["text"]) for e in pretraining_examples(workspace, [dataset_id]) if e.get("text") and e["text"] not in exclude)
+    if on_disk:
+        marks = ",".join("?" * len(on_disk))
+        with workspace._connect() as connection:
+            total += connection.execute(f"SELECT COALESCE(SUM(characters),0) FROM records WHERE dataset_id IN ({marks})", on_disk).fetchone()[0]
+    return total
+
+
 def make_problem(item, quality="Good"):
     """A problem item from studio_rules.generate -> a row for normalize/Workspace.add (rule fields mirrored in metadata)."""
     meta = {"rule": item["rule"], "params": item.get("params", {}), "noKey": "answer" not in item}

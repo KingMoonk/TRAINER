@@ -129,6 +129,15 @@ class Kinds(unittest.TestCase):
         self.assertNotIn(docs[0], sample)
         self.assertEqual(dk.summarize(ws, "text").characters, sum(map(len, docs)) + len("a short note kept whole"))  # counted once
 
+    def test_text_characters_sums_stored_counts_without_sampling(self):
+        ws = workspace()
+        disk, small = ws.create_dataset("disk", storage="sqlite"), ws.create_dataset("small")
+        docs = [f"document {i:04d} " + "x" * 90 for i in range(400)]
+        ws.add(disk, docs)
+        ws.add(small, ["a short note kept whole", "held back"])
+        self.assertEqual(dk.text_characters(ws, [disk, small], exclude={"held back"}), sum(map(len, docs)) + len("a short note kept whole"))
+        self.assertEqual(dk.text_characters(ws, []), 0)
+
     def test_sqlite_storage_problems(self):
         ws = workspace()
         d = ws.create_dataset("disk", storage="sqlite")

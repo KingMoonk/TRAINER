@@ -6814,6 +6814,16 @@
             "title": "Plateau Line",
             "type": "string"
           },
+          "readout": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SizeReadout"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "reason": {
             "default": "",
             "title": "Reason",
@@ -10512,6 +10522,65 @@
           "licence"
         ],
         "title": "Site",
+        "type": "object"
+      },
+      "SizeReadout": {
+        "description": "The text against the design, from stored character counts: ready at once, before the slow size preview is known.",
+        "properties": {
+          "characters": {
+            "title": "Characters",
+            "type": "integer"
+          },
+          "chars_per_piece": {
+            "title": "Chars Per Piece",
+            "type": "number"
+          },
+          "counted": {
+            "title": "Counted",
+            "type": "boolean"
+          },
+          "params": {
+            "title": "Params",
+            "type": "integer"
+          },
+          "pieces": {
+            "title": "Pieces",
+            "type": "integer"
+          },
+          "ratio": {
+            "title": "Ratio",
+            "type": "number"
+          },
+          "ratio_text": {
+            "title": "Ratio Text",
+            "type": "string"
+          },
+          "target_params": {
+            "title": "Target Params",
+            "type": "integer"
+          },
+          "verdict": {
+            "enum": [
+              "few",
+              "right",
+              "many"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "characters",
+          "pieces",
+          "counted",
+          "chars_per_piece",
+          "params",
+          "ratio",
+          "ratio_text",
+          "verdict",
+          "target_params"
+        ],
+        "title": "SizeReadout",
         "type": "object"
       },
       "Sizes": {

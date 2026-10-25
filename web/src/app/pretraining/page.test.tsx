@@ -106,6 +106,9 @@ function server({ known = true, sizing = SIZING as unknown } = {}) {
           plateau: null,
           plateau_line: sent.plateau === false || !ids.length ? "" : "Stops by itself, keeping its best, once the best validation loss improves by less than 1% over 49 steps (not before step 98).",
           lr: 0.0006,
+          readout: ids.length
+            ? { characters: 8_000_000, pieces: state.known ? PIECES : 1_900_000, counted: state.known, chars_per_piece: 4, params: 1_000_000, ratio: 2, ratio_text: "2.00", verdict: "few", target_params: 100_000 }
+            : null,
           enough: state.known && ids.length ? { ratio: 2, ratio_text: "2.00", headline: "This model could use about 10.0× more text than you have", verdict: "little" } : null,
           expectation: state.known && ids.length ? { headline: "Expect the error to fall to about 3.1 bits per character", details: "Based on the size of the model and the text." } : null,
           config: steps ? { steps, batch_size: sent.rows, validation: sent.hold, objective: "all" } : null,
@@ -247,6 +250,21 @@ describe("Pretraining page", () => {
     expect(await screen.findByTestId("enough-headline")).toHaveTextContent("This model could use about 10.0× more text than you have");
     expect(screen.getByTestId("rows-grid")).toBeVisible();
     await waitFor(() => expect(screen.getByRole("button", { name: "Add to the queue" })).toBeEnabled());
+  });
+
+  test("the quick readout shows while the size is estimated, then the counted pieces", async () => {
+    const state = server({ known: false });
+    renderPage(<PretrainingPage />, { route: "/pretraining/" });
+    expect(await screen.findByTestId("readout-size")).toHaveTextContent("8.0M characters · about 1.9M word pieces · 1.0M parameters");
+    expect(screen.getByTestId("readout-source")).toHaveTextContent("estimated at 4 characters each");
+    expect(screen.getByTestId("readout-advice")).toHaveTextContent("Short on text: about 2.00 word pieces per parameter");
+    expect(screen.getByTestId("readout-advice")).toHaveTextContent("about 100k parameters");
+
+    await waitFor(() => expect(state.known).toBe(true));
+    act(() => emit("job", job("p1", "pretrain_preview", preview)));
+    await waitFor(() => expect(screen.getByTestId("readout-size")).toHaveTextContent("8.0M characters · 2.0M word pieces · 1.0M parameters"));
+    expect(screen.getByTestId("readout-source")).toHaveTextContent("counted by the size preview");
+    expect(screen.getByTestId("readout-advice")).toHaveTextContent("Short on text: 2.00 word pieces per parameter");
   });
 
   test("adding while the size is worked out puts the run in the queue at once", async () => {

@@ -29,6 +29,15 @@ export const T = {
     "{ratio} word pieces per parameter; a common rule of thumb for the best use of compute is about 20. Repeating your text helps less with each pass, and after a few passes it starts memorising; the run page marks the passes.",
   wordPiecesPlenty:
     "{ratio} word pieces per parameter; a common rule of thumb for the best use of compute is about 20. One pass over your text is already more than that, so repeating it is not needed.",
+  readoutSize: "{characters} characters · {pieces} word pieces · {params} parameters",
+  readoutAbout: "about ",
+  readoutEstimated: "Word pieces are estimated at {chars} characters each until the size preview counts them.",
+  readoutCounted: "Word pieces counted by the size preview.",
+  adviceFew:
+    "Short on text: {ratio} word pieces per parameter, where about 20 is the rule of thumb. Add more sets or use a smaller model; this text suits a model of about {target} parameters.",
+  adviceRight: "About right: {ratio} word pieces per parameter, where about 20 is the rule of thumb.",
+  adviceMany:
+    "Plenty of text: {ratio} word pieces per parameter, where about 20 is the rule of thumb. The model could be bigger, up to about {target} parameters; training this small one on all of it is fine too, and it is cheaper to run.",
   batches: "Batches",
   batchesDesc: "How the text is fed in; rebuilt automatically when the word list changes.",
   oneStep: "One step: {rows} rows × {context} pieces. Each colour is a different example; the dark square marks where one ends.",

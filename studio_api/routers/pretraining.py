@@ -206,6 +206,20 @@ class EnoughText(BaseModel):
     verdict: Literal["little", "about_right", "plenty"]
 
 
+class SizeReadout(BaseModel):
+    """The text against the design, from stored character counts: ready at once, before the slow size preview is known."""
+
+    characters: int
+    pieces: int  # word pieces: counted once the size preview is known, else characters / chars_per_piece
+    counted: bool  # True: `pieces` is the size preview's count; False: an estimate that tokenized nothing
+    chars_per_piece: float  # the figure the estimate used: the tokenizer's measured one when known, else 4
+    params: int
+    ratio: float  # word pieces per parameter
+    ratio_text: str
+    verdict: Literal["few", "right", "many"]  # under about 10 per parameter, about 10 to 40, above about 40 (the rule of thumb is 20)
+    target_params: int  # the parameter count at which this text is about 20 word pieces per parameter
+
+
 class Expectation(BaseModel):
     headline: str
     details: str
@@ -262,6 +276,7 @@ class PretrainPlan(BaseModel):
     lr: float | None = None
     sizing: Sizing | None = None  # null until the size of the text is known
     enough: EnoughText | None = None
+    readout: SizeReadout | None = None  # null without chosen text or a valid design
     expectation: Expectation | None = None
     config: dict | None = None  # the engine config the run will use
     can_add: bool  # "Add to the queue" may be pressed
@@ -280,6 +295,24 @@ def _parent(services, v):
     if v is None or v.parent is None:
         return None
     return next((p for p in services.versions() if p.number == v.parent), None)
+
+
+def _readout(services, spec, ids, preview):
+    """The fast readout: characters from stored counts, pieces estimated (or the preview's count once known), the design's parameters."""
+    if not ids or not spec:
+        return None
+    try:
+        found = services.text_size(ids, spec)
+    except NotImplementedError:
+        return None
+    characters, params = found.get("characters") or 0, preview.get("params") or found.get("params")
+    if not characters or not params:
+        return None
+    counted = bool(preview.get("pieces"))
+    pieces = preview["pieces"] if counted else plan.estimated_pieces(characters, found.get("chars_per_piece"))
+    verdict, ratio, target = plan.size_advice(pieces, params)
+    return SizeReadout(characters=characters, pieces=pieces, counted=counted, chars_per_piece=characters / pieces if counted else found.get("chars_per_piece") or plan.CHARS_PER_PIECE,
+                       params=params, ratio=ratio, ratio_text=plan.ratio_text(ratio), verdict=verdict, target_params=target)
 
 
 def _sizing(services, v, mode, preview, steps, body, measured):
@@ -343,6 +376,7 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
         ratio = pieces / params
         headline, verdict = plan.enough_text(ratio)
         enough = EnoughText(ratio=ratio, ratio_text=plan.ratio_text(ratio), headline=headline, verdict=verdict)
+    readout = _readout(services, v.spec if v is not None else None, ids, preview)
     expect = None
     if v is not None and not estimating:
         headline, details = plan.version_expectation(v.spec, preview, body.passes)
@@ -365,7 +399,7 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
         estimating=estimating, pieces=pieces, estimated=bool(preview.get("estimated")), params=params, context=context,
         pieces_per_step=per_step, passes_over_text=max(1, round(pieces / per_step)) if pieces else None, steps=steps,
         minutes=max(1, round(steps * measured["seconds_per_step"] / 60)) if steps and measured else None, lr=lr, sizing=size,
-        enough=enough, expectation=expect, plateau=PlateauRule.model_validate(rule) if rule else None, plateau_line=plan.plateau_line(rule),
+        enough=enough, readout=readout, expectation=expect, plateau=PlateauRule.model_validate(rule) if rule else None, plateau_line=plan.plateau_line(rule),
         config=config, can_add=not reason, reason=reason, job=job, outlook=if_added(services.queue_outlook()))
 
 

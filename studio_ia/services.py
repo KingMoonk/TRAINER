@@ -401,6 +401,12 @@ class Services:
         """pretrain_preview's answer if already known without work, else None. The default always knows it."""
         return self.pretrain_preview(dataset_ids, rows)
 
+    def text_size(self, dataset_ids, spec):
+        """{characters, params, chars_per_piece}: a fast readout of the chosen text for design `spec`, from stored character counts and the
+        design's own parameter count. Never tokenizes. chars_per_piece is the tokenizer's measured figure for this design, else None;
+        params is None when the design is not valid."""
+        raise NotImplementedError
+
     def cached_step_rate(self, spec, rows):
         """The step rate measure_step_rate found for `spec` at `rows` rows a step on this computer, or None while it is unknown. Never
         computes. {"seconds_per_step", "tokens_per_second", "device", "device_name", "note", "rows", "context"}."""
@@ -1047,6 +1053,9 @@ class FakeServices(Services):
         losses = [5.5 - 2.5 * min(1., max(0., (i - 30) / 50)) for i in range(100)]
         return dict(rates=rates, losses=losses, smoothed=losses, suggestion=rates[70] / 10, steepest=70, diverged=False, cancelled=False,
                     lr_min=1e-6, lr_max=1.)
+
+    def text_size(self, dataset_ids, spec):
+        return {"characters": 8_000_000, "params": 1_000_000, "chars_per_piece": None}
 
     def pretrain_preview(self, dataset_ids, rows=16):
         row = [(i // 7) % 4 if i % 7 else -1 for i in range(32)]
@@ -2235,6 +2244,7 @@ class WorkspaceServices(Services):
             estimated = total > chars
             pieces = round(counted * total / max(1, chars)) if estimated else counted
             return {"pieces": pieces if sample else None, "estimated": estimated,
+                    "chars_per_piece": chars / counted if counted else None,
                     "params": studio_estimate.estimate(spec, tok.vocab_size)["total"], "vocab": tok.vocab_size,
                     "context": context, "first_rows": layout_rows([len(e) + 1 for e in encoded], context, rows)}
         key = self._preview_key(v, dataset_ids, rows)
@@ -2286,6 +2296,25 @@ class WorkspaceServices(Services):
             return {}
         hit = self._previews().get(self._preview_key(v, dataset_ids, rows))
         return None if hit is None else {**hit, "tokens_per_second": self._speed(read_metrics)}
+
+    def text_size(self, dataset_ids, spec):
+        import studio_data_kinds as dk
+        import studio_estimate
+        import studio_spec
+        characters = dk.text_characters(self.workspace, dataset_ids, exclude=set(self._heldout()))
+        try:
+            params = studio_estimate.estimate(studio_spec.validate_spec(spec))["total"]
+        except (ValueError, KeyError, TypeError):
+            params = None
+        same = json.loads(json.dumps(spec, default=str))
+        measured = None
+        for key, found in list(self._previews().items()):  # the newest preview of this design that counted its text
+            try:
+                if json.loads(key)[2] == same and found.get("chars_per_piece"):
+                    measured = found["chars_per_piece"]
+            except (ValueError, IndexError, TypeError, AttributeError):
+                continue
+        return {"characters": characters, "params": params, "chars_per_piece": measured}
 
     def cached_step_rate(self, spec, rows):
         return self._step_rates().get(self._rate_key(spec, rows))
