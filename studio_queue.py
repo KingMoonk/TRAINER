@@ -21,6 +21,7 @@ KINDS = ("pretrain", "quicktest", "compare", "post_round", "restore_answers", "c
          "pretrain_distributed", "diloco_member", "rlhf_loop", "mlperf")
 MEMORY = {"half": .5, "most": .75, "all": 1.}
 QUEUED = ("waiting", "held")  # jobs listed under Up next, in order; only "waiting" ones are picked to run
+SIZING_PERCENT = "sizing_percent"  # with SIZING: how far the size of the text is worked out, in percent (set in memory; not saved on its own)
 SIZING = "sizing"  # a param of a job added before the size of its text was known: it keeps its place but is not run until fill() gives its steps
 FAILED_SHOWN = 5
 MIN_FREE = 2 * 2 ** 30  # a job needs at least this much free disk to start
@@ -332,6 +333,20 @@ class Runner:
         if job is None:
             return False
         self.wake.set()
+        self._emit("queue", {"job": job_id})
+        return True
+
+    def size_progress(self, job_id, percent):
+        """Note how far the size of the text is worked out (0-100) for a job still waiting for it (params[SIZING]), and announce it when
+        the percent moved. Set on the job without a save, since a restart fails a sizing job anyway. False when it is gone."""
+        with self.lock:
+            job = next((j for j in self._queued() if j.id == job_id and j.params.get(SIZING)), None)
+            if job is None:
+                return False
+            percent = max(0, min(100, int(percent)))
+            if job.params.get(SIZING_PERCENT) == percent:
+                return True
+            job.params[SIZING_PERCENT] = percent
         self._emit("queue", {"job": job_id})
         return True
 

@@ -149,6 +149,7 @@ function Row({
         </div>
         {job.note && <div className="text-xs text-muted-foreground">{job.note}</div>}
         {outlook && <div className="text-xs text-muted-foreground">{fill(T.starts, { outlook })}</div>}
+        {job.sizing != null && <SizingBar percent={job.sizing} />}
         {row && job.kind !== "pretrain_distributed" && <PlaceLine row={row} />}
         <MembersLine job={job} />
       </div>
@@ -178,5 +179,18 @@ function Row({
         </Button>
       </div>
     </li>
+  );
+}
+
+/** How far the size check of a run's text is: the run waits in the queue, and starts by itself once it is known. */
+function SizingBar({ percent }: { percent: number }) {
+  const shown = Math.min(100, Math.max(0, Math.round(percent)));
+  return (
+    <div className="mt-1 flex flex-col gap-1" data-testid="sizing">
+      <span className="text-xs text-muted-foreground">{fill(T.sizingText, { percent: String(shown) })}</span>
+      <div role="progressbar" aria-label={T.sizingBar} aria-valuemin={0} aria-valuemax={100} aria-valuenow={shown} className="h-1.5 w-full rounded-full bg-muted">
+        <div className="h-1.5 rounded-full bg-highlight-strong transition-all" style={{ width: `${shown}%` }} />
+      </div>
+    </div>
   );
 }

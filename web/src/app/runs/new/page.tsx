@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { initialForm, startBody, toggled, type Defaults, type Form, type TextSet } from "../../cluster/training/logic";
 import { useDefaults, useMachines, useTextSets, useVersions } from "../../cluster/training/use-training";
 import { AllowedHours } from "../allowed-hours";
+import { T as PRETRAINING } from "../../pretraining/copy";
 import { planBody } from "../../pretraining/logic";
 import { QUICKTEST } from "../../quick-test/copy";
 import { Coordinator, FIELD, Hint, OuterLoop, Workers, selectedText } from "./fields";
@@ -119,12 +120,15 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
   const pin = workers.length === 1 && peers.length === 1 ? peers[0] : null;
 
   // The plan is the Pretraining page's: the server turns the choices into the job to queue.
+  const body = planBody({ version, datasetIds: ids, mode, rows: "16", hold: "5%", length: "Medium", fromVersion });
   const plan = useQuery({
     queryKey: ["pretraining", "plan", "new-run", version, ids, mode, fromVersion],
-    queryFn: ({ signal }) => unwrap(api.POST("/pretraining/plan", { body: planBody({ version, datasetIds: ids, mode, rows: "16", hold: "5%", length: "Medium", fromVersion }), signal })),
+    queryFn: ({ signal }) => unwrap(api.POST("/pretraining/plan", { body, signal })),
     enabled: single && ids.length > 0,
     placeholderData: keepPreviousData,
   });
+  // The only thing missing is the size of the text: the run may be queued now (POST /pretraining/start) and waits until it is known.
+  const sizeFirst = single && !!plan.data && !plan.data.can_add && plan.data.estimating && plan.data.version !== null;
   const outlook = useQuery({ queryKey: ["queue", "outlook"], queryFn: ({ signal }) => unwrap(api.GET("/queue/outlook", { signal })), retry: false });
   useEvent("queue", () => void client.invalidateQueries({ queryKey: ["queue", "outlook"] }));
 
@@ -135,12 +139,14 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
         if (!body) throw new Error(T.needSettings);
         return (await unwrap(api.POST("/distributed/runs", { body }))).id;
       }
-      if (stage === "pretrain") {
+      if (stage === "pretrain" && !sizeFirst) {
         if (!plan.data?.job) throw new Error(plan.data?.reason || T.needText);
         return (await unwrap(api.POST("/queue/jobs", { body: pinnedJob(plan.data.job, pin) }))).id;
       }
       const id =
-        stage === "sft"
+        stage === "pretrain"
+          ? (await unwrap(api.POST("/pretraining/start", { body: { ...body, version: plan.data!.version } }))).id
+          : stage === "sft"
           ? (
               await unwrap(
                 api.POST("/post-training/rounds", { body: { round: 1, version: sftVersion, lora: null, lora_rank: 8, teacher: "version", teacher_version: null, leash: "Medium" } }),
@@ -184,7 +190,7 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
     if (stage === "pretrain" && ids.length === 0) return T.needText;
     if (several && !defaults.data) return defaults.isError ? T.settingsDown : T.loadingSettings;
     if (several) return startBody({ ...form, machines: peers }) ? "" : T.needSettings;
-    if (stage === "pretrain") return plan.data && !plan.data.can_add ? plan.data.reason : plan.data?.job ? "" : T.loading;
+    if (stage === "pretrain") return sizeFirst ? "" : plan.data && !plan.data.can_add ? plan.data.reason : plan.data?.job ? "" : T.loading;
     return sftVersion === null ? T.noVersions : "";
   })();
 
@@ -303,6 +309,7 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
       <div className="flex flex-wrap items-center justify-end gap-3 border-t pt-6">
         {failure && <p role="alert" className="mr-auto text-sm text-destructive">{failure}</p>}
         {!failure && blocker && <p className="mr-auto text-sm text-muted-foreground" data-testid="blocker">{blocker}</p>}
+        {!failure && !blocker && sizeFirst && <p className="mr-auto text-sm text-muted-foreground" data-testid="size-first">{PRETRAINING.sizeFirst}</p>}
         <Link href="/runs" className={cn(buttonVariants({ variant: "outline", size: "lg" }))}>{T.cancel}</Link>
         <Button type="submit" size="lg" disabled={!!blocker || submit.isPending}>
           {submit.isPending ? T.working : ctaLabel(outlook.data?.outlook)}
