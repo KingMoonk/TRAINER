@@ -159,9 +159,23 @@ def web_fixtures():
     run(PY, "-m", "tests.web_fixtures")
 
 
+def voice_pins(torch_version, numpy_version):
+    """The pip arguments that keep the app's torch and numpy as they are while the voice packages install. qwen-tts wants torchaudio
+    unpinned, and the newest one from PyPI would replace a CUDA torch with PyPI's (CPU-only on Windows): torch is held at the build
+    `setup` installed, and torchaudio comes from that build's index (the "+cu130" in its version), or the install stops."""
+    pins = VOICE / "constraints.txt"
+    pins.parent.mkdir(parents=True, exist_ok=True)
+    pins.write_text(f"torch=={torch_version}\nnumpy=={numpy_version}\n", encoding="utf-8")
+    local = torch_version.partition("+")[2]
+    return ["-c", str(pins)] + (["--extra-index-url", f"https://download.pytorch.org/whl/{local}"] if local.startswith("cu") else [])
+
+
 def voice_setup():
     """Install voice mode's engines into .venv and fetch their weights (studio_voice.py, requirements-voice.txt)."""
-    run(PY, "-m", "pip", "install", "-r", "requirements-voice.txt")
+    found = subprocess.run([PY, "-c", "import numpy, torch; print(torch.__version__, numpy.__version__)"], capture_output=True, text=True, check=False)
+    if found.returncode:
+        sys.exit("torch and numpy must import first. Run `make setup`.")
+    run(PY, "-m", "pip", "install", *voice_pins(*found.stdout.split()), "-r", "requirements-voice.txt")
     run(PY, "studio_voice.py")
 
 
@@ -173,6 +187,7 @@ VENV = Path(__file__).with_name(".venv")
 VENV_PY = VENV / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
 TORCH = "torch>=2.14.1,<3"  # as in requirements-training.txt
 CUDA_INDEX = "https://download.pytorch.org/whl/cu126"  # requirements-gpu.txt
+VOICE = Path(__file__).resolve().parent / ".voice"  # studio_voice.VOICE_DIR
 MIN_PYTHON = (3, 12)
 API_PORT, WEB_PORT = 8787, 3000
 DEV_SERVE = {"/": f"http://127.0.0.1:{WEB_PORT}", "/api/": f"http://127.0.0.1:{API_PORT}"}  # `dev`: the page, and the API under /api/
