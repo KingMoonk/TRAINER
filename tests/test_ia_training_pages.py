@@ -208,6 +208,18 @@ class WorkspaceRows(unittest.TestCase):
         self.svc.pretrain_preview([self.text], rows=6)
         self.assertEqual(self.svc.no_usable_text([self.text, drafts]), [("generated stories", 12)])
 
+    def test_approving_a_catalogue_set_forgets_its_empty_measurement_so_it_is_measured_again(self):
+        drafts = self.ws.create_dataset("tales", storage="sqlite")
+        self.ws.add(drafts, [{"text": f"a catalogue tale {i} " * 6, "synthetic": True, "quality": "Review"} for i in range(12)])
+        self.ws._dataset(drafts)["catalogId"] = "tinystories"
+        self.svc.save_version(default_spec(), "first design")
+        self.svc.pretrain_preview([drafts], rows=6)
+        self.assertEqual(self.svc.no_usable_text([drafts]), [("tales", 12)])
+        self.assertEqual(self.svc.approve_catalog_sets(), [drafts])
+        self.assertIsNone(self.svc.cached_preview([drafts], rows=6))  # forgotten: it is measured again, not read as empty
+        self.assertGreater(self.svc.pretrain_preview([drafts], rows=6)["pieces"], 0)
+        self.assertEqual(self.svc.no_usable_text([drafts]), [])
+
     def test_any_combination_of_measured_sets_is_served_without_the_tokenizer(self):
         from unittest import mock
         import studio_spec

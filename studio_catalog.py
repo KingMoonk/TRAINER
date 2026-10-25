@@ -1093,6 +1093,21 @@ def list_downloads(root=ROOT):
     return results
 
 
+def approve_catalog_rows(workspace):
+    """Catalogue corpora are vetted public text, so their rows need no review: mark any still waiting Good (rows imported before
+    register_download did). Returns the ids of the sets that changed."""
+    changed = []
+    for dataset in list(workspace.state["datasets"]):
+        if not dataset.get("catalogId") or dataset.get("storage") != "sqlite":
+            continue
+        with workspace._connect({dataset["id"]}) as connection:
+            waiting = connection.execute("UPDATE records SET quality='Good', payload=json_set(payload, '$.quality', 'Good') "
+                                         "WHERE dataset_id=? AND quality='Review'", (dataset["id"],)).rowcount
+        if waiting:
+            changed.append(dataset["id"])
+    return changed
+
+
 def register_download(workspace, result, stop=None, emit=None):
     """Index a verified download in SQLite; repeated registration is cheap.
 
@@ -1134,7 +1149,7 @@ def register_download(workspace, result, stop=None, emit=None):
                         row = json.loads(line)
                         if not isinstance(row, dict) or not (row.get("text") or row.get("messages")):
                             raise ValueError("A normalized catalogue row became invalid.")
-                        row.update(id=uid("ex"), datasetId=dataset_id, updatedAt=stamp)
+                        row.update(id=uid("ex"), datasetId=dataset_id, updatedAt=stamp, quality="Good")  # a catalogue corpus is vetted: no review step
                         batch.append(workspace._db_row(row))
                         count += 1
                         if len(batch) >= 5000:
