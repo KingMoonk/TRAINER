@@ -186,8 +186,33 @@ class WorkspaceRows(unittest.TestCase):
         self.assertEqual(again.cached_preview([self.text], rows=6)["pieces"], preview["pieces"])
         self.ws.add(self.conv, [{"user": "another question", "assistant": "another answer"}])   # a set not chosen
         self.assertEqual(self.svc.cached_preview([self.text], rows=6)["pieces"], preview["pieces"])
-        self.ws.add(self.text, [{"text": "a new story changes the stored data"}])
-        self.assertIsNone(self.svc.cached_preview([self.text], rows=6))
+        self.ws.add(self.text, [{"text": "a new story changes the stored data"}])  # a newer rev: the old measurement serves, with the live count
+        after = self.svc.cached_preview([self.text], rows=6)
+        self.assertGreater(after["pieces"], preview["pieces"])
+        self.assertTrue(after["estimated"])
+
+    def test_any_combination_of_measured_sets_is_served_without_the_tokenizer(self):
+        from unittest import mock
+        import studio_spec
+        other = self.ws.create_dataset("more stories")
+        self.ws.add(other, [{"text": f"another tale {i} " * 9} for i in range(10)])
+        self.svc.save_version(default_spec(), "first design")
+        first, second = (self.svc.pretrain_preview([i], rows=6) for i in (self.text, other))
+        module, _ = studio_spec.module_of("tokenizer", studio_spec.validate_spec(default_spec())["tokenizer"])
+        with mock.patch.object(module, "fit", side_effect=AssertionError("fit")), mock.patch.object(self.svc, "measure_set", side_effect=AssertionError("measure")):
+            both = self.svc.cached_preview([self.text, other], rows=6)
+            self.assertEqual(self.svc.pretrain_preview([other, self.text], rows=6)["pieces"], both["pieces"])
+        self.assertAlmostEqual(both["pieces"], first["pieces"] + second["pieces"], delta=2)
+
+    def test_the_precacher_measures_each_text_set_once_and_waits_for_a_busy_set_to_settle(self):
+        self.svc.save_version(default_spec(), "first design")
+        self.assertEqual(self.svc.precache_set_sizes(now=1000), [self.text])
+        self.assertEqual(self.svc.precache_set_sizes(now=1001), [])  # measured: nothing to do
+        self.assertIsNotNone(self.svc.cached_preview([self.text], rows=6))
+        self.ws.add(self.text, [{"text": "the collector adds another"}])  # rev up: seen now, so it is not yet redone
+        self.assertEqual(self.svc.precache_set_sizes(now=2000), [])
+        self.assertEqual(self.svc.precache_set_sizes(now=2000 + 601), [self.text])
+        self.assertEqual(self.svc.precache_set_sizes(now=3000), [])
 
     def test_text_size_is_fast_and_measured_once_a_preview_has_counted(self):
         spec = default_spec()

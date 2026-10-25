@@ -219,9 +219,17 @@ def make(argv=None):
     return build(args), args.bind, args.port
 
 
+def start_precacher(app, args):
+    """Measure the text sets in the background, for the real app only: tests and --fake never start the thread."""
+    if not args.fake:
+        app.state.services.start_precacher()
+    return app
+
+
 def reloaded():
     """The app factory uvicorn calls in each process it starts under --reload."""
-    app = build(parse(json.loads(os.environ[ARGV])))
+    args = parse(json.loads(os.environ[ARGV]))
+    app = start_precacher(build(args), args)
     if live.MARKER_ENV in os.environ:
         threading.Thread(target=keep_marker, args=(app.state.services, os.environ[live.MARKER_ENV]), name="live-marker", daemon=True).start()
     return app
@@ -241,7 +249,7 @@ def main(argv=None):
     if args.reload:
         run_reloading(argv, args)
     else:
-        uvicorn.run(build(args), host=args.bind, port=args.port, proxy_headers=False, timeout_graceful_shutdown=GRACEFUL_SHUTDOWN)
+        uvicorn.run(start_precacher(build(args), args), host=args.bind, port=args.port, proxy_headers=False, timeout_graceful_shutdown=GRACEFUL_SHUTDOWN)
 
 
 if __name__ == "__main__":
