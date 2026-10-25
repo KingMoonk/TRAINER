@@ -119,6 +119,39 @@ class ManagerTick(unittest.TestCase):
             self.assertEqual(register.totals(root)["collect_topic-science"]["records"], 1)
 
 
+class ManagerSession(unittest.TestCase):
+    def manager(self, root, alive, stopped):
+        workspace = studio_core.Workspace(root)
+        return Manager(workspace, ensure=lambda r: None, running=lambda r: alive[0], terminate=lambda pid: stopped.append(pid) or alive.__setitem__(0, False))
+
+    def test_starting_the_app_stops_an_old_collector_and_turns_collection_off(self):
+        with tempfile.TemporaryDirectory() as root:
+            config.save(root, {"enabled": True})
+            State(root).save(pid=4242)
+            alive, stopped = [True], []
+            manager = self.manager(root, alive, stopped)
+            manager.thread = None
+            with mock.patch.object(manager, "_loop"):
+                manager.start()
+                manager.thread.join(5)
+            self.assertEqual(stopped, [4242])
+            self.assertFalse(config.load(root)["enabled"])
+
+    def test_closing_the_app_stops_the_collector_it_started(self):
+        with tempfile.TemporaryDirectory() as root:
+            alive, stopped = [False], []
+            manager = self.manager(root, alive, stopped)
+            config.save(root, {"enabled": True})
+            State(root).save(pid=777)
+            alive[0] = True
+            manager.close()
+            self.assertEqual(stopped, [777])
+            self.assertFalse(config.load(root)["enabled"])
+            alive[0] = False
+            manager.close()  # nothing running: nothing to stop
+            self.assertEqual(stopped, [777])
+
+
 class RealServices(unittest.TestCase):
     def test_settings_state_pause_and_resume_over_a_workspace(self):
         with tempfile.TemporaryDirectory() as root:
