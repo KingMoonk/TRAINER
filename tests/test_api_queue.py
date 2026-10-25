@@ -114,6 +114,20 @@ class QueueRouterTests(ApiCase):
         self.assertEqual(self.call("GET", "/queue/jobs/{job_id}/outlook", path={"job_id": "r1"})["outlook"], "Running now")
         self.assertEqual(self.call("DELETE", "/queue/jobs/{job_id}", path={"job_id": "r1"}), self.call("GET", "/queue"))
 
+    def test_a_job_preparing_its_text_reports_the_phase_and_percent(self):
+        from studio_ia.services import Job, QueueState
+
+        self.services.set_queue(QueueState(job=Job("r1", "pretrain", "the big one", status="running"), phase="preparing", prepare=37))
+        state = self.call("GET", "/queue")
+        self.assertEqual((state["phase"], state["prepare"], state["step"], state["total"]), ("preparing", 37, 0, 0))
+
+    def test_the_fake_runs_through_preparing_before_its_first_step(self):
+        self.services.prepare_steps = 2
+        job = self.add("prep")
+        self.call("POST", "/queue/start")
+        state = self.call("GET", "/queue")
+        self.assertEqual((state["job"]["id"], state["phase"], state["prepare"]), (job["id"], "preparing", 0))
+
     def test_bad_requests_say_what_is_wrong(self):
         self.call("POST", "/queue/jobs", 422, json={"label": "no kind"})
         self.call("PUT", "/queue/plan", 422, json={"hours": "whenever"})

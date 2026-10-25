@@ -14,6 +14,7 @@ import {
   parseHour,
   pinChoice,
   placeText,
+  jobFraction,
   progressLine,
   resumesText,
   rowFor,
@@ -88,6 +89,19 @@ describe("progressLine", () => {
     expect(progressLine(state)).toBe("step 1,200 of 5,000 · schedule: warmup · learning rate: auto (0.0012) · about 10 min left");
   });
   it("omits the phase and the time left when unknown", () => expect(progressLine(queue({ step: 1, total: 2, lr: 0.5 }))).toBe("step 1 of 2 · learning rate: auto (0.5)"));
+});
+
+describe("preparing the text", () => {
+  it("shows the percent of text prepared instead of a step line", () => {
+    const state = queue({ phase: "preparing", prepare: 42 });
+    expect(progressLine(state)).toBe("Preparing text: 42%");
+    expect(jobFraction(state)).toBe(0.42);
+  });
+  it("goes back to the steps once the phase moves on", () => {
+    const state = queue({ step: 5, total: 10, phase: "steady", prepare: null });
+    expect(progressLine(state)).toContain("step 5 of 10");
+    expect(jobFraction(state)).toBe(0.5);
+  });
 });
 
 describe("toggleState", () => {

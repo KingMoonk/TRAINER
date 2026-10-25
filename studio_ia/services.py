@@ -65,7 +65,8 @@ class QueueState:
     job: Job | None = None  # the running job, None when idle
     step: int = 0
     total: int = 0
-    phase: str = ""  # warm-up | steady | cool-down
+    phase: str = ""  # warm-up | steady | cool-down | preparing
+    prepare: int | None = None  # percent of the text prepared, while phase == "preparing"
     lr: float | None = None
     eta_s: float | None = None
     paused: bool = False  # by the user; stays true with no job running ("Paused by you")
@@ -708,11 +709,13 @@ class FakeServices(Services):
     """Empty, in-memory placeholder data so pages render before real services exist. A test fixture and `studio_api --fake`
     only, never the real app. start_queue() runs the queued pretrain jobs one after another in a worker thread: `job_steps`
     steps of `step_seconds` each (`sleep` is injectable, so a test needs no real wait), then the job's version is trained or,
-    for a job with no version of its own, a new one is added. The events match studio_queue.Runner's."""
+    for a job with no version of its own, a new one is added. The events match studio_queue.Runner's. `prepare_steps` > 0 makes a job
+    first spend that many steps "preparing" its text (the phase and percent the real runner reports while the shards are built)."""
 
-    def __init__(self, job_steps=8, step_seconds=0.05, sleep=time.sleep, snapshot_every=0):
+    def __init__(self, job_steps=8, step_seconds=0.05, sleep=time.sleep, snapshot_every=0, prepare_steps=0):
         super().__init__()
         self.job_steps, self.step_seconds, self._sleep = job_steps, step_seconds, sleep
+        self.prepare_steps = prepare_steps
         self.snapshot_every = snapshot_every  # > 0: also emit the training loop's viz_snapshot event every that many steps (--fake does)
         self._worker: threading.Thread | None = None
         self._started = False  # start_queue() was called: from then on a resume carries on, as the real runner's thread does
@@ -937,6 +940,14 @@ class FakeServices(Services):
         total, q = self.job_steps, self._queue
         self.emit("job", {"job": job.id, "status": "running"})
         self.emit("queue", q)
+        if self.prepare_steps:
+            q.total, q.phase = 0, "preparing"  # like the real runner: no step yet, only how far the text is along
+            for n in range(self.prepare_steps + 1):
+                q.prepare = 100 * n // self.prepare_steps
+                self.emit("train", {"job": job.id, "type": "prepare", "percent": q.prepare, "done": n, "of": self.prepare_steps})
+                self.emit("queue", q)
+                self._sleep(self.step_seconds)
+            q.total, q.prepare = total, None
         for step in range(1, total + 1):
             self._sleep(self.step_seconds)
             phase = "warm-up" if step * 4 <= total else "cool-down" if step * 4 > total * 3 else "steady"
@@ -947,7 +958,7 @@ class FakeServices(Services):
             if self.snapshot_every and step % self.snapshot_every == 0:
                 self.emit("train", {"job": job.id, "type": "viz_snapshot", "step": step, "path": f"viz/step_{step:08d}.npz", "markers": []})
         job.status = "done"
-        q.job, q.step, q.total, q.phase, q.lr, q.eta_s = None, 0, 0, "", None, None
+        q.job, q.step, q.total, q.phase, q.prepare, q.lr, q.eta_s = None, 0, 0, "", None, None, None
         self.emit("job", {"job": job.id, "status": "done", "error": ""})
         number = job.params.get("version")
         known = next((v for v in self._versions if v.number == number), None)

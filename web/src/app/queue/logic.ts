@@ -30,7 +30,19 @@ export function stateLine(s: Queue): string {
   return `${s.job?.label || s.job?.kind || ""} · ${state}`;
 }
 
+/** True while the running job is still turning its text into tokens: no step has been taken yet. */
+export function isPreparing(s: Queue): boolean {
+  return s.phase === "preparing" && s.prepare != null;
+}
+
+/** How far the running job is, 0 to 1: the text prepared while it prepares, then its steps. */
+export function jobFraction(s: Queue): number {
+  if (isPreparing(s)) return Math.min(1, Math.max(0, (s.prepare ?? 0) / 100));
+  return s.total ? Math.min(1, s.step / s.total) : 0;
+}
+
 export function progressLine(s: Queue): string {
+  if (isPreparing(s)) return fill(T.preparingText, { percent: String(s.prepare) });
   const lr = s.lr == null ? "auto" : `auto (${Number(s.lr.toPrecision(2))})`;
   const parts = [
     s.total ? `step ${s.step.toLocaleString("en-US")} of ${s.total.toLocaleString("en-US")}` : "starting",

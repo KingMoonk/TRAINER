@@ -25,6 +25,11 @@ def config(**changes):
     return validate_config({"context": 48, **changes})
 
 
+def window_folders(root):
+    """The folders of finished windows under a shard root: the token cache (tokens-*) sits beside them and is not one."""
+    return [p for p in Path(root).iterdir() if p.is_dir() and not p.name.startswith("tokens-")]
+
+
 def same_pairs(test, left, right):
     test.assertEqual(len(left), len(right))
     for i in range(len(left)):
@@ -111,15 +116,16 @@ class Shards(unittest.TestCase):
             self.assertEqual((reused, cut.call_count), (True, 6))
             *_, reused = shard_windows(TRAINING, VALIDATION, self.tokenizer, config(context=64), "one", self.root)
             self.assertEqual((reused, cut.call_count), (False, 8))  # other cut
-        self.assertEqual(len([p for p in self.root.iterdir() if p.is_dir()]), 4)
+        self.assertEqual(len(window_folders(self.root)), 4)
         self.assertEqual([p for p in self.root.glob("*.part")], [])
+        self.assertEqual(len(list(self.root.glob("tokens-*"))), 2)  # one cache per tokenizer, whatever the data split or the cut
 
     def test_a_damaged_folder_is_rebuilt(self):
         cfg = config()
         first = shard_windows(TRAINING, VALIDATION, self.tokenizer, cfg, "x", self.root)[0]
         expected = [pair for pair in first]
         del first
-        for folder in self.root.iterdir():
+        for folder in window_folders(self.root):
             path = folder / "train.tokens.bin"
             path.write_bytes(path.read_bytes()[:-2])
         rebuilt, _, reused = shard_windows(TRAINING, VALIDATION, self.tokenizer, cfg, "x", self.root)
@@ -138,9 +144,80 @@ class Shards(unittest.TestCase):
     def test_storage_counts_and_cleans_the_shards(self):
         shard_windows(TRAINING, VALIDATION, self.tokenizer, config(), "x", self.root / "data" / "shards")
         paths = studio_cleanup.plan(self.root)
-        self.assertEqual([p.parent for p in paths], [self.root / "data" / "shards"])
+        self.assertEqual({p.parent for p in paths}, {self.root / "data" / "shards"})
+        self.assertEqual(len(paths), 2)  # the windows and the token cache beside them
         self.assertGreater(studio_cleanup.size(paths), 0)
         self.assertEqual(studio_cleanup.plan(self.root, days=30), [])  # used just now
+
+
+class TokenCache(unittest.TestCase):
+    """A run encodes only what no earlier run did: examples are cached under the tokenizer by their text, not by the split they fall in."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.tokenizer = Tokenizer("byte")
+        self.cfg = config()
+
+    def windows(self, training, validation, split="s", **kwargs):
+        """(train, val) windows through shard_windows, and how many examples it tokenized."""
+        with mock.patch.object(studio_model, "_encode_arrays", wraps=studio_model._encode_arrays) as encode:
+            train_windows, val_windows, _ = shard_windows(training, validation, self.tokenizer, self.cfg, split, self.root, **kwargs)
+        return train_windows, val_windows, encode.call_count
+
+    def test_a_second_run_tokenizes_only_the_set_that_changed(self):
+        first_set, second_set = TRAINING[:30], TRAINING[30:]
+        _, _, encoded = self.windows(first_set + second_set, VALIDATION, "one")
+        self.assertEqual(encoded, len(TRAINING) + len(VALIDATION))
+        changed = second_set[:-1] + [{"text": "A row the collector added after the first run."}]
+        _, _, encoded = self.windows(first_set + changed, VALIDATION, "two")  # another split_hash: the window shards are cut again
+        self.assertEqual(encoded, 1)  # but only the new row was tokenized
+        _, _, encoded = self.windows(list(reversed(first_set + changed)), VALIDATION, "three")  # the same text in another order
+        self.assertEqual(encoded, 0)
+
+    def test_windows_cut_from_the_cache_are_the_ones_samples_from_cuts(self):
+        for windowing in ("anchored", "sequential"):
+            for objective in ("assistant", "all"):
+                with self.subTest(windowing=windowing, objective=objective):
+                    cfg = config(windowing=windowing, objective=objective)
+                    root = self.root / f"{windowing}-{objective}"
+                    shard_windows(TRAINING[10:], VALIDATION, self.tokenizer, cfg, "warm", root)  # most of the text is cached already
+                    shuffled = random.Random(3).sample(TRAINING, len(TRAINING))
+                    train_windows, val_windows, _ = shard_windows(shuffled, VALIDATION, self.tokenizer, cfg, "cold", root)
+                    same_pairs(self, samples_from(shuffled, self.tokenizer, cfg), train_windows)
+                    same_pairs(self, samples_from(VALIDATION, self.tokenizer, cfg), val_windows)
+
+    def test_a_different_tokenizer_or_target_keeps_its_own_cache(self):
+        self.windows(TRAINING, VALIDATION)
+        characters = Tokenizer.fit("character", TRAINING)
+        with mock.patch.object(studio_model, "_encode_arrays", wraps=studio_model._encode_arrays) as encode:
+            shard_windows(TRAINING, VALIDATION, characters, self.cfg, "s", self.root)
+        self.assertEqual(encode.call_count, len(TRAINING) + len(VALIDATION))
+        with mock.patch.object(studio_model, "_encode_arrays", wraps=studio_model._encode_arrays) as encode:
+            shard_windows(TRAINING, VALIDATION, self.tokenizer, config(objective="all"), "s", self.root)
+        self.assertEqual(encode.call_count, len(TRAINING) + len(VALIDATION))  # the mask depends on the objective
+
+    def test_a_damaged_segment_is_encoded_again(self):
+        self.windows(TRAINING, VALIDATION)
+        for path in self.root.glob("tokens-*/seg-*/tokens.bin"):
+            path.write_bytes(path.read_bytes()[:-2])
+        train_windows, _, encoded = self.windows(TRAINING, VALIDATION, "another")
+        self.assertEqual(encoded, len(TRAINING) + len(VALIDATION))
+        same_pairs(self, samples_from(TRAINING, self.tokenizer, self.cfg), train_windows)
+        self.assertEqual(list(self.root.glob("tokens-*/*.part")), [])
+
+    def test_progress_rises_to_the_end_whether_text_is_cached_or_not(self):
+        for expect_cached in (False, True):
+            calls = []
+            self.windows(TRAINING, VALIDATION, f"p{expect_cached}", progress=lambda done, total: calls.append((done, total)))
+            self.assertEqual({total for _, total in calls}, {calls[0][1]})
+            self.assertEqual([done for done, _ in calls], sorted(done for done, _ in calls))
+            self.assertEqual((calls[0][0], calls[-1][0]), (0, calls[0][1]))
+
+    def test_the_cache_is_listed_in_storage_and_ages_by_its_last_run(self):
+        self.windows(TRAINING, VALIDATION)
+        self.assertTrue(next(self.root.glob("tokens-*")).joinpath("used").is_file())
 
 
 class TrainFromShards(unittest.TestCase):
@@ -165,8 +242,20 @@ class TrainFromShards(unittest.TestCase):
         second_events, second = self.run_training("second", shard_dir=shards, stream_chars=0)
         self.assertEqual(second, memory)
         self.assertTrue(any("on disk, reused" in e["text"] for e in second_events if e["type"] == "info"))
-        self.assertEqual(len([p for p in shards.iterdir()]), 1)
+        self.assertEqual(len(window_folders(shards)), 1)
         self.assertTrue((self.root / "second" / "last.npz").is_file())
+
+    def test_preparing_the_text_is_reported_up_to_100_percent_before_the_first_step(self):
+        for name in ("cold", "warm"):  # the second run finds every window shard: still ends at 100
+            events, _ = self.run_training(name, shard_dir=self.root / "shards", stream_chars=0)
+            kinds = [e["type"] for e in events]
+            prepared = [e["percent"] for e in events if e["type"] == "prepare"]
+            self.assertEqual(prepared[-1], 100)
+            self.assertEqual(prepared, sorted(set(prepared)))
+            self.assertLess(kinds.index("prepare"), kinds.index("metric"))
+            self.assertLess(max(i for i, k in enumerate(kinds) if k == "prepare"), kinds.index("metric"))
+        small, _ = self.run_training("small")
+        self.assertNotIn("prepare", [e["type"] for e in small])  # under the threshold nothing is sharded
 
     def test_resuming_a_run_reads_the_same_batches_from_shards_as_from_memory(self):
         shards = self.root / "shards"

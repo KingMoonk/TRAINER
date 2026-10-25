@@ -13,10 +13,11 @@ const job = (id: string, label: string, over: Partial<Job> = {}): Job => ({ id, 
 
 const PLAN = { hours: "any", start_hour: 22, end_hour: 7, memory: "most", idle_only: true, idle_after_s: 60, pause_on_battery: true, keep_awake: false, chat_follows_best: true };
 
-function server(start: { running?: boolean; reason?: string | null; supported?: boolean } = {}, extra: Parameters<typeof mockApi>[0] = {}) {
+function server(start: { running?: boolean; reason?: string | null; supported?: boolean; preparing?: number } = {}, extra: Parameters<typeof mockApi>[0] = {}) {
   const state = {
     job: start.running === false ? null : (job("run1", "Version 3 pretraining", { status: "running", eta_s: null }) as Job | null),
-    step: 100,
+    step: start.preparing == null ? 100 : 0,
+    prepare: start.preparing ?? (null as number | null),
     paused: false,
     stopping: false,
     plan: { ...PLAN } as Record<string, unknown>,
@@ -28,8 +29,9 @@ function server(start: { running?: boolean; reason?: string | null; supported?: 
   const view = () => ({
     job: state.job,
     step: state.step,
-    total: state.job ? 1000 : 0,
-    phase: state.job ? "steady" : "",
+    prepare: state.prepare,
+    total: state.job && state.prepare == null ? 1000 : 0,
+    phase: !state.job ? "" : state.prepare == null ? "steady" : "preparing",
     lr: state.job ? 0.0003 : null,
     eta_s: state.job ? 600 : null,
     paused: state.paused,
@@ -106,6 +108,19 @@ const rows = () => within(screen.getByTestId("up-next")).getAllByRole("listitem"
 const idleSwitch = () => screen.getByRole("switch", { name: /Only when I.m not using the computer/ });
 
 describe("Queue page", () => {
+  test("shows how far the text is prepared until the first step", async () => {
+    const { state } = server({ preparing: 42 });
+    renderPage(<QueuePage />);
+    await waitFor(() => expect(screen.getByTestId("progress-line")).toHaveTextContent("Preparing text: 42%"));
+    expect(screen.getByTestId("progress-line")).not.toHaveTextContent("learning rate");
+    expect(screen.getByRole("progressbar", { name: "Job progress" })).toHaveAttribute("aria-valuenow", "42");
+    state.prepare = null;
+    state.step = 7;
+    emit("queue", {});
+    await waitFor(() => expect(screen.getByTestId("progress-line")).toHaveTextContent("step 7 of 1,000"));
+    expect(screen.getByTestId("progress-line")).not.toHaveTextContent("Preparing text");
+  });
+
   test("shows the running job, the jobs up next in order and the plan", async () => {
     server();
     renderPage(<QueuePage />);

@@ -14,7 +14,7 @@ Data-pipeline config keys (stable API, also used by the curriculum trainer):
                    Checkpoints written before this key existed resume with "sequential".
   objective  "assistant" | "all"      - which tokens are targets; every target token is trained exactly once.
 Use samples_from(examples, tokenizer, cfg) -> WindowStore and batch_arrays(pairs) to feed train(). From STREAM_CHARS characters of
-training text on, train() reads the same windows from token shards on disk instead (shard_windows, studio_shards).
+training text on, train() reads the same windows from token shards on disk instead (shard_windows, studio_shards), cut from encoded examples cached per tokenizer by their text, so a run tokenizes only text no earlier run did.
 """
 from __future__ import annotations
 
@@ -339,13 +339,15 @@ def _anchored_windows(builder, tokens, mask, positions, roles, units, context):
             c = d
 
 
-def cut_windows(examples, tokenizer, cfg, builder):
-    """Cut examples into training windows and hand each to builder.add(segment, flags): the cut samples_from() and the shards share."""
+def cut_windows(examples, tokenizer, cfg, builder, encode=None):
+    """Cut examples into training windows and hand each to builder.add(segment, flags): the cut samples_from() and the shards share.
+    `encode(example)` returns what _encode_arrays does; left out, the example is tokenized here (the shards pass their cached pieces)."""
     context = cfg["context"]
     anchored = cfg.get("windowing", "sequential") == "anchored"
     assistant_only = cfg["objective"] == "assistant"
+    encode = encode or (lambda example: _encode_arrays(example, tokenizer, assistant_only))
     for example in examples:
-        tokens, mask, positions, roles, spans = _encode_arrays(example, tokenizer, assistant_only)
+        tokens, mask, positions, roles, spans = encode(example)
         if not anchored or not spans:
             _sequential_windows(builder, tokens, mask, context)
             continue
@@ -390,21 +392,66 @@ def characters_in(examples):
     return sum(len(e["text"]) if e.get("text") else sum(len(m["content"]) for m in messages_of(e)) for e in examples)
 
 
+def _tokenizer_hash(tokenizer):
+    return hashlib.sha256(json.dumps(tokenizer.serialize(), sort_keys=True).encode()).hexdigest()
+
+
 def shard_key(tokenizer, cfg, split_hash):
     """The folder name under a shard root for this data split (split_hash), tokenizer and cut."""
-    return studio_shards.key_for(split_hash, hashlib.sha256(json.dumps(tokenizer.serialize(), sort_keys=True).encode()).hexdigest(),
-                                 cfg["windowing"], cfg["context"], cfg["objective"])
+    return studio_shards.key_for(split_hash, _tokenizer_hash(tokenizer), cfg["windowing"], cfg["context"], cfg["objective"])
 
 
-def shard_windows(training, validation, tokenizer, cfg, split_hash, root):
+ENCODE_WEIGHT = 20  # progress counts an encoded character this many times a character cut from the cache: a slow tokenizer takes about 20x as long to encode as the cut takes (estimate)
+
+
+def shard_windows(training, validation, tokenizer, cfg, split_hash, root, progress=None, fingerprint_of=None):
     """(train windows, validation windows, reused) read from token shards under root, tokenizing into them first when this data,
-    tokenizer and windowing have none yet. The key is the data split (split_hash) with the tokenizer and the cut."""
+    tokenizer and windowing have none yet. The key is the data split (split_hash) with the tokenizer and the cut.
+
+    The shards of a split nobody has seen are cut from the TokenCache beside them (tokens-<key> under root): examples are cached
+    by fingerprint under the tokenizer, so only the examples no earlier run encoded are tokenized, however the split or the data
+    around them changed. The windows are the ones samples_from() cuts. progress(done, total) is told as the work goes (it is
+    weighted by characters, encoding counting ENCODE_WEIGHT times); fingerprint_of(example) is the caller's fingerprint when it has one."""
+    say = progress or (lambda done, total: None)
     key = shard_key(tokenizer, cfg, split_hash)
     found = studio_shards.load(root, key, tokenizer.vocab_size)
     reused = found is not None
-    if not reused:
-        found = studio_shards.build(root, key, tokenizer.vocab_size, lambda writers: [
-            cut_windows(examples, tokenizer, cfg, writers[name]) for name, examples in (("train", training), ("val", validation))])
+    if reused:
+        say(1, 1)
+    else:
+        def fill(writers):
+            fp = fingerprint_of or fingerprint
+            assistant_only = cfg["objective"] == "assistant"
+            cache = studio_shards.TokenCache(root, _tokenizer_hash(tokenizer), tokenizer.vocab_size, assistant_only)
+            try:
+                items = {name: [(fp(e), e, characters_in([e])) for e in examples] for name, examples in (("train", training), ("val", validation))}
+                missing = {}
+                for name in items:
+                    for fingerprint_, example, weight in items[name]:
+                        if fingerprint_ not in cache:
+                            missing.setdefault(fingerprint_, (fingerprint_, example, weight * ENCODE_WEIGHT))
+                total = sum(w for _, _, w in missing.values()) + sum(w for rows in items.values() for _, _, w in rows)
+                done = [0]
+
+                def advance(weight):
+                    done[0] += weight
+                    say(done[0], total)
+                say(0, total)
+                cache.add(missing.values(), lambda e: _encode_arrays(e, tokenizer, assistant_only), advance)
+                missing.clear()
+                cache.touch()
+                info = {id(e): (f, w) for rows in items.values() for f, e, w in rows}  # an example's fingerprint and characters
+
+                def cached(example):
+                    f, w = info[id(example)]
+                    arrays = cache.get(f)
+                    advance(w)
+                    return arrays
+                for name in items:
+                    cut_windows([e for _, e, _ in items[name]], tokenizer, cfg, writers[name], cached)
+            finally:
+                cache.close()
+        found = studio_shards.build(root, key, tokenizer.vocab_size, fill)
     return MappedWindows(*found["train"]), MappedWindows(*found["val"]), reused
 
 
@@ -734,7 +781,6 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         training, validation, split = partition_examples(examples, cfg["validation"], sampler, grouped)
         split_hash = hashlib.sha256(("".join(fingerprints[id(e)] for e in training) + "|" +
                                      "".join(fingerprints[id(e)] for e in validation)).encode()).hexdigest()
-        del fingerprints
         if checkpoint:
             if not rebase and checkpoint["data_hash"] != digest:
                 raise ValueError("Resume requires the original dataset snapshot.")
@@ -769,10 +815,21 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         if characters_in(training) + characters_in(validation) >= stream_chars:
             # Big data: tokenize once into shards on disk and read windows from there, so the windows take no memory and the next run
             # on the same data and tokenizer starts at once. Under the threshold the windows are built in memory as always.
-            train_samples, val_samples, reused = shard_windows(training, validation, tokenizer, cfg, split_hash, shard_dir or ROOT / "data" / "shards")
+            reported = [-1]
+
+            def preparing(done, total):  # tells the queue how far the text is along (a percent), once for each percent
+                if stop.is_set():
+                    raise InterruptedError("Training preparation cancelled.")
+                percent = 100 if done >= total else int(100 * done / total)
+                if percent != reported[0]:
+                    reported[0] = percent
+                    emit({"type": "prepare", "percent": percent, "done": int(done), "of": int(total)})
+            train_samples, val_samples, reused = shard_windows(training, validation, tokenizer, cfg, split_hash, shard_dir or ROOT / "data" / "shards",
+                                                               preparing, lambda e: fingerprints[id(e)])
             streamed = True
         else:
             train_samples, val_samples = samples_from(training, tokenizer, cfg), samples_from(validation, tokenizer, cfg)
+        del fingerprints
     if not train_samples:
         raise ValueError("No trainable target tokens were found.")
     model = ScratchTransformer(cfg, tokenizer.vocab_size, probe=True)  # "auto" times real steps on each device
