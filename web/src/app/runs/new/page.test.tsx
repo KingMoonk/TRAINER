@@ -52,7 +52,6 @@ function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODE
         can_continue: sources.length > 0, sources, continue_from: from, continue_blocked: sources.length ? null : blocked } };
     },
     "POST /pretraining/start": { status: 202, body: { id: "job-5", label: "Version 2, once the size of its text is known" } },
-    "POST /queue/jobs": { body: { id: "job-7", kind: "pretrain", label: "x", status: "waiting" } },
     "POST /distributed/runs": failRun ? { status: 400, body: { detail: "Rounds must be at most 1000." } } : { body: { id: "run-3" } },
     "POST /post-training/rounds": { body: { id: "job-8", label: "SFT", params: {}, round: 1 } },
     "POST /quicktest/run": { body: { job_id: "job-9", outlook: "x", started_at: 1 } },
@@ -67,8 +66,8 @@ const cta = () => screen.findByRole("button", { name: /^(Add to queue|Start)$/ }
 beforeEach(() => resetNav("/runs/new/"));
 
 describe("New run", () => {
-  test("one machine: no outer loop, the plan's job is queued, and the page goes to the run", async () => {
-    const { sent } = server();
+  test("one machine: no outer loop, the run is queued through /pretraining/start, and the page goes to the run", async () => {
+    const { sent, calls } = server();
     const user = userEvent.setup();
     renderPage(<NewRunPage />, { route: "/runs/new/" });
     expect(await screen.findByRole("heading", { level: 1, name: "New run" })).toBeVisible();
@@ -81,9 +80,10 @@ describe("New run", () => {
     await user.keyboard("{Escape}");
     await waitFor(async () => expect(await cta()).toBeEnabled());
     await user.click(await cta());
-    await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=job-7"));
+    await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=job-5"));
     expect(sent("POST", "/pretraining/plan")?.body).toMatchObject({ dataset_ids: ["stories"], mode: "from_scratch", version: null });
-    expect(sent("POST", "/queue/jobs")?.body).toEqual({ ...job, note: "" });
+    expect(sent("POST", "/pretraining/start")?.body).toMatchObject({ dataset_ids: ["stories"], mode: "from_scratch", version: null });
+    expect(calls.some((c) => c.method === "POST" && c.path === "/queue/jobs")).toBe(false);
   });
 
   test("Continue lists the earlier runs with what they did, and the one picked is the one the plan starts from", async () => {
@@ -157,7 +157,7 @@ describe("New run", () => {
     expect(calls.some((c) => c.method === "POST" && c.path === "/queue/jobs")).toBe(false);
   });
 
-  test("a peer alone is pinned with params.pinned", async () => {
+  test("a peer alone gets the run pinned to it", async () => {
     const { sent } = server({ nodes: MORE });
     const user = userEvent.setup();
     renderPage(<NewRunPage />, { route: "/runs/new/" });
@@ -166,8 +166,8 @@ describe("New run", () => {
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Remote"));
     await waitFor(async () => expect(await cta()).toBeEnabled());
     await user.click(await cta());
-    await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=job-7"));
-    expect(sent("POST", "/queue/jobs")?.body).toMatchObject({ params: { pinned: "beast" } });
+    await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=job-5"));
+    expect(sent("POST", "/queue/jobs/job-5/pin")?.body).toEqual({ pinned: "beast" });
   });
 
   test("several machines show the outer loop and start a DiLoCo run", async () => {

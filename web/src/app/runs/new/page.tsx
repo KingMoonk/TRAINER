@@ -27,7 +27,7 @@ import { planBody } from "../../pretraining/logic";
 import { QUICKTEST } from "../../quick-test/copy";
 import { Coordinator, FIELD, Hint, OuterLoop, Workers, selectedText } from "./fields";
 import { fill, NEW_RUN as T } from "./copy";
-import { busyPeers, ctaLabel, defaultSftVersion, localForced, nameList, peersOf, pinnedJob, runHref, shapeOf, sourceFacts, workersOf, type Node, type Source, type Stage } from "./logic";
+import { busyPeers, ctaLabel, defaultSftVersion, localForced, nameList, peersOf, runHref, shapeOf, sourceFacts, workersOf, type Node, type Source, type Stage } from "./logic";
 
 
 const SLOW_MS = 6_000;
@@ -127,8 +127,8 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
     enabled: single && ids.length > 0,
     placeholderData: keepPreviousData,
   });
-  // The only thing missing is the size of the text: the run may be queued now (POST /pretraining/start) and waits until it is known.
-  const sizeFirst = single && !!plan.data && !plan.data.can_add && plan.data.estimating && plan.data.version !== null;
+  // Start never waits for the size of the text: POST /pretraining/start queues the run now, and the queue works the size out first.
+  const sizeFirst = single && !!plan.data?.estimating;
   const outlook = useQuery({ queryKey: ["queue", "outlook"], queryFn: ({ signal }) => unwrap(api.GET("/queue/outlook", { signal })), retry: false });
   useEvent("queue", () => void client.invalidateQueries({ queryKey: ["queue", "outlook"] }));
 
@@ -139,13 +139,9 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
         if (!body) throw new Error(T.needSettings);
         return (await unwrap(api.POST("/distributed/runs", { body }))).id;
       }
-      if (stage === "pretrain" && !sizeFirst) {
-        if (!plan.data?.job) throw new Error(plan.data?.reason || T.needText);
-        return (await unwrap(api.POST("/queue/jobs", { body: pinnedJob(plan.data.job, pin) }))).id;
-      }
       const id =
         stage === "pretrain"
-          ? (await unwrap(api.POST("/pretraining/start", { body: { ...body, version: plan.data!.version } }))).id
+          ? (await unwrap(api.POST("/pretraining/start", { body: { ...body, version: plan.data?.version ?? version } }))).id
           : stage === "sft"
           ? (
               await unwrap(
@@ -190,7 +186,7 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
     if (stage === "pretrain" && ids.length === 0) return T.needText;
     if (several && !defaults.data) return defaults.isError ? T.settingsDown : T.loadingSettings;
     if (several) return startBody({ ...form, machines: peers }) ? "" : T.needSettings;
-    if (stage === "pretrain") return sizeFirst ? "" : plan.data && !plan.data.can_add ? plan.data.reason : plan.data?.job ? "" : T.loading;
+    if (stage === "pretrain") return plan.data && !plan.data.can_add && !plan.data.estimating ? plan.data.reason : ""; // the server checks the rest on Start
     return sftVersion === null ? T.noVersions : "";
   })();
 
