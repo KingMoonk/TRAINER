@@ -82,7 +82,7 @@ class PreviewJob(JobRecordModel):
 
 
 class Started(BaseModel):
-    """The queue job POST /pretraining/start added."""
+    """The queue job POST /pretraining/start added: its label is a provisional one while the size of its text is worked out."""
 
     id: str
     label: str
@@ -398,28 +398,44 @@ def pretrain_preview(body: PreviewRequest, request: Request, services: Services)
 
 
 @router.post("/start", status_code=202)
-def pretrain_start(body: PlanRequest, request: Request, services: Services) -> StartJob:
-    """Add the run the plan builds for these answers to the queue, as a job: when the size of the chosen text is not known yet it
-    is worked out first (Services.pretrain_preview), so the run can be asked for at once. The job fails with the plan's reason
-    when the run still cannot be added."""
+def pretrain_start(body: PlanRequest, request: Request, services: Services) -> Started:
+    """Add the run the plan builds for these answers to the queue now, even while the size of the chosen text is still being worked
+    out: the run then waits in the queue, marked `params.sizing` and never started, while a job works the size out
+    (Services.pretrain_preview) and gives the run its steps, config and label, or fails it with the plan's reason. 409 with the reason
+    when the run cannot be added for anything but its size."""
     import time
     import uuid
 
     from studio_ia.services import Job
 
-    def work(stop):
-        ids = list(dict.fromkeys(body.dataset_ids))
-        if ids and services.cached_preview(ids, body.preview_rows) is None:
-            services.pretrain_preview(ids, body.preview_rows)
-        if stop.is_set():
-            raise RuntimeError("Stopped before the run was added.")
-        made = pretrain_plan(body, services)
-        if not made.can_add:
-            raise ValueError(made.reason)
+    made = pretrain_plan(body, services)
+    if made.can_add:
         job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), note="", **made.job.model_dump())
         added = services.enqueue(job) or job
-        return {"id": added.id, "label": added.label}
-    return submit(request, "pretrain_start", work, StartJob)
+        return Started(id=added.id, label=added.label)
+    if not made.estimating or made.version is None:
+        raise HTTPException(409, made.reason)
+    job = Job(id=uuid.uuid4().hex[:8], kind="pretrain", label=f"Version {made.version}, once the size of its text is known",
+              created_at=time.time(), params={"sizing": True})
+    added = services.enqueue(job) or job
+
+    def work(stop):
+        try:
+            ids = list(dict.fromkeys(body.dataset_ids))
+            if services.cached_preview(ids, body.preview_rows) is None:
+                services.pretrain_preview(ids, body.preview_rows)
+            if stop.is_set():
+                raise RuntimeError("Working out the size of the text was stopped. Add the run again.")
+            ready = pretrain_plan(body, services)
+            if not ready.can_add:
+                raise ValueError(ready.reason)
+        except Exception as exc:
+            services.fail_job(added.id, str(exc) or type(exc).__name__)
+            raise
+        services.fill_job(added.id, ready.job.label, ready.job.params)
+        return {"id": added.id, "label": ready.job.label}
+    submit(request, "pretrain_start", work, StartJob)
+    return Started(id=added.id, label=added.label)
 
 
 @router.post("/step_rate", status_code=202)

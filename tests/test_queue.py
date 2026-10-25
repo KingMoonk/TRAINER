@@ -180,6 +180,40 @@ class QueueTests(unittest.TestCase):
         self.assertEqual([j.label for j in r.state().up_next], ["a", "b"])
         self.assertEqual([j.label for j in Runner(self.path, self.handlers).jobs], ["a", "b"])
 
+    def test_a_job_waiting_for_its_size_is_skipped_until_filled(self):
+        r = self.runner()
+        sized = r.enqueue(self.job("sizing", sizing=True, pinned="peer"))
+        r.enqueue(self.job("b"))
+        r.start()
+        self.assertTrue(wait(lambda: self.fake.ran == ["b"]))
+        self.assertEqual([j.label for j in r.state().up_next], ["sizing"])  # kept, in place, not run
+        self.assertTrue(r.fill(sized.id, "filled", {"sizing": True, "steps": 5}))
+        self.assertEqual(sized.params, {"steps": 5, "pinned": "peer"})  # a pin set meanwhile stays
+        self.assertFalse(r.fill(sized.id, "again", {}))  # filled once
+
+    def test_a_job_filled_after_sizing_runs(self):
+        r = self.runner()
+        sized = r.enqueue(self.job("sizing", sizing=True))
+        r.start()
+        r.fill(sized.id, "filled", {"steps": 5})
+        self.assertTrue(wait(lambda: self.fake.ran == ["filled"]))
+
+    def test_a_job_whose_size_fails_ends_failed_and_one_left_by_a_restart_too(self):
+        r = self.runner()
+        seen = []
+        r.subscribe(lambda kind, payload: seen.append(payload) if kind == "job" else None)
+        a = r.enqueue(self.job("a", sizing=True))
+        r.enqueue(self.job("b", sizing=True))
+        r.fail(a.id, "The text could not be read.")
+        self.assertEqual((a.status, a.error), ("failed", "The text could not be read."))
+        self.assertEqual(seen, [{"job": a.id, "status": "failed", "error": "The text could not be read."}])
+        self.assertEqual([j.id for j in r.state().failed], [a.id])
+        r.shutdown()
+        again = Runner(self.path, self.handlers)  # the app stopped while b's size was worked out
+        self.assertEqual([(j.label, j.status) for j in again.jobs], [("a", "failed"), ("b", "failed")])
+        self.assertIn("Add the run again", again.jobs[1].error)
+        self.assertEqual(again.state().up_next, [])
+
     def test_move_to_any_place_and_hold_skips_until_released(self):
         r = self.runner()
         a, b, c = (r.enqueue(self.job(n)) for n in "abc")
