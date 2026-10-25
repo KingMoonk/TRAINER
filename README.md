@@ -1,6 +1,6 @@
 # Groundwork AI Studio
 
-A native Python desktop studio for creating datasets and training your own language model from random weights.
+A Python studio for creating datasets and training your own language model from random weights.
 
 **PyTorch runs the maths on the CPU, an NVIDIA GPU or an Apple GPU; NumPy and pandas handle data.** A web UI in your browser, served by a local API, supplies the interface. The transformer modules, optimizers, tokenizers, checkpoint format and text sampler are implemented in this repository; PyTorch autograd supplies the gradients. Everything runs locally.
 
@@ -90,7 +90,7 @@ CI runs `test:ci` on Linux for each push and pull request, and `test:ci:e2e` on 
 
 ## Web UI development
 
-`web/` is the browser front end that will replace the Tk app, phase by phase (`docs/rewrite.md`). It needs Node and pnpm:
+`web/` is the browser front end. It needs Node and pnpm:
 
 ```bash
 cd web && pnpm install && pnpm dev          # http://localhost:3000
@@ -153,9 +153,9 @@ Weights, activations and optimizer state stay on the GPU during GPU training. In
 
 ## Workflow
 
-The window has four areas in the sidebar, then Queue and Resources, and a machine strip under them.
+The web UI has areas in the sidebar, then Queue and Resources, and a machine strip under them.
 
-1. **Network designer:** change the model picture and see what it costs. **Quick test** tries a design idea for a few minutes on a tiny dataset before you save it. **Compare runs** changes one thing, holds the rest equal and runs several seeds; a difference counts only when it is larger than the spread across seeds. **Look inside** opens Trace a position, Inside a head, Value map, Loss, Head lab and the 3D view.
+1. **Network designer:** change the model picture and see what it costs. **Quick test** tries a design idea for a few minutes on a tiny dataset before you save it. **Compare runs** changes one thing, holds the rest equal and runs several seeds; a difference counts only when it is larger than the spread across seeds. **Look inside** opens Trace a position, Inside a head, Value map, Loss and Head lab.
 2. **Pretraining:** feed the model text; it learns by predicting the next character or token. **Your data** holds three kinds (text, conversations and checkable problems), because each trains a different stage. **Make extra data** generates more and keeps what passes review. A run's page shows step, schedule phase and error so far.
 3. **Post-training:** four rounds, always in the same order, on the same design; only the weights change.
 4. **Chat:** talk to any trained version, or compare two side by side. Chat moves to a newer version only when its held-back score beats the current one by more than the measured noise band.
@@ -184,7 +184,7 @@ The modular network engine represents a design as a validated, JSON-serializable
 
 The Look inside pages read saved checkpoints and report measured values: token attention and intermediate predictions, a head's scores and probabilities, value/output projection summaries, selected-token loss and gradient, and head ablation statistics. These views describe the selected checkpoint; they do not explain a head's behavior beyond the measured quantities shown.
 
-`Experiments` runs paired seeds and can hold tokens, estimated parameters, estimated compute or wall-clock time equal. It records width adjustments, achieved budgets and run metrics. Network training saves a snapshot every 50 steps; only the newest 20 snapshots per run are kept by default (`snapshot_keep`). Each snapshot includes full model weights and gradients, plus full updates when available. The 3D viewer is a separate window with five levels: Run, Model, Window, Head and Weights. Its menus choose level and Build/Train/Ride a token mode. Mouse drag orbits the camera, the wheel zooms between levels, and WASD/Q/E pans. Model shows binned attention and stream norms; Window and Head display at most 32 tokens. Replay controls play, pause and scrub saved snapshots; **1 real step** runs one optimizer step on a private copy from a checkpoint. At Weights, select weight/gradient/update and a matrix; keyboard `+`/`-` changes a weight by a small amount and saves a new checkpoint version.
+`Experiments` runs paired seeds and can hold tokens, estimated parameters, estimated compute or wall-clock time equal. It records width adjustments, achieved budgets and run metrics. Network training saves a snapshot every 50 steps; only the newest 20 snapshots per run are kept by default (`snapshot_keep`). Each snapshot includes full model weights and gradients, plus full updates when available.
 
 The `init/mup` option implements μP (Yang et al. 2022) relative to an explicit base width, with m = d_model / base_width: hidden matrices are initialized at std/√m and the untied readout at std/m; learning-rate multipliers follow `optimizer_family` (Adam-like: hidden and readout 1/m; SGD-like: input-like parameters m, readout 1/m); attention scores get an extra 1/√m and tied-readout logits 1/m. Set `optimizer_family` to match the optimizer you train with. At m = 1 it changes nothing.
 
@@ -216,7 +216,7 @@ Every experiment writes a separate `runs/run_<id>/` directory:
 - `dataset.jsonl`: original input snapshot, including held-out examples.
 - `config.json`, `tokenizer.json`, `metrics.jsonl`, `run.json`: configuration, progress and run metadata.
 
-NumPy archives contain numeric arrays and JSON metadata, and load with `allow_pickle=False`. The format is shared by CPU and GPU, including old CPU-only checkpoints. Resume requires the original snapshot, architecture, tokenizer, objective, split and batching settings; the compute device may change. The GUI creates a new run directory and restores optimizer and random state. Extending the step target also extends the cosine schedule; it is not a bit-for-bit replay of an originally longer run. A resumed run may not create a new `best.npz` if it never improves the inherited best score; the original best checkpoint remains in its original run folder.
+NumPy archives contain numeric arrays and JSON metadata, and load with `allow_pickle=False`. The format is shared by CPU and GPU, including old CPU-only checkpoints. Resume requires the original snapshot, architecture, tokenizer, objective, split and batching settings; the compute device may change. The app creates a new run directory and restores optimizer and random state. Extending the step target also extends the cosine schedule; it is not a bit-for-bit replay of an originally longer run. A resumed run may not create a new `best.npz` if it never improves the inherited best score; the original best checkpoint remains in its original run folder.
 
 Workspace datasets and drafts live in `data/workspace.json`. Existing exports are preserved. Dataset edits do not alter a run's snapshot. Exported run ZIPs include both weights and that training snapshot.
 
@@ -268,7 +268,7 @@ Entry points and engine services sit in the repository root; swappable model/tra
 | Data | `studio_core.py`, `studio_catalog.py`, `studio_planning.py` | Workspace persistence, parsing and normalization, verified dataset downloads, bounded dataset mixtures. |
 | Learning engine | `studio_model.py`, `studio_backend.py` | Tokenizers, transformer, handwritten gradients, AdamW, training loop, checkpoints, inference, CPU/CUDA backend selection. |
 | Modular network engine | `studio_registry.py`, `studio_spec.py`, `studio_validate.py`, `studio_estimate.py`, `studio_compile.py`, `studio_modules/` | Registry-discovered modules, canonical ModelSpec, compatibility checks, module estimates and the compiler. |
-| Network editing | `studio_arch.py`, `studio_archdb.py` | Desktop architecture editor, per-block designs, and a versioned SQLite store of revisions and weight files. |
+| Network editing | `studio_arch.py`, `studio_archdb.py` | Architecture editor services, per-block designs, and a versioned SQLite store of revisions and weight files. |
 | Curriculum and post-training | `studio_curriculum.py`, `studio_rlhf.py` | Stage-by-stage training across datasets; DPO/IPO preference training and the Ollama teacher client. |
 | Inspection and experiments | `studio_inspect.py`, `studio_summary.py`, `studio_experiments.py`, `studio_snapshot.py`, `studio_scene.py` | Probe, summary, experiment, snapshot/replay and renderer-independent scene services. |
 
@@ -283,7 +283,7 @@ train.py ─┐
           └──► studio_core, studio_backend
 ```
 
-`studio_model.py` owns training and checkpoint compatibility. The modular compiler and its services sit alongside it; they do not import Tkinter.
+`studio_model.py` owns training and checkpoint compatibility. The modular compiler and its services sit alongside it.
 
 ### Runtime data
 
@@ -296,7 +296,7 @@ Created at run time and git-ignored:
 
 ### Tests
 
-`tests/` contains focused `unittest` modules for the engine, modules, data, architecture, inspection services, viewer bridge and GUI integration. GPU and display-dependent tests may skip when that hardware or display is unavailable.
+`tests/` contains focused `unittest` modules for the engine, modules, data, architecture, inspection services and the web API. GPU-dependent tests skip when that hardware is unavailable.
 
 ```powershell
 make test
