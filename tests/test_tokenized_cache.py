@@ -61,7 +61,9 @@ class TokenizedCache(unittest.TestCase):
         self.assertEqual((fits, cuts > 0), (1, True))
 
     def test_a_corrupt_or_partial_cache_is_rebuilt(self):
-        self.calls("a", config=BYTE)
+        first, *_ = self.calls("a", config=BYTE)
+        first.train.close()  # a Windows file cannot be replaced while the first run still maps it
+        first.val.close()
         folder = next(self.cache.glob("tok-*"))
         (folder / "tokenizer.json").write_text("{not json", encoding="utf-8")
         for index in folder.glob("*/index.json"):
