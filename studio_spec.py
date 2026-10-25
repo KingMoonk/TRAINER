@@ -32,7 +32,7 @@ DEFAULTS = {"tokenizer": "byte", "embedding": "learned", "position": "learned", 
 # DEFAULTS is the classic recipe and is frozen: validate_spec reads a slot a stored spec leaves out as this, so editing it
 # would change the network of every older spec. A new design starts from default_spec() (the modern preset) instead.
 # Run settings an architecture may carry along (older designs stored them); the Training setup page supplies the rest.
-RUN_INTS = {"steps": (1, 1000000), "batch_size": (1, 128), "accumulation": (1, 64), "eval_every": (1, 100000), "seed": (0, 2147483647),
+RUN_INTS = {"steps": (1, 20_000_000), "batch_size": (1, 128), "accumulation": (1, 64), "eval_every": (1, 100000), "seed": (0, 2147483647),
             "token_limit_millions": (0, 1000000)}
 RUN_CHOICES = {"objective": ("all", "assistant"), "device": ("auto", "cpu", "cuda", "mps")}
 

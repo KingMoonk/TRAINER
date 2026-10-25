@@ -71,7 +71,7 @@ DEFAULT_CONFIG = {
 # anchored windows with the assistant objective train answers only with their prompt in view.
 ARCHITECTURE_KEYS = ("tokenizer", "width", "layers", "heads", "context", "expansion", "dropout", "architecture")
 WINDOWINGS = ("anchored", "sequential")
-MAX_STEPS = 1_000_000  # the most optimizer steps one run trains; a distributed run counts rounds × inner steps
+MAX_STEPS = 20_000_000  # the most optimizer steps one run trains (a big text for a few passes needs a couple of million); a distributed run counts rounds × inner steps
 EVAL_WINDOWS = 400  # legacy checkpoints and the distributed coordinator retain their original evaluation budget
 PREFILL_CHUNK = 256  # a reply's first KV-cached prefill runs this many tokens per forward pass, and checks `stop` between passes
 STREAM_CHARS = 16_000_000  # training text from this many characters on is tokenized into on-disk shards (about 48 MB of windows)
