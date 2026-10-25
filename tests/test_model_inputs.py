@@ -16,7 +16,7 @@ EXAMPLES = [{"user": f"say {w}", "assistant": w} for w in ("yes", "no", "cat", "
 class ValidateConfig(unittest.TestCase):
     def test_each_numeric_bound_is_enforced_on_both_sides(self):
         integers = {"width", "layers", "context", "batch_size", "steps"}
-        for key, low, high in (("width", 16, 512), ("layers", 1, 12), ("context", 32, 2048), ("batch_size", 1, 128), ("steps", 1, 1000000),
+        for key, low, high in (("width", 16, 512), ("layers", 1, 12), ("context", 32, 2048), ("batch_size", 1, 128), ("steps", 1, 20_000_000),
                                ("dropout", 0, .5), ("validation", 0, .4), ("learning_rate", 1e-7, .1), ("weight_decay", 0, 1)):
             base = {"heads": 1, "width": 32}
             for good in (low, high):

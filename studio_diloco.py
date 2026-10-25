@@ -3406,7 +3406,7 @@ class Member:
                 if "total" in event:  # the loop bound below is not the run's length: report the run's own
                     event = {**event, "total": max(self.run_steps, event.get("step") or 0)}
                 emit(event)
-            cfg = {**self.info["config"], "eval_every": 100000, "sample_every": 0, "steps": 1_000_000}  # the loop bound, as high as train() lets it go: the run's rounds end it (it can be extended while it goes), and the schedule's length is total_steps
+            cfg = {**self.info["config"], "eval_every": 100000, "sample_every": 0, "steps": studio_model.MAX_STEPS}  # the loop bound, as high as train() lets it go: the run's rounds end it (it can be extended while it goes), and the schedule's length is total_steps
             import studio_memory
             offload = studio_memory.offload_wanted(studio_model.validate_config(cfg), self.memory_share or 1.)  # as a job does: CUDA only, and only when the state cannot fit; train() says so
             if self.memory_share or offload:  # an offloading member without a plan still has the whole device to fit

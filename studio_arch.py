@@ -20,7 +20,7 @@ BLOCK_ID = re.compile(r"^blk_[0-9a-f]{6}\Z")
 TRAINING_DEFAULTS = {"steps": 300, "batch_size": 4, "accumulation": 1, "learning_rate": 0.001, "warmup": 20,
                      "weight_decay": 0.01, "eval_every": 25, "validation": 0.1, "seed": 42,
                      "objective": "all", "device": "auto"}
-_INT_RANGES = {"steps": (1, 1000000), "batch_size": (1, 128), "accumulation": (1, 64), "warmup": (0, 100000),
+_INT_RANGES = {"steps": (1, 20_000_000), "batch_size": (1, 128), "accumulation": (1, 64), "warmup": (0, 100000),
                "eval_every": (1, 100000), "seed": (0, 2147483647)}
 _FLOAT_RANGES = {"learning_rate": (1e-7, .1), "weight_decay": (0, 1), "validation": (0, .4)}
 

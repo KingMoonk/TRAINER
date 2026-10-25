@@ -15,6 +15,9 @@ from studio_api.models_queue_data import JobRecordModel, Model, submit
 from studio_ia import pretraining_plan as plan
 from studio_ia import sizing
 from studio_ia.services import if_added
+from studio_spec import RUN_INTS
+
+MAX_STEPS = RUN_INTS["steps"][1]  # the most steps a run may have (validate_spec refuses more)
 
 router = APIRouter(prefix="/pretraining", tags=["pretraining"])
 Services = Annotated[Any, Depends(get_services)]
@@ -122,7 +125,7 @@ class PlanRequest(BaseModel):
     passes: int = Field(2, ge=1, le=100)  # passes over the chosen text: Short 1, Medium 2, Long 4
     preview_rows: int = Field(6, ge=1, le=256)  # rows of the size preview the page draws; the cached preview is read with this
     hours: float = Field(sizing.DEFAULT_HOURS, gt=0, le=24 * 60)  # the time the person can give; the suggested design and steps fit it
-    steps: int | None = Field(None, ge=1, le=10_000_000)  # a step count chosen instead of `passes` (the suggestion's "use these steps")
+    steps: int | None = Field(None, ge=1, le=100_000_000)  # a step count chosen instead of `passes` (the suggestion's "use these steps")
     plateau: bool | None = None  # end the run when its validation loss goes flat: true always, false never, null for runs over an hour
     from_version: int | None = None  # the version whose best checkpoint a catch-up starts from (one of the plan's `sources`); null: the default
 
@@ -376,6 +379,8 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
     pieces, params, context = preview.get("pieces"), preview.get("params"), preview.get("context", 256)
     per_step = body.rows * context
     steps = None if estimating or not ids else body.steps or plan.steps_for(pieces, per_step, body.passes)
+    if steps:
+        steps = min(steps, MAX_STEPS)  # the engine refuses more; text this large is not passed over in full (passes_over_text shows how much is)
     measured = services.cached_step_rate(v.spec, body.rows) if v is not None and v.spec else None
     size = _sizing(services, v, mode, preview, steps, body, measured) if v is not None and steps and pieces and params else None
     enough = None
