@@ -57,8 +57,8 @@ describe("the five sidebar areas", () => {
   });
 
   test("the new run pages are routes, and run_view is hidden from the nav with parent runs", () => {
-    expect(routeFor("runs")).toMatchObject({ href: "/runs", area: "runs", title: "All runs" });
-    expect(routeFor("cluster_training")).toMatchObject({ href: "/cluster/training", area: "runs", title: "Cluster training" });
+    expect(routeFor("runs")).toMatchObject({ href: "/runs", area: "runs", title: "Runs", tabTitle: "All runs" });
+    expect(routeFor("cluster_training")).toMatchObject({ href: "/cluster/training", area: "runs", title: "Training", tabTitle: "Cluster training" });
     expect(routeFor("new_run")).toMatchObject({ href: "/runs/new", area: "runs" });
     expect(routeFor("run_view")).toMatchObject({ href: "/runs/view", area: "runs", hidden: true, parent: "runs" });
     expect(ROUTES.filter((r) => r.hidden).map((r) => r.route)).toEqual(["run_view"]);
