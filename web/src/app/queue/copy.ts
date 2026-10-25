@@ -34,6 +34,7 @@ export const T = {
   moveUp: "Move up",
   moveDown: "Move down",
   runNext: "Run next",
+  startNow: "Start now",
   hold: "Hold",
   release: "Release",
   remove: "Remove",

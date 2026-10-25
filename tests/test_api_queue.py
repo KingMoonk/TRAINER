@@ -30,6 +30,14 @@ class QueueRouterTests(ApiCase):
         self.assertEqual([j["id"] for j in self.call("GET", "/queue/jobs")], ["inv-1"])
         self.call("POST", "/queue/jobs", 422, json={**body, "id": "no spaces/allowed"})
 
+    def test_start_now_releases_moves_resumes_and_starts(self):
+        a, b = self.add("a"), self.add("b")
+        self.call("POST", "/queue/jobs/{job_id}/hold", path={"job_id": b["id"]})
+        self.call("POST", "/queue/pause")
+        state = self.call("POST", "/queue/jobs/{job_id}/start_now", path={"job_id": b["id"]})
+        self.assertEqual((state["job"]["id"], ids(state), state["paused"]), (b["id"], [a["id"]], False))
+        self.call("POST", "/queue/jobs/{job_id}/start_now", 404, path={"job_id": "nope"})
+
     def test_every_route_answers(self):
         state = self.call("GET", "/queue")
         self.assertIsNone(state["job"])
@@ -66,6 +74,8 @@ class QueueRouterTests(ApiCase):
         self.assertEqual(self.call("POST", "/queue/stop_after_cooldown")["stopping"], False)
         started = self.call("POST", "/queue/start")  # the fake runs the first job: it leaves Up next and becomes the running job
         self.assertEqual((started["job"]["id"], ids(started)), (b["id"], [a["id"], c["id"]]))
+        state = self.call("POST", "/queue/jobs/{job_id}/start_now", path={"job_id": c["id"]})  # b keeps running: c goes next
+        self.assertEqual((state["job"]["id"], ids(state)), (b["id"], [c["id"], a["id"]]))
 
         plan = self.call("GET", "/queue/plan")
         self.assertEqual(plan["hours"], "any")
@@ -77,7 +87,7 @@ class QueueRouterTests(ApiCase):
         self.assertEqual(set(step), {"route", "title", "line"})
 
         state = self.call("DELETE", "/queue/jobs/{job_id}", path={"job_id": b["id"]})
-        self.assertEqual(ids(state), [a["id"], c["id"]])
+        self.assertEqual(ids(state), [c["id"], a["id"]])
 
         from studio_queue import Job
         self.services.queue().failed.append(Job(id="f1", kind="pretrain", label="the one that broke", note="v2", params={"version": 2}, status="failed", error="Out of disk."))
@@ -85,7 +95,7 @@ class QueueRouterTests(ApiCase):
         again = state["up_next"][0]
         self.assertEqual((again["kind"], again["label"], again["note"], again["params"], again["status"]), ("pretrain", "the one that broke", "v2", {"version": 2}, "waiting"))
         self.assertNotEqual(again["id"], "f1")
-        self.assertEqual((ids(state)[1:], state["failed"]), ([a["id"], c["id"]], []))
+        self.assertEqual((ids(state)[1:], state["failed"]), ([c["id"], a["id"]], []))
         self.assertAllRoutesHit()
 
     def test_a_running_job_and_its_gate_come_through(self):
