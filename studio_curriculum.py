@@ -29,7 +29,7 @@ import re
 import threading
 from pathlib import Path
 
-from studio_catalog import CATALOG
+from studio_catalog import ALL_CATALOG
 from studio_core import atomic_json, messages_of, normalize, now, uid
 from studio_model import train, validate_config
 from studio_planning import build_training_set
@@ -69,7 +69,7 @@ def catalog_id_of(dataset):
 def dataset_stage(dataset):
     """Stage of a registered dataset: catalog field, else known catalog ids, else name hints, else instructions."""
     cid = catalog_id_of(dataset)
-    entry = next((e for e in CATALOG if e["id"] == cid), None)
+    entry = next((e for e in ALL_CATALOG if e["id"] == cid), None)
     if entry and entry.get("stage") in STAGE_ORDER:
         return entry["stage"]
     if cid in FALLBACK_STAGE:
@@ -83,7 +83,7 @@ def dataset_stage(dataset):
 
 
 def dataset_split(dataset):
-    entry = next((e for e in CATALOG if e["id"] == catalog_id_of(dataset)), None)
+    entry = next((e for e in ALL_CATALOG if e["id"] == catalog_id_of(dataset)), None)
     return str(dataset.get("split") or (entry or {}).get("split") or "")
 
 

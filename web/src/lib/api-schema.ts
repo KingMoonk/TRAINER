@@ -3735,7 +3735,7 @@ export interface paths {
         put?: never;
         /**
          * Speak
-         * @description The text spoken in the default voice, as WAV. The first call loads the model, which takes a while.
+         * @description The text spoken in the selected voice, as WAV. The first call loads the model, which takes a while.
          */
         post: operations["speak_voice_speak_post"];
         delete?: never;
@@ -4026,16 +4026,22 @@ export interface components {
             O: components["schemas"]["Own"][];
             /** T */
             T: number;
+            /**
+             * U
+             * @default 263
+             */
+            U: number;
             /** V */
             V: number;
-            /** U */
-            U?: number;
             /** W */
             W: number;
             /** D */
             d: number;
-            /** Token Limit Millions */
-            token_limit_millions?: number;
+            /**
+             * Token Limit Millions
+             * @default 0
+             */
+            token_limit_millions: number;
         };
         /** ChoicesBody */
         ChoicesBody: {
@@ -8234,8 +8240,11 @@ export interface components {
         SpeakRequest: {
             /** Text */
             text: string;
-            /** Voice */
-            voice?: string;
+            /**
+             * Voice
+             * @default lessac
+             */
+            voice: string;
         };
         /** SpecBody */
         SpecBody: {
