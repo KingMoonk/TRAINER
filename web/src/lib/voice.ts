@@ -3,7 +3,7 @@
 // Both engines run on this machine and are installed by `make voice-setup` (docs/voice.md); the app never installs them.
 
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api, ApiError, apiFetch, unwrap } from "@/lib/api";
 import type { components } from "@/lib/api-schema";
 
@@ -29,19 +29,38 @@ function storedTtsVoice(): TtsVoice {
   }
 }
 
-/** The selected spoken-reply voice, remembered in this browser. */
-export function useTtsVoice(): [TtsVoice, (voice: TtsVoice) => void] {
-  const [voice, setVoice] = useState<TtsVoice>(DEFAULT_TTS_VOICE);
-  useEffect(() => setVoice(storedTtsVoice()), []);
-  const choose = useCallback((next: TtsVoice) => {
-    setVoice(next);
+const watchers = new Set<() => void>();
+function watchSettings(notify: () => void) {
+  watchers.add(notify);
+  return () => void watchers.delete(notify);
+}
+
+/** One setting remembered in this browser (null before it is set, and on the server): read and written without an effect. */
+function useStoredSetting(key: string): [string | null, (value: string) => void] {
+  const read = useCallback(() => {
     try {
-      localStorage.setItem(TTS_VOICE_KEY, next);
+      return localStorage.getItem(key);
+    } catch {
+      return null; // storage can be blocked; the setting then lasts for the visit
+    }
+  }, [key]);
+  const value = useSyncExternalStore(watchSettings, read, () => null);
+  const store = useCallback((next: string) => {
+    try {
+      localStorage.setItem(key, next);
     } catch {
       // The setting then lasts for the visit.
     }
-  }, []);
-  return [voice, choose];
+    watchers.forEach((notify) => notify());
+  }, [key]);
+  return [value, store];
+}
+
+/** The selected spoken-reply voice, remembered in this browser. */
+export function useTtsVoice(): [TtsVoice, (voice: TtsVoice) => void] {
+  const [stored, store] = useStoredSetting(TTS_VOICE_KEY);
+  const voice = TTS_VOICES.find(({ id }) => id === stored)?.id ?? DEFAULT_TTS_VOICE;
+  return [voice, store];
 }
 
 /** The engine's own sentence when it cannot run ("... run `make voice-setup`"), "" when it is installed, or a sentence when the server does not list it. */
@@ -90,7 +109,6 @@ export async function recordSpeech(signal?: AbortSignal): Promise<ArrayBuffer> {
     if (signal?.aborted) throw new DOMException("Recording was cancelled.", "AbortError");
     const recorder = new MediaRecorder(stream);
     const chunks: Blob[] = [];
-    let stopRecording: ReturnType<typeof setTimeout> | undefined;
     let hasStarted = false;
     let rejectStart: (error: Error) => void = () => {};
     let rejectRecording: (error: Error) => void = () => {};
@@ -115,7 +133,7 @@ export async function recordSpeech(signal?: AbortSignal): Promise<ArrayBuffer> {
     signal?.addEventListener("abort", stop, { once: true });
     recorder.start();
     await started;
-    stopRecording = setTimeout(stop, 15_000);
+    const stopRecording = setTimeout(stop, 15_000);
     const blob = await recorded;
     signal?.removeEventListener("abort", stop);
     const context = new AudioContext();
@@ -156,23 +174,9 @@ export async function recordSpeech(signal?: AbortSignal): Promise<ArrayBuffer> {
 
 /** The "Speak replies" setting, remembered in this browser. */
 export function useSpeakReplies(): [boolean, (on: boolean) => void] {
-  const [on, setOn] = useState(false);
-  useEffect(() => {
-    try {
-      setOn(localStorage.getItem(SPEAK_KEY) === "1");
-    } catch {
-      // storage can be blocked; the setting then lasts for the visit
-    }
-  }, []);
-  const set = useCallback((next: boolean) => {
-    setOn(next);
-    try {
-      localStorage.setItem(SPEAK_KEY, next ? "1" : "0");
-    } catch {
-      // see above
-    }
-  }, []);
-  return [on, set];
+  const [stored, store] = useStoredSetting(SPEAK_KEY);
+  const set = useCallback((next: boolean) => store(next ? "1" : "0"), [store]);
+  return [stored === "1", set];
 }
 
 export type Speaker = {

@@ -31,7 +31,7 @@ describe("Costs: where the size goes", () => {
 
 
 const registry: Registry = { heads: [1, 3, 8], widths: ["small", "medium", "large"], words: [], slots: [], block_slots: [], part_slots: [] };
-const choices = { H: 4, W: 1, V: 1, d: 64, T: 256, U: 1024, token_limit_millions: 0 } as Choices;
+const choices = { H: 3, W: 1, V: 1, d: 64, T: 256, U: 1024, token_limit_millions: 0, M: { mixer: "attention", position: "learned" } } as Choices;
 
 describe("model controls", () => {
   test("edits hidden size, context, tokenizer size and the optional token cap", () => {

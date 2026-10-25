@@ -8,7 +8,7 @@
         "label": "Speech to text",
         "loaded": false,
         "missing": "",
-        "model": "nvidia/parakeet-tdt-0.6b-v3"
+        "model": "sherpa-onnx-zipformer-small-en-2023-06-26"
       },
       {
         "device": "cpu",
@@ -17,7 +17,7 @@
         "label": "Text to speech",
         "loaded": false,
         "missing": "",
-        "model": "BreezeBlue/Breeze-TTS-2"
+        "model": "Piper TTS"
       }
     ]
   },

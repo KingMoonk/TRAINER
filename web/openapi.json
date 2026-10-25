@@ -586,6 +586,13 @@
             "title": "T",
             "type": "integer"
           },
+          "U": {
+            "default": 263,
+            "maximum": 65536.0,
+            "minimum": 263.0,
+            "title": "U",
+            "type": "integer"
+          },
           "V": {
             "maximum": 3.0,
             "minimum": 0.0,
@@ -601,6 +608,13 @@
           "d": {
             "minimum": 1.0,
             "title": "D",
+            "type": "integer"
+          },
+          "token_limit_millions": {
+            "default": 0,
+            "maximum": 1000000.0,
+            "minimum": 0.0,
+            "title": "Token Limit Millions",
             "type": "integer"
           }
         },
@@ -11099,6 +11113,11 @@
         "properties": {
           "text": {
             "title": "Text",
+            "type": "string"
+          },
+          "voice": {
+            "default": "lessac",
+            "title": "Voice",
             "type": "string"
           }
         },
@@ -22226,7 +22245,7 @@
     },
     "/voice/speak": {
       "post": {
-        "description": "The text spoken in the default voice, as WAV. The first call loads the model, which takes a while.",
+        "description": "The text spoken in the selected voice, as WAV. The first call loads the model, which takes a while.",
         "operationId": "speak_voice_speak_post",
         "requestBody": {
           "content": {
