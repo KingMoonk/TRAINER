@@ -31,7 +31,8 @@ function useSummary(kind: Kind) {
   return useQuery({
     queryKey: ["data", "summary", kind],
     queryFn: ({ signal }) =>
-      runJob<Summary>(() => unwrap(api.POST("/data/{kind}/summary", { params: { path: { kind } }, body: { query: "" } })) as Promise<JobLike>, signal),
+      runJob<Summary>(() => unwrap(api.POST("/data/{kind}/summary", { params: { path: { kind } }, body: { query: "" } })) as Promise<JobLike>, signal,
+        { cancel: true }), // leaving the page (or a newer read taking over) ends this one: a stale scan must not hold the server's reads
     staleTime: 30_000,
   });
 }

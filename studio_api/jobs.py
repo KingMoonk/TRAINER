@@ -37,21 +37,31 @@ class Jobs:
         self._stops = {}
         self._lock = threading.Lock()
         self._queue = queue.SimpleQueue()
-        self._worker = threading.Thread(target=self._run, name="api-jobs", daemon=True)
+        self._reads = queue.SimpleQueue()  # slow read-only scans (the data page's summaries) wait here, so they never hold the main worker
+        self._keys = {}
+        self._worker = threading.Thread(target=self._run, args=(self._queue,), name="api-jobs", daemon=True)
         self._worker.start()
+        threading.Thread(target=self._run, args=(self._reads,), name="api-reads", daemon=True).start()
 
-    def submit(self, kind, work, own_thread=False):
+    def submit(self, kind, work, own_thread=False, lane="main", key=None):
         """`work(stop)` runs on the worker thread with a threading.Event it may poll; its return is the result. `own_thread` starts it
-        at once on a thread of its own instead, for work that must not wait behind a slow read (the size of the chosen text)."""
-        record = JobRecord(id=uuid.uuid4().hex[:8], kind=kind)
+        at once on a thread of its own instead, for work that must not wait behind a slow read (the size of the chosen text). `lane`
+        "reads" queues it on the reads worker, apart from the main one. `key` shares one unfinished job between identical requests:
+        asking again while it is queued or running returns it instead of starting a second scan."""
         with self._lock:
+            held = self._records.get(self._keys.get(key)) if key is not None else None
+            if held is not None and held.status in ("queued", "running"):
+                return held
+            record = JobRecord(id=uuid.uuid4().hex[:8], kind=kind)
             self._records[record.id] = record
             self._stops[record.id] = threading.Event()
+            if key is not None:
+                self._keys[key] = record.id
         self._announce(record)
         if own_thread:
             threading.Thread(target=self._execute, args=(record.id, work, False), name=f"api-job-{kind}", daemon=True).start()
         else:
-            self._queue.put((record.id, work))
+            (self._reads if lane == "reads" else self._queue).put((record.id, work))
         return record
 
     def get(self, job_id):
@@ -73,6 +83,7 @@ class Jobs:
         for stop in self._stops.values():
             stop.set()
         self._queue.put(None)
+        self._reads.put(None)
 
     def _announce(self, record):
         self.services.emit("job", dataclasses.asdict(record))
@@ -82,9 +93,9 @@ class Jobs:
         record.finished_at = time.time()
         self._announce(record)
 
-    def _run(self):
+    def _run(self, lane):
         while True:
-            item = self._queue.get()
+            item = lane.get()
             if item is None:
                 return
             self._execute(*item, shared=True)

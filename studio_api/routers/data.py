@@ -384,7 +384,8 @@ def generate_problems(body: GenerateRequest, services: Services) -> GenerateRepo
 @router.post("/{kind}/summary", status_code=202)
 def data(kind: Kind, body: SummaryRequest, request: Request, services: Services) -> SummaryJob:
     """Services.data as a job (a cold store is scanned): the sets, counts and the first sample rows; `query` filters the rows."""
-    return submit(request, "data", lambda stop: SummaryModel.model_validate(services.data(kind, body.query)).model_dump(mode="json"), SummaryJob)
+    return submit(request, "data", lambda stop: SummaryModel.model_validate(services.data(kind, body.query)).model_dump(mode="json"), SummaryJob,
+                  lane="reads", key=("data", kind, body.query))  # on the reads worker; the same request while one is unfinished shares it
 
 
 @router.get("/{kind}/rows")
