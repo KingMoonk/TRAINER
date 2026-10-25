@@ -2444,6 +2444,10 @@ class WorkspaceServices(Services):
                 os.nice(10)  # lowers this thread only on Linux; not available on Windows
             except (AttributeError, OSError):
                 pass
+            try:
+                self.approve_catalog_sets()
+            except Exception:  # noqa: BLE001 - the passes below still run
+                logging.getLogger(__name__).exception("approving the catalogue sets failed")
             while not stop.is_set():
                 try:
                     self.precache_set_sizes()
@@ -2452,6 +2456,20 @@ class WorkspaceServices(Services):
                 stop.wait(interval)
         self._precacher = start_thread(run)
         return self._precacher
+
+    def approve_catalog_sets(self):
+        """Mark the rows of downloaded catalogue sets Good (no review step for vetted corpora) and forget those sets' measurements, which
+        found no usable text while the rows were drafts. Returns the ids of the sets changed."""
+        import studio_catalog as cat
+        changed = cat.approve_catalog_rows(self.workspace)
+        if changed:
+            store = self._set_sizes()
+            with self._lock:
+                for key in [k for k in store if json.loads(k)[0] in changed]:
+                    del store[key]
+                from studio_core import atomic_json
+                atomic_json(self.root / "data" / "set_sizes.json", store)
+        return changed
 
     def _set_sizes(self):
         """{set, tokenizer and held-back stamp -> measurement}, kept in data/set_sizes.json."""
