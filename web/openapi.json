@@ -1726,6 +1726,11 @@
             ],
             "title": "Steps Planned"
           },
+          "this_version": {
+            "default": false,
+            "title": "This Version",
+            "type": "boolean"
+          },
           "tokens": {
             "anyOf": [
               {

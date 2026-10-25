@@ -94,12 +94,13 @@ DESIGN_KEYS = ("tokenizer", "dims", "embedding", "position", "block", "blocks", 
 
 
 def continue_sources(v, versions, absolute):
-    """The trained versions a catch-up of `v` may start from (a best checkpoint and the same word list), newest first, each with what
-    its run did (run_source). `absolute` turns a stored checkpoint path into one on this computer."""
+    """The trained versions a catch-up of `v` may start from (a best checkpoint and the same word list), `v` itself first (training
+    it further on more text), then newest first, each with what its run did (run_source). `absolute` turns a stored checkpoint path
+    into one on this computer."""
     if v is None:
         return []
-    trained = [p for p in versions if p.best_checkpoint and p.number != v.number and not word_list_changed(v, p)]
-    return [run_source(p, v, absolute) for p in sorted(trained, key=lambda p: p.number, reverse=True)]
+    trained = [p for p in versions if p.best_checkpoint and not word_list_changed(v, p)]
+    return [run_source(p, v, absolute) for p in sorted(trained, key=lambda p: (p.number != v.number, -p.number))]
 
 
 def run_source(p, v, absolute):
@@ -118,7 +119,7 @@ def run_source(p, v, absolute):
             "best_val_loss": _finite(run.get("best_val_loss"), run.get("best_loss")), "train_loss": _finite(run.get("loss")),
             "device": run.get("device_name") or p.train_device or None, "rounds": _whole(settings.get("rounds")),
             "inner_steps": _whole(settings.get("inner_steps")), "same_design": same_design(p.spec, v.spec),
-            "parent": p.number == v.parent}
+            "parent": p.number == v.parent, "this_version": p.number == v.number}
 
 
 def same_design(a, b):
@@ -261,14 +262,14 @@ def plateau_line(rule):
 
 def job_params(v, parent, chosen, mode, rows, hold, steps, pieces, own_text, plateau=None, source=None):
     """(label, params) of the pretrain job "Add to the queue" adds for version `v` (see Job in studio_ia.services). A catch-up starts
-    from `source`'s best checkpoint (default `parent`), and `mode` is forced to from_scratch when that is not valid; `hold` is the
+    from `source`'s best checkpoint (default `parent`; `v` itself trains further from its own), and `mode` is forced to from_scratch when that is not valid; `hold` is the
     held-back fraction, `pieces` the size preview's; `plateau` the rule that ends the run when its validation loss goes flat (plateau_rule)."""
     cfg = pretrain_config(v.spec, steps, rows, hold)
     start = source or parent
     mode = forced_mode(v, start, mode)
     init = start.best_checkpoint if mode == "catch_up" else None
     label = f"Version {v.number} {'catch-up' if mode == 'catch_up' else 'from scratch'}"
-    if mode == "catch_up" and start is not parent:
+    if mode == "catch_up" and start is not parent and start is not v:
         label += f" from version {start.number}"
     return label, {"config": cfg, "datasets": list(chosen), "mode": mode, "init_from": init, "output_dir": None,
                    "user_text": own_text, "previous_best": parent.best_checkpoint if parent else None,

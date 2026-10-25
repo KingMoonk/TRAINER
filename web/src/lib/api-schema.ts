@@ -4366,6 +4366,11 @@ export interface components {
             steps?: number | null;
             /** Steps Planned */
             steps_planned?: number | null;
+            /**
+             * This Version
+             * @default false
+             */
+            this_version: boolean;
             /** Tokens */
             tokens?: number | null;
             /** Train Loss */
