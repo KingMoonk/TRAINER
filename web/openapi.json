@@ -6454,7 +6454,7 @@
           "steps": {
             "anyOf": [
               {
-                "maximum": 10000000.0,
+                "maximum": 100000000.0,
                 "minimum": 1.0,
                 "type": "integer"
               },

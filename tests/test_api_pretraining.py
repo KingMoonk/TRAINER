@@ -216,6 +216,18 @@ class PretrainingRouterTests(ApiCase):
                          (True, 50_000_000, 0.16, "many", 2_500_000))
         self.assertIsNone(self.call("POST", "/pretraining/plan", json={"dataset_ids": []})["readout"])
 
+    def test_a_very_large_text_gets_its_full_steps_and_one_past_the_limit_is_capped(self):
+        from studio_spec import RUN_INTS, validate_spec
+        self.save_versions()
+        self.services.cached_preview = lambda ids, rows=16: {"pieces": 4_000_000_000, "params": 1_000_000, "vocab": 263, "context": 256, "first_rows": []}
+        plan = self.plan(passes=2)
+        self.assertEqual((plan["can_add"], plan["steps"]), (True, math.ceil(2 * 4_000_000_000 / (16 * 256))))  # about 1.95M steps
+        self.assertEqual(plan["config"]["steps"], plan["steps"])
+        run = {"steps": plan["steps"]}
+        spec = self.services.current_version().spec
+        validate_spec({**spec, "train": {**spec["train"], "run": run}})  # the saved design accepts it
+        self.assertEqual(self.plan(steps=90_000_000)["steps"], RUN_INTS["steps"][1])  # past the limit the plan caps, not fails in the queue
+
     def test_an_unknown_size_is_estimating_and_adds_nothing(self):
         self.save_versions()
         self.services.cached_preview = lambda ids, rows=16: None

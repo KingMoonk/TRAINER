@@ -489,7 +489,7 @@ class Routes(unittest.TestCase):
 
     def test_the_form_starts_from_the_engines_defaults(self):
         self.assertEqual(self.client.get("/distributed/defaults").json(),
-                         {"rounds": 10, "inner_steps": 100, "remote_inner_steps": 1500, "outer_lr": .7, "outer_momentum": .9, "delta_dtype": "int8", "max_steps": 1_000_000})
+                         {"rounds": 10, "inner_steps": 100, "remote_inner_steps": 1500, "outer_lr": .7, "outer_momentum": .9, "delta_dtype": "int8", "max_steps": 20_000_000})
 
     def test_a_run_with_a_member_on_another_machine_starts_from_a_larger_h(self):
         self.assertEqual(studio_diloco.default_inner_steps(False), studio_diloco.Settings().inner_steps)
@@ -504,9 +504,9 @@ class Routes(unittest.TestCase):
         self.assertEqual(self.client.get("/distributed/runs/none").status_code, 404)
 
     def test_a_run_of_more_steps_than_a_run_trains_is_refused_before_it_is_queued(self):
-        refused = self.start(rounds=3000, inner_steps=1000)
+        refused = self.start(rounds=30000, inner_steps=1000)
         self.assertEqual(refused.status_code, 400)
-        self.assertEqual(refused.json()["detail"], "3,000 rounds of 1,000 steps is 3,000,000 steps; a run trains at most 1,000,000. Use fewer rounds or fewer steps per round.")
+        self.assertEqual(refused.json()["detail"], "30,000 rounds of 1,000 steps is 30,000,000 steps; a run trains at most 20,000,000. Use fewer rounds or fewer steps per round.")
         self.assertEqual((self.services.queue().job, list(self.services.queue().up_next)), (None, []))
         run_id = self.start(rounds=1000, inner_steps=1000).json()["id"]
         self.client.post(f"/distributed/runs/{run_id}/stop")
