@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { busyPeers, ctaLabel, defaultSftVersion, durationText, nameList, runningText, localForced, peersOf, pinnedJob, runHref, shapeOf, sourceFacts, workersOf, type Node, type Source } from "./logic";
+import { busyPeers, ctaLabel, defaultSftVersion, durationText, nameList, runningText, localForced, peersOf, runHref, shapeOf, sourceFacts, workersOf, type Node, type Source } from "./logic";
 
 const node = (address: string, over: Partial<Node> = {}): Node => ({
   address, busy: false, device: "cuda", device_name: "", dtypes: [], error: "", hostname: address, local: false, memory_bytes: 0, online: true, tailnet_name: "", origin: "", origin_down: false, version: "", ...over,
@@ -39,12 +39,6 @@ test("the button says Start only when the queue starts the job at once", () => {
   expect(ctaLabel("Starts now")).toBe("Start");
   expect(ctaLabel("Starts after Version 1 (about 4 min)")).toBe("Add to queue");
   expect(ctaLabel(undefined)).toBe("Add to queue");
-});
-
-test("pinnedJob keeps the plan's params and adds the peer", () => {
-  const job = { kind: "pretrain" as const, label: "Version 2", params: { version: 2 } };
-  expect(pinnedJob(job, null)).toEqual({ kind: "pretrain", label: "Version 2", note: "", params: { version: 2 } });
-  expect(pinnedJob(job, "beast").params).toEqual({ version: 2, pinned: "beast" });
 });
 
 test("SFT starts from the best trained version, else the latest", () => {

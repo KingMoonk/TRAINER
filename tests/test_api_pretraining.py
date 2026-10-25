@@ -250,9 +250,10 @@ class PretrainingRouterTests(ApiCase):
     def test_the_waiting_run_reports_how_far_the_size_is_worked_out_until_it_is_filled(self):
         self.save_versions()
         known, preview = {}, self.services.pretrain_preview
-        seen, at = [], {}
+        seen, at, go = [], {}, threading.Event()
 
         def counting(ids, rows=16, progress=None):
+            self.assertTrue(go.wait(10))  # the queue is read at 0% first
             for percent in (0, 40, 70):
                 progress(percent)
                 job = self.services.queue().up_next[0]
@@ -264,6 +265,7 @@ class PretrainingRouterTests(ApiCase):
         started = self.call("POST", "/pretraining/start", 202, json={"dataset_ids": ["Your files"]})
         queued = self.services.queue().up_next[-1]
         self.assertEqual(self.call("GET", "/queue")["up_next"][0]["sizing"], 0)
+        go.set()
         self.until(lambda: "config" in queued.params, "the run's steps")
         self.assertEqual(seen, [0, 40, 70])
         up_next = self.call("GET", "/queue")["up_next"]
