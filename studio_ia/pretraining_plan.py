@@ -198,7 +198,7 @@ def source_status(row, note=""):
 def held_out(dataset_id):
     """True for a catalogue set that is a validation or test split: trained on, it could no longer measure anything."""
     import studio_catalog as cat
-    return next((e.get("split") for e in cat.CATALOG if f"catalog_{e['id']}" == dataset_id), None) in ("validation", "test")
+    return next((e.get("split") for e in cat.ALL_CATALOG if f"catalog_{e['id']}" == dataset_id), None) in ("validation", "test")
 
 
 def collection_items(rows, notes):
@@ -286,7 +286,9 @@ def job_params(v, parent, chosen, mode, rows, hold, steps, pieces, own_text, pla
     label = f"Version {v.number} {'catch-up' if mode == 'catch_up' else 'from scratch'}"
     if mode == "catch_up" and start is not parent and start is not v:
         label += f" from version {start.number}"
+    token_limit = (v.spec.get("train", {}).get("run", {}) or {}).get("token_limit_millions", 0)
     return label, {"config": cfg, "datasets": list(chosen), "mode": mode, "init_from": init, "output_dir": None,
                    "user_text": own_text, "previous_best": parent.best_checkpoint if parent else None,
                    "version": v.number, "heldout_fraction": cfg["validation"], "pieces_per_pass": pieces,
+                   **({"token_budget": token_limit * 1_000_000} if token_limit else {}),
                    **({"plateau": plateau} if plateau else {})}

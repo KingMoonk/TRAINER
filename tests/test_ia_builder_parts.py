@@ -18,6 +18,9 @@ def choices(**patch):
 
 
 class Choices(unittest.TestCase):
+    def test_model_settings_default_to_no_token_limit(self):
+        self.assertEqual(choices()["token_limit_millions"], 0)
+
     def test_read_spec_names_every_part_and_each_blocks_own(self):
         s = choices()
         self.assertEqual(s["M"], {"embedding": "learned", "position": "learned", "head": "tied",
@@ -50,6 +53,15 @@ class Choices(unittest.TestCase):
 
 
 class WriteSpec(unittest.TestCase):
+    def test_model_dimensions_vocabulary_and_optional_training_token_limit_are_written(self):
+        spec = D.write_spec(base(), choices(d=96, T=512, V=1, U=4096, token_limit_millions=7))
+        self.assertEqual((spec["dims"]["d_model"], spec["dims"]["n_ctx"]), (96, 512))
+        self.assertEqual((spec["tokenizer"]["id"], spec["tokenizer"]["config"]["vocab_size"]), ("bpe_fast", 4096))
+        self.assertEqual(spec["train"]["run"]["token_limit_millions"], 7)
+        self.assertEqual(D.read_spec(spec)["token_limit_millions"], 7)
+        unlimited = D.write_spec(spec, choices(d=96, T=512, V=1, U=4096, token_limit_millions=0), D.read_spec(spec))
+        self.assertNotIn("token_limit_millions", unlimited["train"].get("run", {}))
+
     def test_a_mixer_without_heads_drops_them_and_the_heads_knob_stops_applying(self):
         s = D.choose(choices(), "mixer", "gru")
         spec = D.write_spec(base(), s)

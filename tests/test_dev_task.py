@@ -342,19 +342,5 @@ class NodeDeviceTest(unittest.TestCase):
         self.assertIn("did not answer", said[0])
 
 
-class VoiceSetup(unittest.TestCase):
-    def test_the_cuda_torch_is_held_and_torchaudio_comes_from_its_index(self):
-        import tempfile
-        with tempfile.TemporaryDirectory() as root, mock.patch.object(tasks, "VOICE", Path(root)):
-            args = tasks.voice_pins("2.14.1+cu130", "2.5.4")
-            self.assertEqual(args, ["-c", str(Path(root) / "constraints.txt"), "--extra-index-url", "https://download.pytorch.org/whl/cu130"])
-            self.assertEqual((Path(root) / "constraints.txt").read_text(encoding="utf-8").split(), ["torch==2.14.1+cu130", "numpy==2.5.4"])
-
-    def test_a_plain_torch_adds_no_index(self):
-        import tempfile
-        with tempfile.TemporaryDirectory() as root, mock.patch.object(tasks, "VOICE", Path(root)):
-            self.assertNotIn("--extra-index-url", tasks.voice_pins("2.14.1", "2.5.4"))
-
-
 if __name__ == "__main__":
     unittest.main()

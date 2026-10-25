@@ -98,6 +98,12 @@ class PretrainingRouterTests(ApiCase):
         self.assertIn(queued["id"], [j["id"] for j in listed])
         self.assertEqual(next(j for j in listed if j["id"] == queued["id"])["params"], job["params"])
 
+    def test_model_token_limit_is_passed_as_an_engine_budget_in_millions(self):
+        _v1, v2 = self.save_versions()
+        v2.spec["train"].setdefault("run", {})["token_limit_millions"] = 9
+        job = self.plan(version=2)["job"]
+        self.assertEqual(job["params"]["token_budget"], 9_000_000)
+
     def test_the_params_match_the_ones_the_tk_page_built(self):
         from studio_ia.pretraining_plan import pretrain_config
         v1, v2 = self.save_versions()
@@ -208,6 +214,18 @@ class PretrainingRouterTests(ApiCase):
         self.assertEqual((plan["estimating"], plan["can_add"], plan["steps"], plan["job"]), (True, False, None, None))
         self.assertIn("still being worked out", plan["reason"])
 
+    def test_text_with_nothing_a_run_may_use_says_so_and_start_queues_nothing(self):
+        self.save_versions()
+        self.services.cached_preview = lambda ids, rows=16: {"pieces": None, "params": 1_000_000, "context": 256, "first_rows": []}
+        self.services.no_usable_text = lambda ids: [("TinyStories", 77941)]
+        plan = self.plan()
+        self.assertEqual((plan["estimating"], plan["can_add"], plan["job"]), (False, False, None))
+        self.assertIn("TinyStories (77,941 rows waiting for review)", plan["reason"])
+        before = len(self.services.queue().up_next)
+        refused = self.call("POST", "/pretraining/start", 409, json={"dataset_ids": ["Your files"]})
+        self.assertIn("TinyStories", refused["detail"])
+        self.assertEqual(len(self.services.queue().up_next), before)
+
     def test_no_design_blocks_adding_and_a_named_version_is_used(self):
         plan = self.plan()
         self.assertEqual((plan["version"], plan["can_add"], plan["job"]), (None, False, None))
@@ -246,6 +264,28 @@ class PretrainingRouterTests(ApiCase):
         self.assertEqual(queued.label, self.plan()["job"]["label"])
         self.assertEqual(queued.params["config"], self.plan()["job"]["params"]["config"])
         self.assertIn(("Your files",), known)
+
+    def test_incomplete_non_null_cached_preview_still_queues_and_finishes_sizing(self):
+        self.save_versions()
+        preview, release, complete = self.services.pretrain_preview, threading.Event(), {}
+        self.services.cached_preview = lambda ids, rows=16: complete.get(tuple(ids), {"context": 256})
+
+        def slow(ids, rows=16, progress=None):
+            self.assertTrue(release.wait(10))
+            result = preview(ids, rows)
+            complete[tuple(ids)] = result
+            return result
+
+        self.services.pretrain_preview = slow
+        plan = self.plan()
+        self.assertTrue(plan["estimating"])
+        started = self.call("POST", "/pretraining/start", 202, json={"dataset_ids": ["Your files"]})
+        queued = self.services.queue().up_next[-1]
+        self.assertEqual(queued.params, {"sizing": True})
+        release.set()
+        self.until(lambda: "config" in queued.params, "the incomplete preview to be recalculated")
+        self.assertGreater(queued.params["config"]["steps"], 0)
+        self.assertEqual(queued.id, started["id"])
 
     def test_the_waiting_run_reports_how_far_the_size_is_worked_out_until_it_is_filled(self):
         self.save_versions()

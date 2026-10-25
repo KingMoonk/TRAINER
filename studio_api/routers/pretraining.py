@@ -330,6 +330,12 @@ def _sizing(services, v, mode, preview, steps, body, measured):
     return Sizing.model_validate(found)
 
 
+def _unusable_reason(unusable):
+    """Why a run cannot start when the chosen text has nothing a run may use: generated text is a draft until it is marked Good."""
+    names = ", ".join(f"{name} ({rows:,} rows waiting for review)" if rows else name for name, rows in unusable)
+    return f"There is no text to train on yet in {names}. Generated text is used for nothing until it is marked Good: review it in Your data."
+
+
 @router.get("/text_sets")
 def text_sets(services: Services) -> list[TextSet]:
     """The sets of text to choose from, as the Pretraining page's tiles."""
@@ -364,7 +370,8 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
         known = services.cached_preview(ids, body.preview_rows) if ids else {}
     except NotImplementedError:
         known = {}
-    estimating = known is None
+    unusable = services.no_usable_text(ids) if ids and known is not None else []
+    estimating = bool(ids) and not unusable and (known is None or not known.get("pieces"))
     preview = known or {}
     pieces, params, context = preview.get("pieces"), preview.get("params"), preview.get("context", 256)
     per_step = body.rows * context
@@ -382,6 +389,7 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
         headline, details = plan.version_expectation(v.spec, preview, body.passes)
         expect = Expectation(headline=headline, details=details) if headline else None
     reason = ("Save a design in the Network designer first." if v is None else "Choose some text first." if not ids
+              else _unusable_reason(unusable) if unusable
               else "The size of the text is still being worked out." if estimating
               else "The size of the chosen text is not known, so the steps cannot be worked out." if not steps else "")
     config = job = None
@@ -456,7 +464,8 @@ def pretrain_start(body: PlanRequest, request: Request, services: Services) -> S
     def work(stop):
         try:
             ids = list(dict.fromkeys(body.dataset_ids))
-            if services.cached_preview(ids, body.preview_rows) is None:
+            cached = services.cached_preview(ids, body.preview_rows)
+            if cached is None or not cached.get("pieces"):
                 services.pretrain_preview(ids, body.preview_rows, progress=lambda percent: services.size_progress(added.id, percent))
             if stop.is_set():
                 raise RuntimeError("Working out the size of the text was stopped. Add the run again.")

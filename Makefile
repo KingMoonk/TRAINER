@@ -4,7 +4,7 @@
 #   make run        the built app: API serving web/out, opens the browser (python app.py); tailnet / -> API
 #   make test       ruff + all unit tests; `make test T="tests.test_x tests.test_y"` for just those modules
 #   make network-bench BENCH_ARGS="--output /tmp/network.json"  synthetic shared-link transfer discovery
-#   make voice-setup  optional: voice mode's speech engines (pip into .venv, clone Breeze TTS, fetch both models; several GB)
+#   make voice-setup  optional: cross-platform CPU speech engines and voice models (pip into .venv; model downloads)
 #   make web-check  web/: Vitest, lint, typecheck, build
 # Windows: install make once (`winget install ezwinports.make`), then the same commands work in PowerShell.
 

@@ -309,13 +309,31 @@ CATALOG = [
      "repo": "allenai/winogrande", "filename": "winogrande_xl/train-00000-of-00001.parquet", "format": "parquet", "parser": "winogrande_check", "split": "train", "synthetic": False},
 ]
 STAGES = ("language", "instructions", "knowledge", "reasoning", "code", "conversation", "problems")
-STARTER_IDS = ("dolly15k", "squad2", "codealpaca20k", "gsm8k", "oasst1")
+STARTER_IDS = ("dolly15k", "squad2", "gsm8k", "oasst1", "toolace")
+
+# Keep old definitions available for recovery of existing downloads, while the
+# built-in catalog below contains only the focused assistant-training corpus.
+LEGACY_CATALOG = CATALOG
+_legacy_by_id = {entry["id"]: entry for entry in LEGACY_CATALOG}
+CATALOG = [dict(_legacy_by_id[catalog_id]) for catalog_id in ("dolly15k", "squad2", "gsm8k", "oasst1")]
+CATALOG.append({"id": "toolace", "name": "ToolACE · tool-use dialogues", "domain": "Tool use", "stage": "conversation", "default": True,
+                "description": "English tool-use dialogues with API schemas, assistant calls, simulated tool responses and final answers. Calls and results are retained as tagged assistant/user turns.",
+                "license": "Apache 2.0", "source_url": "https://huggingface.co/datasets/Team-ACE/ToolACE",
+                "size_hint": "36 MB download", "records_hint": "English tool-call dialogues", "revision": "6bda777c88d21e5a204703c1ee45597a8fa4f734",
+                "repo": "Team-ACE/ToolACE", "filename": "data.json", "format": "json", "parser": "toolace",
+                "sha256": "ba12c083fca7e8da48c67ad5b895e495447da7c66e39a2e19742c082e6cb537e", "split": "train", "synthetic": True})
+DEFAULT_IDS = frozenset(entry["id"] for entry in CATALOG)
+for entry in LEGACY_CATALOG:
+    entry["default"] = False
+for entry in CATALOG:
+    entry["default"] = True
+ALL_CATALOG = list({entry["id"]: entry for entry in LEGACY_CATALOG + CATALOG}.values())
 
 
 def default_catalog_ids():
-    """Ids downloaded by default (commercially usable, bounded), in catalogue/stage order."""
-    return [entry["id"] for entry in CATALOG if entry.get("default")]
-FORMAT_VERSION = 5  # 2: line endings normalised to \n. 3: OpenAssistant keeps English trees only; HellaSwag text is capitalised and punctuated. 4: GSM8K and MetaMathQA rows share a group per source question. 5: fineweb_edu, openwebmath and gutenberg take their whole shard. Older converted files are rebuilt from the cached source
+    """Focused starter sources downloaded by default, in catalogue order."""
+    return [entry["id"] for entry in CATALOG if entry["id"] in DEFAULT_IDS]
+FORMAT_VERSION = 5  # 2: line endings normalised to \n. 3: OpenAssistant keeps English trees only; HellaSwag text is capitalised and punctuated. 4: GSM8K and MetaMathQA rows share a group per source question. 5: whole-shard sources. Existing conversions remain compatible; ToolACE is new.
 MAX_DOWNLOAD_BYTES = 1_000_000_000
 MAX_RECORD_CHARS = 16_000_000
 _DOWNLOAD_LOCK = threading.Lock()
@@ -567,6 +585,33 @@ def source_records(path, entry):
 def convert_record(raw, entry):
     """Yield canonical records while preserving task context and source ancestry."""
     parser = entry["parser"]
+    if parser == "toolace":
+        turns = raw.get("conversations")
+        system = str(raw.get("system") or "").strip()
+        if not system or not isinstance(turns, list):
+            return
+        source_text = "\n".join(str(turn.get("value") or "") for turn in turns if isinstance(turn, dict))
+        if re.search(r"[\u3400-\u9fff]", source_text):
+            return
+        messages = [{"role": "system", "content": system}]
+        has_tool = False
+        for index, turn in enumerate(turns):
+            if not isinstance(turn, dict):
+                continue
+            role = str(turn.get("from") or "").lower()
+            content = str(turn.get("value") or "").strip()
+            if not content:
+                continue
+            if role == "tool":
+                role, content, has_tool = "user", "<tool_response>\n" + content + "\n</tool_response>", True
+            elif role == "assistant" and index + 1 < len(turns) and isinstance(turns[index + 1], dict) and str(turns[index + 1].get("from") or "").lower() == "tool":
+                content = "<tool_call>\n" + content + "\n</tool_call>"
+            elif role not in {"user", "assistant"}:
+                continue
+            messages.append({"role": role, "content": content})
+        if has_tool and {message["role"] for message in messages} >= {"user", "assistant"}:
+            yield {"messages": messages, "intent": "tool_use"}
+        return
     if parser == "oasst":
         tree_id = raw.get("message_tree_id", "")
         if raw.get("prompt", {}).get("lang") != "en":  # the collection is English-only; a tree is one language from its prompt down
@@ -904,7 +949,7 @@ def _cap_changed(manifest, entry):
 
 
 def _entry(catalog_id):
-    entry = next((item for item in CATALOG if item["id"] == catalog_id), None)
+    entry = next((item for item in CATALOG + LEGACY_CATALOG if item["id"] == catalog_id), None)
     if entry is None:
         raise ValueError("Unknown catalogue dataset.")
     return entry
@@ -1036,7 +1081,7 @@ def download_dataset(catalog_id, root=ROOT, stop=None, emit=None):
 def list_downloads(root=ROOT):
     """Fast inventory for GUI startup; full checksum validation happens on reuse."""
     results = []
-    for entry in CATALOG:
+    for entry in ALL_CATALOG:
         folder = Path(root) / "data" / "downloads" / entry["id"]
         try:
             manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))

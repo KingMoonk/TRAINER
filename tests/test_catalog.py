@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from studio_catalog import (CATALOG, STAGES, DownloadCancelled, _fetch, clean_wikitext, convert_record, default_catalog_ids,
+from studio_catalog import (ALL_CATALOG, CATALOG, LEGACY_CATALOG, STAGES, DownloadCancelled, _fetch, clean_wikitext, convert_record, default_catalog_ids,
                             download_dataset, file_sha256, iter_json_array, iter_stories, list_downloads, register_download,
                             source_records, wikitext_paragraphs)
 from studio_core import Workspace, fingerprint, normalize, parse_file
@@ -78,7 +78,7 @@ class SourceConversionTests(unittest.TestCase):
                 list(iter_json_array(io.StringIO(broken), chunk_size=3))
 
     def test_squad_keeps_passage_and_groups_related_questions(self):
-        entry = next(e for e in CATALOG if e["id"] == "squad2")
+        entry = _entry("squad2")
         base = {"context": "Aster is a blue star.", "question": "What color?", "id": "one", "answers": [{"text": "blue"}], "is_impossible": False}
         answer = list(convert_record(base, entry))[0]
         unknown = list(convert_record({**base, "id": "two", "question": "How old?", "is_impossible": True, "answers": []}, entry))[0]
@@ -88,7 +88,7 @@ class SourceConversionTests(unittest.TestCase):
         self.assertIn("does not contain", unknown["assistant"])
 
     def test_openassistant_preserves_branches_and_filters_rejected_subtrees(self):
-        entry = next(e for e in CATALOG if e["id"] == "oasst1")
+        entry = _entry("oasst1")
         tree = {"message_tree_id": "tree-1", "prompt": {"role": "prompter", "lang": "en", "text": "hello", "replies": [
             {"role": "assistant", "text": "hi", "message_id": "a", "replies": [
                 {"role": "prompter", "text": "more", "replies": [{"role": "assistant", "text": "yes", "message_id": "b", "synthetic": True}]}]},
@@ -133,12 +133,33 @@ class DownloadLifecycleTests(unittest.TestCase):
             self.assertEqual(fetch.call_count, calls)  # intact upstream file reused
 
     def test_pinned_checksum_mismatch_is_rejected(self):
-        entry = next(e for e in CATALOG if e["id"] == "dolly15k")
+        entry = _entry("dolly15k")
         with tempfile.TemporaryDirectory() as directory, patch("studio_catalog._fetch", side_effect=self.fake_fetch), \
                 patch.dict(entry, {"sha256": "0" * 64}):
             with self.assertRaisesRegex(ValueError, "pinned checksum"):
                 download_dataset("dolly15k", root=directory)
             self.assertFalse((Path(directory) / "data" / "downloads" / "dolly15k" / "source.json").exists())
+
+    def test_toolace_download_keeps_each_tool_conversation_in_its_own_group(self):
+        rows = [{"system": "Use the tools listed here.", "conversations": [
+            {"from": "user", "value": f"Weather in city {index}?"},
+            {"from": "assistant", "value": f"[weather(city={index})]"},
+            {"from": "tool", "value": f"{{'temp': {index}}}"},
+            {"from": "assistant", "value": f"It is {index} degrees."}]} for index in range(2)]
+
+        def fetch(url, path, stop=None, emit=None, maximum=None, range_bytes=None):
+            payload = json.dumps(rows).encode() if Path(path).name == "data.json" else b"ToolACE source card"
+            Path(path).write_bytes(payload)
+            return {"url": url, "filename": Path(path).name, "bytes": len(payload), "sha256": file_sha256(path)}
+
+        with tempfile.TemporaryDirectory() as directory, patch("studio_catalog._fetch", side_effect=fetch), \
+                patch.dict(_entry("toolace"), {"sha256": ""}):
+            result = download_dataset("toolace", root=directory)
+            converted = [json.loads(line) for line in Path(result["path"]).read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(result["records"], 2)
+        self.assertEqual(len({row["groupId"] for row in converted}), 2)
+        self.assertTrue(all(row["intent"] == "tool_use" for row in converted))
+        self.assertTrue(all(row["messages"][2]["content"].startswith("<tool_call>") for row in converted))
 
     def test_failed_license_fetch_is_tolerated_and_recorded(self):
         def fetch(url, path, stop=None, emit=None, maximum=None):
@@ -204,7 +225,7 @@ class DownloadLifecycleTests(unittest.TestCase):
 
 
 def _entry(catalog_id):
-    return next(e for e in CATALOG if e["id"] == catalog_id)
+    return next(e for e in ALL_CATALOG if e["id"] == catalog_id)
 
 
 def _convert(catalog_id, raw):
@@ -225,15 +246,16 @@ class CatalogMetadataTests(unittest.TestCase):
                     self.assertFalse(entry["default"])
                     self.assertIn("NON-COMMERCIAL", entry["description"])
 
-    def test_default_ids_cover_the_original_core_and_stay_in_stage_order(self):
+    def test_default_ids_are_a_compact_focused_starter_and_stay_in_stage_order(self):
         defaults = default_catalog_ids()
-        for legacy in ("dolly15k", "squad2", "codealpaca20k", "gsm8k", "oasst1"):
-            self.assertIn(legacy, defaults)
-        self.assertNotIn("wizard143k", defaults)
-        self.assertIn("tinystories", defaults)
+        self.assertEqual(set(defaults), {"dolly15k", "squad2", "gsm8k", "oasst1", "toolace"})
+        self.assertLessEqual(len(defaults), 5)
+        for catalog_id in defaults:
+            self.assertTrue(_entry(catalog_id)["license"])
         stages = [STAGES.index(_entry(i)["stage"]) for i in defaults]
         self.assertEqual(stages, sorted(stages))
-        self.assertEqual({e["stage"] for e in CATALOG}, set(STAGES))
+        self.assertEqual({e["stage"] for e in CATALOG}, {"instructions", "knowledge", "reasoning", "conversation"})
+        self.assertTrue(all(not e["default"] for e in LEGACY_CATALOG))
 
     def test_existing_entries_keep_their_pinned_revisions(self):
         self.assertEqual(_entry("dolly15k")["revision"], "bdd27f4d94b9c1f951818a7da7fd7aeea5dbff1a")
@@ -281,11 +303,11 @@ class CheckableProblemTests(unittest.TestCase):
         self.assertEqual(_convert("aqua_check", {"question": "x?", "options": ["A)1", "B)2"], "correct": "E"}), [])
         self.assertEqual(_convert("hellaswag_check", {"ctx": "c", "label": "", "endings": ["a", "b"]}), [])
 
-    def test_problem_sources_default_except_unlicensed_and_enrichment_parsers(self):
-        problems = [e for e in CATALOG if e["stage"] == "problems"]
+    def test_legacy_problem_sources_are_not_in_the_replacement_catalog(self):
+        problems = [e for e in LEGACY_CATALOG if e["stage"] == "problems"]
         self.assertTrue(all(e["parser"].endswith("_check") for e in problems))
         self.assertFalse(_entry("winogrande_check")["default"])
-        self.assertGreaterEqual(sum(e["default"] for e in problems), 10)
+        self.assertFalse(any(e["default"] for e in problems))
         self.assertEqual(_convert("simplewiki", {"id": "7", "title": "T", "text": "short"}), [])
         article = _convert("simplewiki", {"id": "7", "title": "T", "text": "word " * 60})[0]
         self.assertEqual((article["intent"], article["metadata"]["title"]), ("encyclopedia", "T"))
@@ -344,6 +366,22 @@ class NewConverterTests(unittest.TestCase):
         row = normalize(robots, source="catalog:no_robots")
         self.assertEqual((row["user"], row["assistant"]), ("Ideas?", "Many."))
 
+    def test_toolace_keeps_tool_schemas_calls_results_and_turn_order(self):
+        raw = {"system": "Available tools: [{\"name\":\"weather\"}]", "conversations": [
+            {"from": "user", "value": "Will it rain?"},
+            {"from": "assistant", "value": "[weather(city=\"Boston\")]"},
+            {"from": "tool", "value": "{\"rain\":true}"},
+            {"from": "assistant", "value": "Yes, the tool reports rain."}]}
+        row = _convert("toolace", raw)[0]
+        normalized = normalize(row, source="catalog:toolace")
+        self.assertEqual(normalized["intent"], "tool_use")
+        self.assertEqual([message["role"] for message in normalized["messages"]], ["system", "user", "assistant", "user", "assistant"])
+        self.assertIn("Available tools", normalized["messages"][0]["content"])
+        self.assertIn("<tool_call>", normalized["messages"][2]["content"])
+        self.assertIn("<tool_response>", normalized["messages"][3]["content"])
+        self.assertNotIn("groupId", row)
+        self.assertEqual(_convert("toolace", {**raw, "conversations": raw["conversations"][:1]}), [])
+
     def test_story_rows_normalise_as_plain_text_records(self):
         row = normalize(_convert("tinystories", {"text": "Tim had a red ball."})[0], source="catalog:tinystories")
         self.assertEqual(row["text"], "Tim had a red ball.")
@@ -377,23 +415,16 @@ class NewConverterTests(unittest.TestCase):
         self.assertEqual(converted["groupId"], "wikitext2:Aster Station")
 
 
-NEW_DEFAULTS = ("fineweb_edu", "openwebmath", "cosmopedia_khan", "gutenberg", "orca_math", "stackexchange_math", "magicoder_oss",
-                "stackexchange_unix", "smoltalk_magpie", "reddit_instruct")
-
-
 class HigherQualityCorpusTests(unittest.TestCase):
     """Converters for the second wave of corpora, each fed a small row in its source's real schema."""
 
-    def test_new_defaults_are_commercially_licensed_pinned_and_hash_checked(self):
-        defaults = default_catalog_ids()
-        for catalog_id in NEW_DEFAULTS:
-            with self.subTest(catalog_id):
-                entry = _entry(catalog_id)
-                self.assertIn(catalog_id, defaults)
-                self.assertRegex(entry["sha256"], r"^[0-9a-f]{64}$")
-                self.assertNotRegex(entry["license"].lower(), r"non-commercial|unspecified|unknown")
-                self.assertTrue(entry["records_hint"][0].isdigit() or entry["records_hint"].startswith("~"))
-                self.assertLess(entry.get("range_bytes", 0), 1_000_000_000)
+    def test_large_legacy_sources_are_not_in_the_replacement_catalog(self):
+        defaults = set(default_catalog_ids())
+        for catalog_id in ("fineweb_edu", "openwebmath", "cosmopedia_khan", "gutenberg", "orca_math",
+                           "stackexchange_math", "magicoder_oss", "stackexchange_unix", "smoltalk_magpie", "reddit_instruct"):
+            self.assertNotIn(catalog_id, defaults)
+            self.assertNotIn(catalog_id, {entry["id"] for entry in CATALOG})
+            self.assertRegex(_entry(catalog_id)["revision"], r"^[0-9a-f]{40}$")
         self.assertFalse(_entry("openbookqa")["default"])
         self.assertIn("no licence", _entry("openbookqa")["description"])
         self.assertEqual(_entry("gutenberg")["batch_size"], 8)
@@ -547,22 +578,10 @@ class BoundedDownloadTests(unittest.TestCase):
             self.assertEqual([c["assistant"] for c in converted], ["B) y", "A) p"])
 
 
-# Estimated characters each default language-stage entry yields: measured on the downloaded text (smaller sets), or read from the
-# Parquet footer of the pinned file (text column, uncompressed bytes minus length prefixes) for the larger shards.
-LANGUAGE_CHARS = {"tinystories": 62_800_000, "wikitext2": 10_300_000, "simplewiki": 260_000_000, "wikitext103_a": 251_600_000,
-                  "wikitext103_b": 251_500_000, "wikipedia_en_a": 414_400_000, "wikipedia_en_b": 375_800_000, "fineweb_edu": 874_800_000,
-                  "openwebmath": 422_300_000, "openwebmath_b": 427_200_000, "cosmopedia_khan": 88_400_000, "gutenberg": 226_600_000,
-                  "gutenberg_b": 310_000_000}
-WEB_LANGUAGE_IDS = ("fineweb_edu", "openwebmath", "openwebmath_b")
-
-
 class LanguageCorpusSizeTests(unittest.TestCase):
-    def test_default_language_corpus_is_three_to_five_billion_characters_with_a_bounded_web_share(self):
+    def test_replacement_catalog_has_no_general_language_corpus(self):
         defaults = {e["id"] for e in CATALOG if e["stage"] == "language" and e["default"]}
-        self.assertEqual(defaults, set(LANGUAGE_CHARS))
-        total = sum(LANGUAGE_CHARS.values())
-        self.assertTrue(3_000_000_000 <= total <= 5_000_000_000, total)
-        self.assertLessEqual(sum(LANGUAGE_CHARS[i] for i in WEB_LANGUAGE_IDS) / total, 0.70)
+        self.assertEqual(defaults, set())
 
     def test_whole_shards_are_unbounded_pinned_hashed_and_licensed(self):
         for catalog_id in ("fineweb_edu", "openwebmath", "openwebmath_b", "wikipedia_en_a", "wikipedia_en_b", "gutenberg", "gutenberg_b"):

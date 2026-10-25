@@ -161,7 +161,15 @@ export function anchoredDraft(base: number | null, spec: Spec, choices: Choices)
 }
 
 export function wordChanged(cur: Choices, draft: Choices): boolean {
-  return cur.V !== draft.V;
+  return cur.V !== draft.V || cur.U !== draft.U;
+}
+
+export function tokenizerDefaultSize(v: number, width: number, layers: number): number {
+  if (v === 0) return 263;
+  if (v === 2) return 50264;
+  if (v === 3) return 8192;
+  const wanted = 4 * layers * width;
+  return Math.min(32768, Math.max(1024, Math.round(wanted / 1024) * 1024));
 }
 
 export function sameChoices(a: Choices, b: Choices): boolean {

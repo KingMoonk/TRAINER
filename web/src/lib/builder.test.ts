@@ -46,7 +46,7 @@ import {
   wordChanged,
 } from "./builder";
 
-const choices = (over: Record<string, unknown> = {}) => ({ L: 2, H: 4, W: 64, V: 100, ...over }) as unknown as Choices;
+const choices = (over: Record<string, unknown> = {}) => ({ L: 2, H: 4, W: 64, V: 1, d: 64, T: 256, U: 1024, token_limit_millions: 0, ...over }) as unknown as Choices;
 const ver = (number: number, over: Record<string, unknown> = {}) => ({ number, name: `version ${number}`, spec: {}, ...over }) as unknown as Version;
 
 describe("detailOf", () => {
@@ -113,6 +113,10 @@ describe("comparing choices", () => {
   test("sameChoices compares by content", () => {
     expect(sameChoices(choices(), choices())).toBe(true);
     expect(sameChoices(choices(), choices({ H: 8 }))).toBe(false);
+  });
+
+  test("a change to tokenizer vocabulary is a word-list change", () => {
+    expect(wordChanged(choices(), choices({ U: 4096 }))).toBe(true);
   });
 });
 

@@ -8,13 +8,13 @@ from unittest.mock import patch
 
 import studio_rl
 import studio_rules
-from studio_catalog import CATALOG, FORMAT_VERSION, convert_record, download_dataset, file_sha256, list_downloads, refresh_downloads, register_download
+from studio_catalog import ALL_CATALOG, FORMAT_VERSION, convert_record, download_dataset, file_sha256, list_downloads, refresh_downloads, register_download
 from studio_core import Workspace
 from studio_model import LocalModel, train
 
 
 def entry(catalog_id):
-    return next(e for e in CATALOG if e["id"] == catalog_id)
+    return next(e for e in ALL_CATALOG if e["id"] == catalog_id)
 
 
 def tree(tree_id, lang, text="hello"):

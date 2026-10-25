@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, File, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from studio_api.app import get_services
+from studio_voice import DEFAULT_TTS_VOICE
 
 router = APIRouter(prefix="/voice", tags=["voice"])
 
@@ -35,6 +36,7 @@ class Transcript(BaseModel):
 
 class SpeakRequest(BaseModel):
     text: str
+    voice: str = DEFAULT_TTS_VOICE
 
 
 @router.get("", response_model=VoiceStatus)
@@ -51,5 +53,5 @@ def transcribe(audio: Annotated[UploadFile, File(description="16 kHz mono 16-bit
 
 @router.post("/speak", responses={200: {"content": {"audio/wav": {"schema": {"type": "string", "format": "binary"}}}}})
 def speak(body: SpeakRequest, services=Depends(get_services)):
-    """The text spoken in the default voice, as WAV. The first call loads the model, which takes a while."""
-    return Response(services.speak(body.text), media_type="audio/wav")
+    """The text spoken in the selected voice, as WAV. The first call loads the model, which takes a while."""
+    return Response(services.speak(body.text, body.voice), media_type="audio/wav")

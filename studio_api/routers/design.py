@@ -59,17 +59,25 @@ class Choices(BaseModel):
     V: int = Field(ge=0, le=3)
     d: int = Field(ge=1)
     T: int = Field(ge=1)
+    U: int = Field(default=263, ge=263, le=65536)
+    token_limit_millions: int = Field(default=0, ge=0, le=1000000)
     M: Parts
     O: list[Own] = []
 
 
 def choices_in(c: Choices):
-    return dict(L=c.L, H=c.H, W=c.W, V=c.V, d=c.d, T=c.T, M=c.M.model_dump(), O={(o.block, o.slot): o.id for o in c.O})
+    out = dict(L=c.L, H=c.H, W=c.W, V=c.V, d=c.d, T=c.T, M=c.M.model_dump(), O={(o.block, o.slot): o.id for o in c.O})
+    if "U" in c.model_fields_set:
+        out["U"] = c.U
+    if "token_limit_millions" in c.model_fields_set:
+        out["token_limit_millions"] = c.token_limit_millions
+    return out
 
 
 def choices_out(s) -> Choices:
     own = [Own(block=block, slot=slot, id=short) for (block, slot), short in sorted(s["O"].items())]
-    return Choices(L=s["L"], H=s["H"], W=s["W"], V=s["V"], d=s["d"], T=s["T"], M=Parts(**s["M"]), O=own)
+    return Choices(L=s["L"], H=s["H"], W=s["W"], V=s["V"], d=s["d"], T=s["T"], U=s["U"],
+                   token_limit_millions=s["token_limit_millions"], M=Parts(**s["M"]), O=own)
 
 
 # ---------------------------------------------------------------------------------------------- the registry
