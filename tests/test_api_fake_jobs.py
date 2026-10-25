@@ -35,6 +35,30 @@ class FakeJobTests(ApiCase):
             threading.Event().wait(.05)
         self.assertEqual((quick.status, quick.result, waiting.status), ("done", "now", "queued"))
 
+    def test_a_slow_read_lane_does_not_hold_the_main_worker_and_the_same_read_is_shared(self):
+        import threading
+        from studio_api.jobs import Jobs
+        release, started = threading.Event(), threading.Event()
+        jobs = Jobs(FakeServices(job_steps=STEPS, step_seconds=0, sleep=lambda s: None))
+        self.addCleanup(jobs.close)
+        self.addCleanup(release.set)
+        scan = jobs.submit("data", lambda stop: (started.set(), release.wait(10)), lane="reads", key=("data", "text", ""))
+        self.assertTrue(started.wait(5))
+        self.assertIs(jobs.submit("data", lambda stop: "second", lane="reads", key=("data", "text", "")), scan)  # shared, not queued again
+        self.assertIsNot(jobs.submit("data", lambda stop: "other", lane="reads", key=("data", "problems", "")), scan)
+        quick = jobs.submit("quick", lambda stop: "now")  # the main worker is free
+        for _ in range(100):
+            if quick.status == "done":
+                break
+            threading.Event().wait(.05)
+        self.assertEqual((quick.status, scan.status), ("done", "running"))
+        release.set()
+        for _ in range(100):
+            if scan.status == "done":
+                break
+            threading.Event().wait(.05)
+        self.assertIsNot(jobs.submit("data", lambda stop: "again", lane="reads", key=("data", "text", "")), scan)  # finished: a new one
+
     def test_snapshot_events_are_opt_in_and_name_a_step(self):
         self.assertEqual(self.services.snapshot_every, 0)  # the default fake emits only stats, so the sequence above is unchanged
         seen = []
