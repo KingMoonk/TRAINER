@@ -2463,17 +2463,19 @@ class WorkspaceServices(Services):
                 os.nice(10)  # lowers this thread only on Linux; not available on Windows
             except (AttributeError, OSError):
                 pass
-            try:
-                self.approve_catalog_sets()
-            except Exception:  # noqa: BLE001 - the passes below still run
-                logging.getLogger(__name__).exception("approving the catalogue sets failed")
             while not stop.is_set():
                 try:
                     self.precache_set_sizes()
                 except Exception:  # noqa: BLE001 - a broken pass must not end the thread
                     logging.getLogger(__name__).exception("precaching set sizes failed")
                 stop.wait(interval)
+        def approve():
+            try:
+                self.approve_catalog_sets()
+            except Exception:  # noqa: BLE001 - the measuring does not depend on it
+                logging.getLogger(__name__).exception("approving the catalogue sets failed")
         self._precacher = start_thread(run)
+        start_thread(approve)  # its own thread: a slow pass over the rows never holds up the measuring
         return self._precacher
 
     def approve_catalog_sets(self):

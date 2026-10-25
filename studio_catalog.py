@@ -1101,8 +1101,10 @@ def approve_catalog_rows(workspace):
         if not dataset.get("catalogId") or dataset.get("storage") != "sqlite":
             continue
         with workspace._connect({dataset["id"]}) as connection:
-            waiting = connection.execute("UPDATE records SET quality='Good', payload=json_set(payload, '$.quality', 'Good') "
-                                         "WHERE dataset_id=? AND quality='Review'", (dataset["id"],)).rowcount
+            waiting = 0
+            for kind in ("text", "conversations", "problems"):  # by (dataset, kind, quality): an index seek, not a read of every row
+                waiting += connection.execute("UPDATE records SET quality='Good', payload=json_set(payload, '$.quality', 'Good') "
+                                              "WHERE dataset_id=? AND kind=? AND quality='Review'", (dataset["id"], kind)).rowcount
         if waiting:
             changed.append(dataset["id"])
     return changed
