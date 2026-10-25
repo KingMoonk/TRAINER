@@ -171,6 +171,10 @@ def start_queue(services: Services) -> QueueStateModel:
     """Services.start_queue: let jobs saved as waiting by an earlier session run. Answers with the queue's state after the start: it
     waits up to a few seconds for a job that fails at once (no room on the disk, a refused checkpoint) and reports it under `failed`
     with its sentence, instead of a bare 200 followed by a job that has quietly gone."""
+    return _start_and_settle(services)
+
+
+def _start_and_settle(services):
     before = _failed_ids(services)
     services.start_queue()
     waited = 0.
@@ -178,6 +182,18 @@ def start_queue(services: Services) -> QueueStateModel:
         sleep(SETTLE_STEP_S)
         waited += SETTLE_STEP_S
     return _state(services)
+
+
+@router.post("/jobs/{job_id}/start_now")
+def start_now(job_id: str, services: Services) -> QueueStateModel:
+    """Run a waiting job now: release it if held, put it first in Up next, lift a pause and start the queue, answering as Start
+    does. A job already running is not stopped: the chosen one goes next. The plan (hours, battery, idle) still holds it."""
+    _waiting(services, job_id)
+    services.hold(job_id, False)
+    services.move(job_id, 0)
+    if services.queue().paused:
+        services.resume()
+    return _start_and_settle(services)
 
 
 @router.post("/jobs/{job_id}/move_up")

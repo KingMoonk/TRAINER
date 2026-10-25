@@ -20663,6 +20663,49 @@
         ]
       }
     },
+    "/queue/jobs/{job_id}/start_now": {
+      "post": {
+        "description": "Run a waiting job now: release it if held, put it first in Up next, lift a pause and start the queue, answering as Start\ndoes. A job already running is not stopped: the chosen one goes next. The plan (hours, battery, idle) still holds it.",
+        "operationId": "start_now_queue_jobs__job_id__start_now_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueStateModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Now",
+        "tags": [
+          "queue"
+        ]
+      }
+    },
     "/queue/next_step": {
       "get": {
         "description": "Services.next_step: the single \"what next\" answer.",
