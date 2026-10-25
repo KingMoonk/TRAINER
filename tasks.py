@@ -10,6 +10,7 @@
     python tasks.py web:e2e                   Playwright e2e flows against web/out. CI only: run web:build first, and `pnpm exec playwright install chromium` once.
     python tasks.py web:fixtures              re-record web/src/contract/fixtures from FakeServices (tests/web_fixtures.py); then run web:test.
     python tasks.py web:build                 next build: the static export in web/out.
+    python tasks.py voice:setup               voice mode's optional engines: pip-installs requirements-voice.txt into .venv, clones the Breeze TTS code, fetches both models' weights (several GB). Run by the person, never by the app.
     python tasks.py setup                     once per machine: .venv, the right torch (MPS on a Mac, CUDA with nvidia-smi), requirements, pnpm install; prints the device. Any Python 3.12+.
     python tasks.py dev                       the live loop: the API (restarts on a .py change) and `pnpm dev` on 127.0.0.1, one terminal, Ctrl+C stops both; points `tailscale serve` at them. docs/node.md, "Developing".
     python tasks.py run                       the built app (app.py on 127.0.0.1:8787); points `tailscale serve` at it.
@@ -158,6 +159,26 @@ def web_fixtures():
     run(PY, "-m", "tests.web_fixtures")
 
 
+def voice_pins(torch_version, numpy_version):
+    """The pip arguments that keep the app's torch and numpy as they are while the voice packages install. qwen-tts wants torchaudio
+    unpinned, and the newest one from PyPI would replace a CUDA torch with PyPI's (CPU-only on Windows): torch is held at the build
+    `setup` installed, and torchaudio comes from that build's index (the "+cu130" in its version), or the install stops."""
+    pins = VOICE / "constraints.txt"
+    pins.parent.mkdir(parents=True, exist_ok=True)
+    pins.write_text(f"torch=={torch_version}\nnumpy=={numpy_version}\n", encoding="utf-8")
+    local = torch_version.partition("+")[2]
+    return ["-c", str(pins)] + (["--extra-index-url", f"https://download.pytorch.org/whl/{local}"] if local.startswith("cu") else [])
+
+
+def voice_setup():
+    """Install voice mode's engines into .venv and fetch their weights (studio_voice.py, requirements-voice.txt)."""
+    found = subprocess.run([PY, "-c", "import numpy, torch; print(torch.__version__, numpy.__version__)"], capture_output=True, text=True, check=False)
+    if found.returncode:
+        sys.exit("torch and numpy must import first. Run `make setup`.")
+    run(PY, "-m", "pip", "install", *voice_pins(*found.stdout.split()), "-r", "requirements-voice.txt")
+    run(PY, "studio_voice.py")
+
+
 def web_build():
     pnpm("build")
 
@@ -166,6 +187,7 @@ VENV = Path(__file__).with_name(".venv")
 VENV_PY = VENV / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
 TORCH = "torch>=2.14.1,<3"  # as in requirements-training.txt
 CUDA_INDEX = "https://download.pytorch.org/whl/cu126"  # requirements-gpu.txt
+VOICE = Path(__file__).resolve().parent / ".voice"  # studio_voice.VOICE_DIR
 MIN_PYTHON = (3, 12)
 API_PORT, WEB_PORT = 8787, 3000
 DEV_SERVE = {"/": f"http://127.0.0.1:{WEB_PORT}", "/api/": f"http://127.0.0.1:{API_PORT}"}  # `dev`: the page, and the API under /api/
@@ -528,7 +550,7 @@ def network_bench(args):
 
 TASKS = {"test": test, "test:ci": test_ci, "test:ci:e2e": test_ci_e2e, "profile": profile,
          "web:lint": web_lint, "web:test": web_test, "web:e2e": web_e2e, "web:fixtures": web_fixtures,
-         "web:build": web_build, "network:bench": network_bench, "setup": setup, "dev": dev, "run": run_app}
+         "web:build": web_build, "network:bench": network_bench, "voice:setup": voice_setup, "setup": setup, "dev": dev, "run": run_app}
 
 if __name__ == "__main__":
     name, args = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ("", [])

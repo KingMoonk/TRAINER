@@ -1,0 +1,30 @@
+{
+  "body": {
+    "engines": [
+      {
+        "device": "cpu",
+        "engine": "stt",
+        "installed": true,
+        "label": "Speech to text",
+        "loaded": false,
+        "missing": "",
+        "model": "nvidia/parakeet-tdt-0.6b-v3"
+      },
+      {
+        "device": "cpu",
+        "engine": "tts",
+        "installed": true,
+        "label": "Text to speech",
+        "loaded": false,
+        "missing": "",
+        "model": "BreezeBlue/Breeze-TTS-2"
+      }
+    ]
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/voice"
+  },
+  "status": 200
+}

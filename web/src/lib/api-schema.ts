@@ -3704,6 +3704,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/voice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Status
+         * @description Both engines, speech to text first.
+         */
+        get: operations["status_voice_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/voice/speak": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Speak
+         * @description The text spoken in the default voice, as WAV. The first call loads the model, which takes a while.
+         */
+        post: operations["speak_voice_speak_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/voice/transcribe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transcribe
+         * @description The words in the recording. The first call loads the model, which takes a while.
+         */
+        post: operations["transcribe_voice_transcribe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3833,6 +3893,14 @@ export interface components {
             name: string;
             /** Weights */
             weights?: string | null;
+        };
+        /** Body_transcribe_voice_transcribe_post */
+        Body_transcribe_voice_transcribe_post: {
+            /**
+             * Audio
+             * @description 16 kHz mono 16-bit PCM WAV
+             */
+            audio: string;
         };
         /** BusyItem */
         BusyItem: {
@@ -4664,6 +4732,41 @@ export interface components {
             step?: number | null;
             /** Text */
             text: string;
+        };
+        /** Engine */
+        Engine: {
+            /**
+             * Device
+             * @description where it is loaded ('cuda' or 'cpu'); null when not loaded
+             */
+            device: string | null;
+            /**
+             * Engine
+             * @description 'stt' (speech to text) or 'tts' (text to speech)
+             */
+            engine: string;
+            /**
+             * Installed
+             * @description false until `make voice-setup` has installed it
+             */
+            installed: boolean;
+            /** Label */
+            label: string;
+            /**
+             * Loaded
+             * @description true once a request has loaded it; it stays loaded until a training job needs the GPU
+             */
+            loaded: boolean;
+            /**
+             * Missing
+             * @description a sentence naming what is missing and the command that fixes it; empty when installed
+             */
+            missing: string;
+            /**
+             * Model
+             * @description the model's name on Hugging Face
+             */
+            model: string;
         };
         /** EnoughText */
         EnoughText: {
@@ -8123,6 +8226,11 @@ export interface components {
             /** Web */
             web?: boolean | null;
         };
+        /** SpeakRequest */
+        SpeakRequest: {
+            /** Text */
+            text: string;
+        };
         /** SpecBody */
         SpecBody: {
             /** Spec */
@@ -8657,6 +8765,11 @@ export interface components {
             blocks: components["schemas"]["Block"][];
             knobs: components["schemas"]["Knobs"];
         };
+        /** Transcript */
+        Transcript: {
+            /** Text */
+            text: string;
+        };
         /** Tried */
         Tried: {
             /** @description the current version's choices with that one change; null when it cannot be tried */
@@ -8817,6 +8930,11 @@ export interface components {
         VersionRequest: {
             /** Version */
             version?: number | null;
+        };
+        /** VoiceStatus */
+        VoiceStatus: {
+            /** Engines */
+            engines: components["schemas"]["Engine"][];
         };
         /** Warm */
         Warm: {
@@ -14939,6 +15057,93 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SharedVersion"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    status_voice_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceStatus"];
+                };
+            };
+        };
+    };
+    speak_voice_speak_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpeakRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "audio/wav": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    transcribe_voice_transcribe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_transcribe_voice_transcribe_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Transcript"];
                 };
             };
             /** @description Validation Error */

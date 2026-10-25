@@ -142,6 +142,8 @@ class ChatDevice(unittest.TestCase):
             self.chat()
             model = self.made["m.npz"]
             model.hold = threading.Event()
+            self.addCleanup(model.hold.set)  # a failed check below must not leave the reply (and its patches) running into later tests
+            model.started.clear()  # set by the first reply: wait for the second one to be under way
             reply = threading.Thread(target=self.chat)
             reply.start()
             self.assertTrue(model.started.wait(10))
