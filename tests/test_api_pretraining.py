@@ -214,6 +214,18 @@ class PretrainingRouterTests(ApiCase):
         self.assertEqual((plan["estimating"], plan["can_add"], plan["steps"], plan["job"]), (True, False, None, None))
         self.assertIn("still being worked out", plan["reason"])
 
+    def test_text_with_nothing_a_run_may_use_says_so_and_start_queues_nothing(self):
+        self.save_versions()
+        self.services.cached_preview = lambda ids, rows=16: {"pieces": None, "params": 1_000_000, "context": 256, "first_rows": []}
+        self.services.no_usable_text = lambda ids: [("TinyStories", 77941)]
+        plan = self.plan()
+        self.assertEqual((plan["estimating"], plan["can_add"], plan["job"]), (False, False, None))
+        self.assertIn("TinyStories (77,941 rows waiting for review)", plan["reason"])
+        before = len(self.services.queue().up_next)
+        refused = self.call("POST", "/pretraining/start", 409, json={"dataset_ids": ["Your files"]})
+        self.assertIn("TinyStories", refused["detail"])
+        self.assertEqual(len(self.services.queue().up_next), before)
+
     def test_no_design_blocks_adding_and_a_named_version_is_used(self):
         plan = self.plan()
         self.assertEqual((plan["version"], plan["can_add"], plan["job"]), (None, False, None))

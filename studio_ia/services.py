@@ -404,6 +404,11 @@ class Services:
         when the answer is already known)."""
         raise NotImplementedError
 
+    def no_usable_text(self, dataset_ids):
+        """[(set name, rows waiting for review)] for chosen sets that have text but none a run may use (generated text not yet marked
+        Good is a draft and used for nothing). Empty when nothing is known to be wrong."""
+        return []
+
     def cached_preview(self, dataset_ids, rows=16):
         """pretrain_preview's answer if already known without work, else None. The default always knows it."""
         return self.pretrain_preview(dataset_ids, rows)
@@ -2317,6 +2322,20 @@ class WorkspaceServices(Services):
         if any(self._set_size(i, spec) is None for i in ids):
             return None
         return self._compose_preview(spec, ids, rows)
+
+    def no_usable_text(self, dataset_ids):
+        import studio_spec
+        v = self.current_version()
+        if v is None or not v.spec:
+            return []
+        spec = studio_spec.validate_spec(v.spec)
+        out = []
+        for set_id in self._preview_ids(dataset_ids):
+            found = self._set_size(set_id, spec)
+            waiting = self.workspace.review_count(set_id) if found and not found["sample_characters"] else 0
+            if waiting:  # measured, the sampler found no text it may use, and rows are waiting for review
+                out.append(((self.workspace._dataset(set_id) or {}).get("name", set_id), waiting))
+        return out
 
     def _preview_ids(self, dataset_ids):
         return list(dict.fromkeys(dataset_ids or [d["id"] for d in self.workspace.state["datasets"]]))

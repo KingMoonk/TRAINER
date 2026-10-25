@@ -197,6 +197,17 @@ class WorkspaceRows(unittest.TestCase):
         self.assertGreater(after["pieces"], preview["pieces"])
         self.assertTrue(after["estimated"])
 
+    def test_a_set_of_unreviewed_generated_text_is_reported_as_having_nothing_to_train_on(self):
+        drafts = self.ws.create_dataset("generated stories")
+        self.ws.add(drafts, [{"text": f"a generated tale {i} " * 6, "synthetic": True, "quality": "Review"} for i in range(12)])
+        self.svc.save_version(default_spec(), "first design")
+        self.assertEqual(self.svc.no_usable_text([drafts]), [])  # not measured yet: nothing is known
+        self.svc.pretrain_preview([drafts], rows=6)
+        self.assertEqual(self.svc.no_usable_text([drafts]), [("generated stories", 12)])
+        self.assertEqual(self.svc.no_usable_text([self.text]), [])
+        self.svc.pretrain_preview([self.text], rows=6)
+        self.assertEqual(self.svc.no_usable_text([self.text, drafts]), [("generated stories", 12)])
+
     def test_any_combination_of_measured_sets_is_served_without_the_tokenizer(self):
         from unittest import mock
         import studio_spec
