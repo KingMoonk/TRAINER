@@ -481,6 +481,19 @@ class QueueTests(unittest.TestCase):
         self.assertTrue(wait(lambda: main.status == "stopped"))
         self.assertIn("cooldown of " + main.id, self.fake.ran)
 
+    def test_stop_after_cooldown_without_a_checkpoint_just_stops(self):
+        r = self.runner()
+        run = Path(self.path).parent / "no_checkpoint"
+        run.mkdir(parents=True)
+        main = r.enqueue(self.job("long", "pretrain", output_dir=str(run)))
+        r.start()
+        self.assertTrue(wait(lambda: self.fake.steps > 2))
+        with self.assertNoLogs("studio_queue", level="ERROR"):
+            r.stop_after_cooldown()
+            self.assertTrue(wait(lambda: main.status == "stopped"))
+        self.assertNotIn("cooldown of " + main.id, self.fake.ran)
+        self.assertFalse(r.checkpoint_now())  # nothing to cool down from
+
     def test_yield_running_runs_the_waiting_job_first_and_puts_the_running_one_back_in_the_queue(self):
         r = self.runner()
         main = r.enqueue(self.job("long", "pretrain"))

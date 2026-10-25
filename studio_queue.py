@@ -458,6 +458,11 @@ class Runner:
         handler = self.handlers.get("checkpoint_now")
         if not main or not handler:
             return False
+        run = main.params.get("output_dir")
+        if run and not (Path(run) / "last.npz").is_file():  # nothing saved yet to cool down from
+            if not then_stop:
+                self._emit("checkpoint", {"job": main.id, "phase": "failed", "error": "The run has not saved a checkpoint yet."})
+            return False
         child = Job("checkpoint_now", f"Checkpoint of {main.label or main.kind}", params={**main.params, "parent": main.id})
 
         def work():
@@ -468,11 +473,8 @@ class Runner:
                 error = handle.error
             except Exception as exc:  # noqa: BLE001
                 error = explain(exc)[0]
-            if error:
-                self._emit("checkpoint", {"job": main.id, "phase": "failed", "error": error})
-                return
-            self._emit("checkpoint", {"job": main.id, "phase": "done"})
-            if then_stop:
+            self._emit("checkpoint", {"job": main.id, **({"phase": "failed", "error": error} if error else {"phase": "done"})})
+            if then_stop:  # a failed cool-down still stops: the person asked for the run to end
                 self.stop_event.set()
                 self.wake.set()
         threading.Thread(target=work, daemon=True).start()
