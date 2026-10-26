@@ -17,7 +17,12 @@ export const T = {
   teacherLabel: "Teacher",
   previousBest: "Another trained version",
   thisModelCorrection: "This model, shown your correction as a hint",
-  previousDesc: "{version}. Same word list and reading window as this model; pick a stronger one if you have it.",
+  previousDesc:
+    "{version}. Same word list and reading window as this model, and the earlier version with the lowest answer loss among those whose Round 1 passed.",
+  noDefaultTeacher: "No earlier version has a passed Round 1 yet, so no teacher is preselected: pick one below, or run Round 1 on an earlier version first.",
+  teacherChatPassed: "answer loss {loss}, Round 1 passed",
+  teacherChatFailed: "answer loss {loss}, Round 1 did not pass",
+  teacherNoChat: "Round 1 not run",
   noPrevious: "No other trained version shares this model's word list yet: train another first, or teach a correction in Chat.",
   correctionDesc:
     "From Chat's \"Teach a correction\": the same model is shown your correction as a hint and learns to answer as if it had it. This only works if the model can use a hint.",
@@ -29,7 +34,7 @@ export const T = {
   forEachPair:
     "For each pair you rated, the learning copy widens the gap between your pick and the other, compared with the frozen starting copy. Both can become less likely; the gap is what it is trained on.",
   fewThousand:
-    "A few thousand is enough. Only the answer part is scored. No frozen copy and no leash: this round is ordinary training on good examples.",
+    "A few thousand conversations teach the chat format; more keep improving the answers. It trains about two passes over all your conversations, up to 2,000 steps, so a large mix takes a while. Only the answer part is scored. No frozen copy and no leash: this round is ordinary training on good examples.",
   rulesCheck:
     "Rules it can check: copy, reverse, sort, count, small addition, stay under a length, end cleanly, and the answer key an imported set came with (a final number or an option letter). A teacher's rubric can add a smaller second score, but an answer that fails a rule gets the minimum whatever the rubric says.",
   spreadSome: "{taught} of {groups} {groupsWord} had both a better and a worse answer; only those teach the model.",
