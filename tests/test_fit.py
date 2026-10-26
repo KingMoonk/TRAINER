@@ -130,7 +130,7 @@ class MembersTests(unittest.TestCase):
         self.assertEqual(found["flagged"], [])
 
     def test_a_member_that_cannot_fit_is_flagged_and_the_others_are_not_scaled_for_it(self):
-        cfg = config(rows=8, width=1024, layers=24, context=2048)
+        cfg = config(rows=8, width=1024, layers=24, context=1024)
         found = F.fit_members(cfg, [{"name": "tiny", "profile": machine(vram=1, free=.2)}, {"name": "tower", "profile": machine(vram=80, free=78)}])
         self.assertEqual(found["flagged"], ["tiny"])
         self.assertIn("tiny cannot take part", found["members"][0]["refusal"])
@@ -139,7 +139,7 @@ class MembersTests(unittest.TestCase):
 
 class RefitTests(unittest.TestCase):
     def params(self, **kw):
-        return {"config": config(rows=8), "mode": "from_scratch", **kw}
+        return {"config": config(rows=8, context=1024), "mode": "from_scratch", **kw}
 
     def test_refit_scales_a_fresh_job_from_what_was_declared(self):
         found = F.refit(self.params(), machine(), 1.)
