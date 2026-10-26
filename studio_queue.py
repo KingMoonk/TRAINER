@@ -18,6 +18,7 @@ from studio_failures import explain
 import studio_run_watch
 from studio_timing import timed
 
+WATCHED = ("pretrain", "pretrain_distributed")  # jobs whose out-of-memory halvings and free disk and RAM the queue watches while they run
 KINDS = ("pretrain", "quicktest", "compare", "post_round", "restore_answers", "checkpoint_now", "import_pretrained",
          "pretrain_distributed", "diloco_member", "rlhf_loop", "mlperf")
 MEMORY = {"half": .5, "most": .75, "all": 1.}
@@ -778,12 +779,22 @@ class Runner:
             if self.running is not job:
                 return
             kept = [n for n in self.notices if accumulate or n["kind"] != found["kind"]]
-            self.notices = [*kept, found][-studio_run_watch.OOM_SHOWN:]
+            self.notices = self._newest_of_each_kind([*kept, found])
             if accumulate or found["kind"] not in self._noted:
                 self._noted.add(found["kind"])
                 job.note = f"{job.note} {found['text']}".strip()
                 self._save()
         self._emit("queue", {"job": job.id})
+
+    @staticmethod
+    def _newest_of_each_kind(notices):
+        """`notices` with at most OOM_SHOWN of each kind (the newest, in their order): a burst of one kind never pushes out the others."""
+        counts, kept = {}, []
+        for notice in reversed(notices):
+            counts[notice["kind"]] = counts.get(notice["kind"], 0) + 1
+            if counts[notice["kind"]] <= studio_run_watch.OOM_SHOWN:
+                kept.append(notice)
+        return kept[::-1]
 
     def _clear(self, job, kind):
         """Drop the notice of `kind` once what it said no longer holds (the job's note keeps what was said)."""
@@ -794,13 +805,15 @@ class Runner:
         self._emit("queue", {"job": job.id})
 
     def _watch_event(self, job, event, first_step, earlier=(0, 0.)):
-        """What a running pretrain job's progress events say: a batch halved after running out of memory, and where its pace puts its end."""
-        if job.kind != "pretrain":
+        """What a running pretrain job's progress events say: a batch halved after running out of memory, and where its pace puts its end.
+        A distributed run's local member trains with the same loop, so its halvings are noticed too; its pace is the run's rounds, not a
+        projection of this member's steps, so no overrun is read for it."""
+        if job.kind not in WATCHED:
             return
         found = studio_run_watch.oom_notice(event)
         if found:
             self._notify(job, found, accumulate=True)
-        if event.get("type") != "metric" or not event.get("elapsed_seconds") or time.monotonic() - self._pace_at < self.watch_every / 3:
+        if job.kind != "pretrain" or event.get("type") != "metric" or not event.get("elapsed_seconds") or time.monotonic() - self._pace_at < self.watch_every / 3:
             return
         self._pace_at = time.monotonic()
         found = studio_run_watch.projection(
@@ -815,7 +828,7 @@ class Runner:
     def _watch_machine(self, job):
         """Read the machine again (every `watch_every` seconds) and say on the running job when its free disk or RAM has fallen below what
         the run needs. Nothing is stopped: the run goes on and the person decides."""
-        if self.profile is None or job.kind != "pretrain" or time.monotonic() - self._read_at < self.watch_every:
+        if self.profile is None or job.kind not in WATCHED or time.monotonic() - self._read_at < self.watch_every:
             return
         self._read_at = time.monotonic()
         try:
