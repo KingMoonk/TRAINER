@@ -99,8 +99,11 @@ def text_sample(workspace, dataset_ids, budget=5_000_000, exclude=()):
 
 
 def text_characters(workspace, dataset_ids, exclude=()):
-    """Total characters of the chosen sets' plain text, without tokenizing or sampling: disk sets give it from the stored per-row
-    character counts (one SUM), in-memory sets are read whole. `exclude` holds texts to leave out (the held-back documents)."""
+    """Total characters of the chosen sets' training text, counted the way studio_corpus.characters_of counts a text example and
+    without tokenizing or sampling: disk sets give it from the stored per-row character counts (a text row stores its text's length),
+    summed over the text rows that are not unreviewed drafts and minus the held-back documents in `exclude` (found by their
+    fingerprint); in-memory sets are read whole. Conversations, problems and drafts add nothing, so the sets' shares do not
+    favour record-heavy ones."""
     total, on_disk = 0, []
     for dataset_id in dataset_ids:
         if (workspace._dataset(dataset_id) or {}).get("storage") == "sqlite":
@@ -109,8 +112,14 @@ def text_characters(workspace, dataset_ids, exclude=()):
         total += sum(len(e["text"]) for e in pretraining_examples(workspace, [dataset_id]) if e.get("text") and e["text"] not in exclude)
     if on_disk:
         marks = ",".join("?" * len(on_disk))
+        counted = f"dataset_id IN ({marks}) AND kind='text' AND NOT (quality='Review' AND json_extract(payload, '$.synthetic')=1)"
+        held = [studio_core.fingerprint({"text": text}) for text in set(exclude) if text]
         with workspace._connect() as connection:
-            total += connection.execute(f"SELECT COALESCE(SUM(characters),0) FROM records WHERE dataset_id IN ({marks})", on_disk).fetchone()[0]
+            total += connection.execute(f"SELECT COALESCE(SUM(characters),0) FROM records WHERE {counted}", on_disk).fetchone()[0]
+            for start in range(0, len(held), 500):  # SQLite caps the parameters of one statement
+                chunk = held[start:start + 500]
+                total -= connection.execute(f"SELECT COALESCE(SUM(characters),0) FROM records WHERE {counted} "
+                                            f"AND fingerprint IN ({','.join('?' * len(chunk))})", (*on_disk, *chunk)).fetchone()[0]
     return total
 
 
