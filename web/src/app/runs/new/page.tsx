@@ -152,7 +152,7 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
       if (several) {
         const body = startBody({ ...form, machines: peers });
         if (!body) throw new Error(T.needSettings);
-        return (await unwrap(api.POST("/distributed/runs", { body: confirmedLeaveOut ? { ...body, leave_out_unfit: true } : body }))).id;
+        return (await unwrap(api.POST("/distributed/runs", { body: confirmedLeaveOut ? { ...body, leave_out: flagged } : body }))).id;
       }
       const id =
         stage === "pretrain"

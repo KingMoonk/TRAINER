@@ -193,6 +193,7 @@ describe("Queue page with several machines", () => {
     const { calls } = server(state, {
       extra: {
         "GET /distributed/defaults": { body: DEFAULTS },
+        "POST /distributed/sizing": { body: { members: [], flagged: [], rounds: 10, rounds_cut: false, note: "" } },
         "POST /distributed/runs": () => {
           state.queue.up_next = [run, state.queue.up_next[1]];
           state.jobs = state.jobs.map((r) => (r.id === "w1" ? row("r1", run.label, { kind: "pretrain_distributed" }) : r));
@@ -222,6 +223,44 @@ describe("Queue page with several machines", () => {
     expect(await screen.findByText("It now trains on 2 machines together.")).toBeInTheDocument();
     act(() => void toast.dismiss());
     await waitFor(() => expect(screen.queryByText("It now trains on 2 machines together.")).toBeNull());
+  });
+
+  test("all machines asks before leaving out a machine that cannot hold its share, then sends the confirmed names", async () => {
+    const state = twoMachines();
+    state.queue.up_next = [job("w1", "First waiting", { params: { version: 3, datasets: ["Your files"] } })];
+    const DEFAULTS = { rounds: 10, inner_steps: 100, remote_inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, delta_dtype: "float16", max_steps: 1_000_000 };
+    const refusal = "gpu-box cannot take part: it has 200 MB of GPU memory for this run and the design needs about 9 GB even at one row.";
+    const member = (name: string, address: string, fits: boolean) => ({ name, address, sized: true, fits, batch_size: 16, accumulation: 1, offload: false, notes: [], refusal: fits ? "" : refusal });
+    const { calls } = server(state, {
+      extra: {
+        "GET /distributed/defaults": { body: DEFAULTS },
+        "POST /distributed/sizing": {
+          body: { members: [member("mac-mini", "local", true), member("gpu-box", "gpu-box:8000", false)], flagged: ["gpu-box"], rounds: 4, rounds_cut: true, note: "Token budget 5B -> 100M. Rounds 10 -> 4.", token_budget: null, tokens_per_second: null },
+        },
+        "POST /distributed/runs": { status: 201, body: { id: "r1", members: [{ node: "mac-mini" }] } },
+      },
+    });
+    const user = userEvent.setup();
+    renderPage(<QueuePage />);
+
+    const select = await screen.findByRole("combobox", { name: "Run on: First waiting" });
+    await user.selectOptions(select, "All machines (DiLoCo)");
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("Start without gpu-box?");
+    expect(dialog).toHaveTextContent(refusal);
+    expect(dialog).toHaveTextContent("Rounds 10 -> 4.");
+    expect(calls.find((c) => c.path === "/distributed/runs")).toBeUndefined(); // nothing starts before the person confirms
+
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(calls.find((c) => c.path === "/distributed/runs")).toBeUndefined();
+
+    await user.selectOptions(select, "All machines (DiLoCo)");
+    await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Start without gpu-box" }));
+    await waitFor(() => expect(calls.find((c) => c.path === "/distributed/runs")).toBeDefined());
+    expect(calls.find((c) => c.path === "/distributed/runs")?.body).toMatchObject({ replaces: "w1", all_machines: true, leave_out: ["gpu-box"] });
+    expect(await screen.findByText("It now trains on 1 machines together.")).toBeInTheDocument();
+    act(() => void toast.dismiss());
   });
 
   test("two machines with the same hostname are told apart by their address", async () => {
