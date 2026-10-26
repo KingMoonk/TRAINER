@@ -210,11 +210,13 @@ def _resume(job, cfg, out, init, options, context=None):
     def relay(event):
         if not started:
             started.append(True)
-            step = studio_model.load_checkpoint(path)["step"]
+            saved = studio_model.load_checkpoint(path)
+            step = saved["step"]
             if asked:
                 emit({"type": "info", "text": f"Continuing from step {step:,} with the optimizer state it had" + (", on new text." if rebase else ".")})
             else:
-                said = {"type": "resumed", "base": int(job.params.get("resume_base") or 0), "step": step}
+                said = {"type": "resumed", "base": int(job.params.get("resume_base") or 0), "step": step,
+                        "earlier_tokens": saved.get("trained_tokens") or 0, "earlier_seconds": saved.get("elapsed_seconds") or 0.}
                 if job.params.get("resume_local"):  # this queue shows the progress itself, from the checkpoint's step
                     said["total"] = int(job.params.get("resume_steps") or cfg["steps"])
                 emit(said)

@@ -1773,7 +1773,7 @@ class WorkspaceServices(Services):
         except (OSError, ValueError):
             return None
         speeds = sorted(r["tokens_per_second"] for r in rows if ok(r.get("tokens_per_second")))
-        counted = [r for r in rows if ok(r.get("trained_tokens")) and ok(r.get("step"))]  # trained_tokens counts from this run's first step
+        counted = [r for r in rows if ok(r.get("trained_tokens")) and ok(r.get("step"))]  # trained_tokens counts the whole run, across resumes
         a, b = (counted[0], counted[-1]) if counted else (None, None)
         per_step = (b["trained_tokens"] - a["trained_tokens"]) / (b["step"] - a["step"]) if counted and b["step"] > a["step"] else None
         seconds = per_step / speeds[len(speeds) // 2] if speeds and per_step and per_step > 0 else None
