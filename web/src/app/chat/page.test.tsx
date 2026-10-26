@@ -92,6 +92,32 @@ describe("Chat page", () => {
     });
   });
 
+  test("a run in progress offers its live checkpoint: chat answers from it and says which step, Score now measures it", async () => {
+    const job = (result: unknown) => ({ id: "j1", kind: "versions.score_live", status: "done", result, progress: "", error: "", created_at: 0 });
+    let asked: unknown;
+    const saved = Date.now() / 1000 - 180;
+    mockVersions([version(1, { best_checkpoint: null, status: "training" })], {
+      "GET /versions/live": { body: [{ version: 1, step: 12000, total: 50000, saved_at: saved, file: "best.npz" }] },
+      "POST /versions/1/score-live": { body: job({ version: 1, step: 12000, saved_at: saved, bpc: 2.345, documents: 5 }) },
+      "POST /chat/reply": ({ body }) => {
+        asked = body;
+        return sse(frame("done", { text: "from the live one" }));
+      },
+    });
+    const user = userEvent.setup();
+    renderPage(<Page />, { route: "/chat" });
+    expect(await screen.findByText(/step 12,000 of 50,000 · saved 3 min ago/)).toBeVisible();
+    expect(screen.queryByText("No trained version yet.")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Chat with it" }));
+    expect(await screen.findByText(/Not the final model/)).toBeVisible();
+    await user.type(screen.getByLabelText("Your message"), "hi");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("from the live one")).toBeVisible();
+    expect(asked).toEqual({ version: 1, messages: [{ role: "user", content: "hi" }] });
+    await user.click(screen.getByRole("button", { name: "Score now" }));
+    expect(await screen.findByText(/2\.35 bits\/char at step 12,000 on 5 held-back documents/)).toBeVisible();
+  });
+
   test("compare asks both versions, shows a verdict, and saves the better reply as a rated pair", async () => {
     let pair: unknown;
     mockVersions([version(1), version(2)], {

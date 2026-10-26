@@ -164,7 +164,7 @@ class Checkpoints(unittest.TestCase):
         svc = WorkspaceServices(Workspace(self.root / "ws"))
         self.addCleanup(svc.close)
         messages, ask = [{"role": "user", "content": "Counting"}], lambda p: svc.chat(p, messages, None, None)
-        with mock.patch.object(svc, "_checkpoint", side_effect=lambda v: v):
+        with mock.patch.object(svc, "_checkpoint", side_effect=lambda v, live=False: v):
             first = ask(paths[0])
             for path in paths[1:]:
                 ask(path)

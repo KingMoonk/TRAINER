@@ -104,6 +104,30 @@ def current_version(services=Depends(get_services)):
     return services.current_version()
 
 
+class LiveCheckpoint(BaseModel):
+    """The newest checkpoint a run in progress has saved, for a version that has no final weights yet."""
+    version: int
+    step: int | None = Field(None, description="the training step it was saved at")
+    total: int = Field(0, description="the run's planned steps, 0 when unknown")
+    saved_at: float = Field(description="when the file was written, epoch seconds")
+    file: str = Field(description="best.npz or last.npz in the running job's folder")
+
+
+@router.get("/live", response_model=list[LiveCheckpoint])
+def live_checkpoints(services=Depends(get_services)):
+    """The runs in progress that have saved a checkpoint chat can answer from. A version appears here only while it trains and has no
+    final weights; the run's end removes it and Chat uses the final checkpoint."""
+    return services.live_checkpoints()
+
+
+@router.post("/{number}/score-live", response_model=JobOut, status_code=202)
+def score_live(number: int, request: Request, services=Depends(get_services)):
+    """Held-out bits per character of the version's run-in-progress checkpoint. The job's result is {version, step, saved_at, bpc,
+    documents}, for the caller only: nothing is stored, and the version's checkpoint, scorecard and status do not change."""
+    _known(services, number)
+    return _job(request, "versions.score_live", lambda stop: services.score_live(number))
+
+
 @router.post("/best", response_model=JobOut, status_code=202)
 def best_version(request: Request, services=Depends(get_services)):
     """The version Chat follows. Weighing versions scores their checkpoints on the held-back text, so it is a job."""

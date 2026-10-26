@@ -18,10 +18,13 @@ import { routeFor } from "@/lib/routes";
 import { postStream } from "@/lib/sse-post";
 import { CHAT as T } from "./copy";
 import { CheckpointStep, FewShotCheck, checkKey, useBestVersion } from "./checks";
+import { LiveCheckpoints, useNowSeconds } from "./live";
 import {
   canRate,
   changesCheckpoints,
   compareStart,
+  liveLabel,
+  liveOnly,
   scoreRows,
   trainedVersions,
   unfinished,
@@ -52,6 +55,12 @@ export default function Page() {
     queryFn: () => unwrap(api.GET("/versions")),
   });
   useLive(["versions"], []); // checkpoint events below are the fast path; this re-reads after a dropped stream or a hidden tab
+  const liveQuery = useQuery({
+    queryKey: ["versions", "live"],
+    queryFn: () => unwrap(api.GET("/versions/live")),
+  });
+  useLive(["versions", "live"], ["checkpoint"], { backstopMs: 15_000 }); // a run in progress saves again every few minutes
+  const nowSeconds = useNowSeconds();
   const cluster = useCluster().data;
   const published = usePublished(cluster).data;
   const multi = isCluster(cluster); // a cluster of one shows nothing about machines
@@ -59,6 +68,8 @@ export default function Page() {
   const numbers = trained.map((v) => v.number);
   const byNumber = new Map(trained.map((v) => [v.number, v]));
   const best = useBestVersion(trained);
+  const liveList = liveOnly(liveQuery.data ?? [], trained); // versions still on their first run that have saved a checkpoint
+  const liveByNumber = new Map(liveList.map((l) => [l.version, l]));
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -108,13 +119,13 @@ export default function Page() {
   }, [speaker.stop]);
 
   // A picked version that stopped being trained (or vanished) goes back to following the best one.
-  const following = picked === null || !byNumber.has(picked);
+  const following = picked === null || !(byNumber.has(picked) || liveByNumber.has(picked));
   const resolved = following ? best.data ?? null : picked;
   const busy = panes.some((p) => p.status === "streaming");
   const answering = busy && !compare ? replyVersion : resolved;
   const left = compare ? byNumber.get(compare[0]) : undefined;
   const right = compare ? byNumber.get(compare[1]) : undefined;
-  const ready = compare ? !!left && !!right : answering !== null && byNumber.has(answering) && (!following || (!best.isFetching && !best.isError));
+  const ready = compare ? !!left && !!right : answering !== null && (byNumber.has(answering) || liveByNumber.has(answering)) && (!following || (!best.isFetching && !best.isError));
 
   const setPane = (i: number, next: PaneState) => setPanes((p) => (i === 0 ? [next, p[1]] : [p[0], next]));
 
@@ -326,13 +337,16 @@ export default function Page() {
             <CardContent className="flex flex-wrap items-center gap-3">
               <Badge variant="outline">Live</Badge>
               <span className="text-lg font-semibold">
-                {numbers.length ? (compare ? "Two versions" : answering !== null ? `Version ${answering}` : best.isFetching ? T.findingBest : "Pick a trained version") : T.noTrained}
+                {numbers.length || liveList.length ? (compare ? "Two versions" : answering !== null ? `Version ${answering}` : best.isFetching ? T.findingBest : "Pick a trained version") : T.noTrained}
               </span>
               {numbers.length > 0 && !compare && (
                 <span className="text-sm text-muted-foreground">{following ? T.follows : T.picked}</span>
               )}
+              {!compare && answering !== null && liveByNumber.has(answering) && (
+                <Badge variant="secondary">{T.liveBadge(liveLabel(liveByNumber.get(answering)!, nowSeconds))}</Badge>
+              )}
               {best.data != null && !best.isFetching && !best.isError && <span className="text-sm text-muted-foreground">{T.best(best.data)}</span>}
-              {!numbers.length && (
+              {!numbers.length && !liveList.length && (
                 <Link href="/builder" className="text-sm text-primary underline-offset-4 hover:underline">
                   {T.noTrainedLink}
                 </Link>
@@ -393,6 +407,14 @@ export default function Page() {
             ) : (
               <Card>
                 {scored && <CardHeader><CardTitle>{versionName(scored)}</CardTitle><CheckpointStep version={scored} /></CardHeader>}
+                {!scored && answering !== null && liveByNumber.has(answering) && (
+                  <CardHeader>
+                    <CardTitle>{versionName({ number: answering })}</CardTitle>
+                    <p className="text-xs text-muted-foreground" aria-label={`Live checkpoint for ${versionName({ number: answering })}`}>
+                      {liveLabel(liveByNumber.get(answering)!, nowSeconds)}. {T.liveNote}
+                    </p>
+                  </CardHeader>
+                )}
                 <CardContent className="flex min-h-40 flex-col gap-3">
                   {thread.length === 0 && panes[0].status === "idle" && <p className="text-sm text-muted-foreground">{T.itsReply}</p>}
                   {thread.map((m, k) => (
@@ -480,6 +502,8 @@ export default function Page() {
           {compare && left && right && (
             <Verdict a={left} b={right} how={how} onHow={() => setHow((h) => !h)} ready={verdictReady} query={verdictQuery} />
           )}
+
+          {liveList.length > 0 && !compare && <LiveCheckpoints live={liveList} answering={answering} busy={busy} onPick={pick} />}
 
           {trained.length > 0 && (
             <Card>
