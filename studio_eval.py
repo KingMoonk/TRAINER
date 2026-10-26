@@ -75,7 +75,11 @@ def score_windows(length, context):
     return out
 
 
-def score_docs(model, docs):
+class Stopped(InterruptedError):
+    """score_docs ended early because its `stop` event was set."""
+
+
+def score_docs(model, docs, stop=None):
     """Per document (nats, characters). Characters the tokenizer cannot encode (UNK pieces) are scored at ln V.
 
     model is a checkpoint path or a LocalModel. A document is read in overlapping windows (score_windows): each window
@@ -84,6 +88,8 @@ def score_docs(model, docs):
     batch; every mixer is causal, so the padding never reaches a real position. The probability is shared among the real
     pieces only: a document is never made of PAD, BOS, EOS or role tokens, and an imported GPT-2 gives BOS and EOS the same row
     as its end-of-text piece, so counting them would charge every position for the same piece three times.
+
+    `stop` (a threading.Event) is checked between batches and between documents; when set, Stopped is raised and nothing is returned.
     """
     from studio_model import LocalModel
     local = model if isinstance(model, LocalModel) else LocalModel(model, device=SCORE_DEVICE)
@@ -95,6 +101,8 @@ def score_docs(model, docs):
         pending.sort(key=lambda window: len(window[1]))  # similar lengths together: little padding
         size = max(1, SCORE_ELEMENTS // (context * tok.vocab_size))
         for first in range(0, len(pending), size):
+            if stop is not None and stop.is_set():
+                raise Stopped("scoring was stopped")
             batch = pending[first:first + size]
             lengths = np.array([len(inputs) for _, inputs, _, _ in batch])
             skips = np.array([skip for _, _, _, skip in batch])
@@ -113,9 +121,11 @@ def score_docs(model, docs):
         pending.clear()
 
     for doc, text in enumerate(docs):
+        if stop is not None and stop.is_set():
+            raise Stopped("scoring was stopped")
         ids = np.concatenate([[BOS], _ids(tok, text)])
-        for start, stop, skip in score_windows(len(ids), context):
-            pending.append((doc, ids[start:stop], ids[start + 1:stop + 1], skip))
+        for start, end, skip in score_windows(len(ids), context):
+            pending.append((doc, ids[start:end], ids[start + 1:end + 1], skip))
         if len(pending) >= SCORE_WINDOWS:
             flush()
     flush()

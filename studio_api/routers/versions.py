@@ -125,7 +125,7 @@ def score_live(number: int, request: Request, services=Depends(get_services)):
     """Held-out bits per character of the version's run-in-progress checkpoint. The job's result is {version, step, saved_at, bpc,
     documents}, for the caller only: nothing is stored, and the version's checkpoint, scorecard and status do not change."""
     _known(services, number)
-    return _job(request, "versions.score_live", lambda stop: services.score_live(number))
+    return _job(request, "versions.score_live", lambda stop: services.score_live(number, stop=stop))
 
 
 @router.post("/best", response_model=JobOut, status_code=202)
