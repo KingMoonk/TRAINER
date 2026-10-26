@@ -44,7 +44,7 @@ LEGACY_CATALOG = [
      "license": "CDLA-Sharing-1.0", "source_url": "https://huggingface.co/datasets/roneneldan/TinyStories",
      "size_hint": "22 MB download", "records_hint": "27,630 stories", "revision": "f54c09fd23315a6f9c86f9dc80f725de7d8f9c64",
      "repo": "roneneldan/TinyStories", "filename": "TinyStoriesV2-GPT4-valid.txt", "format": "txt_stories", "parser": "story",
-     "split": "validation", "synthetic": True},
+     "bytes": 22_502_601, "sha256": "6874bae9a4c1a4e7edcf0e53b86c17817e9cf881fc75ff2368da457b80c0585d", "split": "validation", "synthetic": True},
     {"id": "wikitext2", "name": "WikiText-2 · Wikipedia prose", "domain": "Language foundation", "stage": "language", "default": True,
      "description": "Verified-good Wikipedia articles (training split of WikiText-2, raw), split into paragraphs and lightly de-tokenized. Plain encyclopaedic prose for the language stage.",
      "license": "CC BY-SA 3.0 and GFDL", "source_url": "https://huggingface.co/datasets/Salesforce/wikitext",
@@ -137,7 +137,8 @@ LEGACY_CATALOG = [
      "description": "Optional full 143K evolved instruction/chat corpus from the WizardLM authors. Published synthetic data, with the source conversation structure retained.",
      "license": "MIT (publisher dataset card)", "source_url": "https://huggingface.co/datasets/WizardLMTeam/WizardLM_evol_instruct_V2_196k",
      "size_hint": "375 MB download", "records_hint": "143K instruction conversations", "revision": "8a7d15a83028b5c93915677704f492839e2675f6",
-     "repo": "WizardLMTeam/WizardLM_evol_instruct_V2_196k", "filename": "WizardLM_evol_instruct_V2_143k.json", "format": "json", "parser": "chat", "split": "train", "synthetic": True},
+     "repo": "WizardLMTeam/WizardLM_evol_instruct_V2_196k", "filename": "WizardLM_evol_instruct_V2_143k.json", "format": "json", "parser": "chat", "bytes": 374_925_619,
+     "sha256": "5923c3d6618a56e2022680ab98c780db9b23021bb5d41edfd6138e8fc6aaf3dc", "split": "train", "synthetic": True},
     # --- stage "knowledge" ----------------------------------------------------------------------
     {"id": "squad2", "name": "SQuAD 2 · grounded knowledge", "domain": "Knowledge and reading", "stage": "knowledge", "default": True,
      "description": "Full training split of human reading-comprehension questions. Includes source passages and explicit abstention for questions the passage cannot answer. Dev/test examples are excluded.",
@@ -235,7 +236,8 @@ LEGACY_CATALOG = [
      "license": "MIT", "source_url": "https://huggingface.co/datasets/HuggingFaceH4/ultrachat_200k",
      "size_hint": "244 MB download", "records_hint": "~69K conversations", "revision": "8049631c405ae6576f93f445c6b8166f76f5505a",
      "repo": "HuggingFaceH4/ultrachat_200k", "filename": "data/train_sft-00000-of-00003-a3ecf92756993583.parquet", "format": "parquet",
-     "parser": "ultrachat", "split": "train_sft", "synthetic": True},
+     "parser": "ultrachat", "bytes": 243_999_189, "sha256": "afa8fa7426081b2a0e732fb50dbb5cd402a28ad5f0dbe66c0d996d63e7220727",
+     "split": "train_sft", "synthetic": True},
     {"id": "smoltalk_magpie", "name": "SmolTalk · Smol-Magpie-Ultra chats (bounded)", "domain": "Conversation", "stage": "conversation", "default": True,
      "description": "Multi-turn instruction chats across coding, maths, writing, planning and advice, generated with Llama-3.1-405B (Smol-Magpie-Ultra, the Apache-2.0 part of SmolTalk; the mixed \"all\" config is not used because it bundles other licences). First shard, only chats rated good or excellent, bounded to the first 25,000.",
      "license": "Apache 2.0", "source_url": "https://huggingface.co/datasets/HuggingFaceTB/smoltalk",
@@ -361,7 +363,11 @@ CATALOG = [_fineweb_shard(number) for number in range(len(FINEWEB_SHARDS))] + [
      "size_hint": "174 MB download (one shard)", "records_hint": "the whole second shard", "revision": "0ae6ec63f91742bd2d1eaef4f02232c55d719385",
      "repo": "HuggingFaceTB/cosmopedia", "filename": "data/openstax/train-00001-of-00002.parquet", "format": "parquet", "parser": "cosmopedia",
      "sha256": "05ed6afca68a93f1ec1f062165a49c08dd6d29b2b728165fce7ab96a7f702e24", "split": "train", "synthetic": True},
+    dict(_legacy_by_id["tinystories"], default=False, description="Short, simple GPT-4-written children's stories: the classic small-model language starter, for models too small for web text. "
+         "Bounded to the first ~64 MB of the V2 training file (whole stories only) as plain text. Optional, not downloaded by default."),
+    dict(_legacy_by_id["tinystories_valid"], default=False),
     dict(_legacy_by_id["dolly15k"], default=False),
+    dict(_legacy_by_id["wizard143k"], default=False),
     dict(_legacy_by_id["squad2"], default=False),
     {"id": "mmlu_auxiliary", "name": "MMLU auxiliary train · multiple-choice questions", "domain": "Knowledge and reading", "stage": "knowledge", "default": True,
      "description": "The auxiliary training set that ships with MMLU (about 100K reading and science questions drawn from ARC, MC_TEST, OBQA and RACE; not the MMLU test questions), which nanochat uses in mid-training. "
@@ -385,6 +391,37 @@ CATALOG = [_fineweb_shard(number) for number in range(len(FINEWEB_SHARDS))] + [
      "size_hint": "230 MB download (one shard)", "records_hint": "115,085 chats (the whole shard)", "revision": "f73fe857d519ff6ac5af2ea67c4d3834da7b8bcc",
      "repo": "HuggingFaceTB/smol-smoltalk", "filename": "data/train-00001-of-00004.parquet", "format": "parquet", "parser": "smol_smoltalk",
      "sha256": "5412c03df579fc7dd7d06c7f5249627d99d0621882fb8f2cd5c13582eb2a80f6", "split": "train", "synthetic": True},
+    {"id": "everyday_conversations", "name": "SmolTalk · everyday conversations", "domain": "Conversation", "stage": "conversation", "default": True,
+     "description": "Short multi-turn chats between a user and an assistant about everyday topics and elementary science: greetings, small talk, simple how-and-why questions "
+                    "(the data SmolLM v1 was post-trained on, generated with Llama-3.1-70B). Tiny, so it is always worth including for a chat model.",
+     "license": "Apache 2.0 (the source everyday-conversations-llama3.1-2k is Apache 2.0)", "source_url": "https://huggingface.co/datasets/HuggingFaceTB/smoltalk",
+     "size_hint": "0.9 MB download", "records_hint": "~2,200 chats (the whole file)", "revision": "5feaf2fd3ffca7c237fc38d1861bc30365d48ffa",
+     "repo": "HuggingFaceTB/smoltalk", "filename": "data/everyday-conversations/train-00000-of-00001.parquet", "format": "parquet", "parser": "smoltalk_subset",
+     "intent": "everyday_chat", "bytes": 946_449, "sha256": "32eec6e30ae3110302a70285a272088bd4f228026935dd8cb3efab90f9efb0f0", "split": "train", "synthetic": True},
+    {"id": "smoltalk_systemchats", "name": "SmolTalk · chats with system prompts", "domain": "Conversation", "stage": "conversation", "default": True,
+     "description": "30,000 chats whose system prompt sets a persona, format or rule the assistant must keep following (SystemChat 2.0, the system-prompt part of SmolTalk). "
+                    "Teaches a model to obey a system message.",
+     "license": "Apache 2.0 (the source SystemChat-2.0 is Apache 2.0)", "source_url": "https://huggingface.co/datasets/HuggingFaceTB/smoltalk",
+     "size_hint": "48 MB download", "records_hint": "~30,000 chats (the whole file)", "revision": "5feaf2fd3ffca7c237fc38d1861bc30365d48ffa",
+     "repo": "HuggingFaceTB/smoltalk", "filename": "data/systemchats-30k/train-00000-of-00001.parquet", "format": "parquet", "parser": "smoltalk_subset",
+     "intent": "system_prompt", "bytes": 47_871_128, "sha256": "823744eec5999f13758b4fbf5460231dcbe4ae9ba064286195d6f5ee2c059128", "split": "train", "synthetic": True},
+    {"id": "smoltalk_rewrite", "name": "SmolTalk · text rewriting", "domain": "Conversation", "stage": "conversation", "default": False,
+     "description": "About 50,000 requests to rewrite a text (friendlier, more formal, shorter, fixed grammar), each with a system prompt naming the style, answered by Llama-3.1-405B (Smol-rewrite). "
+                    "Optional, not downloaded by default.",
+     "license": "Apache 2.0", "source_url": "https://huggingface.co/datasets/HuggingFaceTB/smoltalk",
+     "size_hint": "39 MB download", "records_hint": "~50,000 chats (the whole file)", "revision": "5feaf2fd3ffca7c237fc38d1861bc30365d48ffa",
+     "repo": "HuggingFaceTB/smoltalk", "filename": "data/smol-rewrite/train-00000-of-00001.parquet", "format": "parquet", "parser": "smoltalk_subset",
+     "intent": "rewrite", "bytes": 38_927_074, "sha256": "12c7df2f0ec53fa35c329c1d10243cbb744bb04b6c52823db8e464835747ccba", "split": "train", "synthetic": True},
+    {"id": "smoltalk_summarize", "name": "SmolTalk · email and news summaries (bounded)", "domain": "Conversation", "stage": "conversation", "default": False,
+     "description": "Requests to summarise an email or news article under a system prompt that fixes the length and style (Smol-summarize), answered by Llama-3.1-405B. "
+                    "The file holds about 100,000 chats; the first 40,000 are kept. Optional, not downloaded by default.",
+     "license": "Apache 2.0", "source_url": "https://huggingface.co/datasets/HuggingFaceTB/smoltalk",
+     "size_hint": "119 MB download (the whole file)", "records_hint": "40,000 chats (first of ~100,000)", "revision": "5feaf2fd3ffca7c237fc38d1861bc30365d48ffa",
+     "repo": "HuggingFaceTB/smoltalk", "filename": "data/smol-summarize/train-00000-of-00001.parquet", "format": "parquet", "parser": "smoltalk_subset",
+     "intent": "summarize", "max_records": 40_000, "bytes": 119_245_090, "sha256": "6fb82c0cb0b6bc4cc484057b035b59d83da8a32cd675379628bc7d295a139229", "split": "train", "synthetic": True},
+    dict(_legacy_by_id["ultrachat_a"], default=False),
+    dict(_legacy_by_id["smoltalk_magpie"], default=False),
+    dict(_legacy_by_id["reddit_instruct"], default=False),
     {"id": "toolace", "name": "ToolACE · tool-use dialogues", "domain": "Tool use", "stage": "conversation", "default": True,
      "description": "English tool-use dialogues with API schemas, assistant calls, simulated tool responses and final answers. Calls and results are retained as tagged assistant/user turns.",
      "license": "Apache 2.0", "source_url": "https://huggingface.co/datasets/Team-ACE/ToolACE",
@@ -810,6 +847,14 @@ def convert_record(raw, entry):
             digest = hashlib.sha256(str(first).encode()).hexdigest()[:16]
             yield {"messages": messages, "intent": str(raw.get("source") or "conversation"), "sourceId": "smol_smoltalk:" + digest,
                    "groupId": "smol_smoltalk:" + digest, "metadata": {"source": raw.get("source", "")}}
+    elif parser == "smoltalk_subset":
+        messages = [m for m in raw.get("messages") or [] if isinstance(m, dict) and m.get("role") in {"system", "user", "assistant"} and str(m.get("content") or "").strip()]
+        first = next((m["content"] for m in messages if m["role"] == "user"), "")
+        if first and any(m["role"] == "assistant" for m in messages):
+            digest = hashlib.sha256((entry["id"] + "\n" + str(first)).encode()).hexdigest()[:16]
+            topic = str(raw.get("full_topic") or "")
+            yield {"messages": messages, "intent": str(entry.get("intent") or "conversation"), "sourceId": f"{entry['id']}:{digest}",
+                   "groupId": f"{entry['id']}:{digest}", "metadata": {"topic": topic} if topic else {}}
     elif parser == "mmlu_auxiliary":
         converted = _mmlu_auxiliary(raw)
         if converted:
