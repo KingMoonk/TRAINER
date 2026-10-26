@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
-from functools import lru_cache
 
 import torch
 
@@ -105,24 +104,31 @@ def enabled():
         _active.reset(token)
 
 
-@lru_cache(maxsize=None)
+_answers = {}   # device -> the definitive answer of supported()
+
+
 def supported(device):
-    """True when `device` really runs a float8 product (probed once, not assumed): a CUDA GPU of compute capability 8.9 or newer
-    whose torch._scaled_mm, through the same quantize and padded multiply the layers use, matches the wide product."""
+    """True when `device` really runs a float8 product (probed, not assumed): a CUDA GPU of compute capability 8.9 or newer
+    whose torch._scaled_mm, through the same quantize and padded multiply the layers use, matches the wide product.
+    A definitive answer (it works, capability too low, no float8 in this torch, a product that does not match) is cached for the
+    process; a probe that raises (an out-of-memory while a job holds the GPU) answers False this time and is retried next call."""
+    if device in _answers:
+        return _answers[device]
     if device != "cuda" or E4M3 is None or E5M2 is None or not hasattr(torch, "_scaled_mm"):
-        return False
+        return _answers.setdefault(device, False)
     try:
         if not torch.cuda.is_available() or torch.cuda.get_device_capability() < MIN_CAPABILITY:
-            return False
+            return _answers.setdefault(device, False)
         x = torch.linspace(-1, 1, 20 * 24, device="cuda").reshape(20, 24).requires_grad_(True)
         w = torch.linspace(1, -1, 24 * 40, device="cuda").reshape(24, 40).requires_grad_(True)
         y = Fp8Linear.apply(x, w, torch.float32)
         y.sum().backward()
         want = x.detach() @ w.detach()
         close = (y - want).abs().max() <= 0.1 * want.abs().max()
-        return bool(close) and bool(torch.isfinite(x.grad).all()) and bool(torch.isfinite(w.grad).all())
+        ok = bool(close) and bool(torch.isfinite(x.grad).all()) and bool(torch.isfinite(w.grad).all())
     except Exception:
         return False
+    return _answers.setdefault(device, ok)
 
 
 def unsupported_reason(device):
