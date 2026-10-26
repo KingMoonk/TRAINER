@@ -952,13 +952,21 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     atomic_json(directory / "tokenizer.json", tokenizer.serialize())
     if distributed is None:
         shared = snapshot_dir if snapshot_dir is not None else studio_dataset_snapshot.folder_for(directory)
-        emit({"type": "info", "text": "Saving the dataset snapshot"})
+        # A resume on unchanged data (the digest above matched the checkpoint's) has those rows in the dataset.jsonl beside the
+        # checkpoint: the new run links that file, not a second copy of it to write and hash again.
+        before = Path(resume).parent / "dataset.jsonl" if checkpoint and not rebase else None
+        snapshot = None
         try:
-            snapshot, created, _ = studio_dataset_snapshot.adopt(examples, shared, directory / "dataset.jsonl")
+            if before is not None and before.is_file() and before.stat().st_size > 1:
+                emit({"type": "info", "text": "Linking the dataset snapshot of the run being resumed"})
+                studio_dataset_snapshot.link(before, directory / "dataset.jsonl")
+            else:
+                emit({"type": "info", "text": "Saving the dataset snapshot"})
+                snapshot, created, _ = studio_dataset_snapshot.adopt(examples, shared, directory / "dataset.jsonl")
         finally:
             if corpus is not None:
                 corpus.discard()
-        if shared is not None:
+        if snapshot is not None and shared is not None:
             emit({"type": "info", "text": f"Dataset snapshot {snapshot.stem[:12]} ({snapshot.stat().st_size / 1024 ** 2:,.0f} MB): "
                                           + ("written" if created else "already stored, linked")})
     else:

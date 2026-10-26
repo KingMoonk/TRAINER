@@ -94,6 +94,18 @@ def read(path):
                 yield json.loads(line)
 
 
+class Snapshot:
+    """The rows of a stored snapshot, as an iterable that remembers its file. Training reads the file in place on a resume
+    (studio_corpus.Corpus.over) and links it for the new run, where a plain iterator would be copied row by row into a new spool
+    and then stored and hashed again."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def __iter__(self):
+        return read(self.path)
+
+
 def hash_of(path):
     """sha256 of the file's bytes: its name in the store, and what a peer checks a snapshot it received against."""
     digest = hashlib.sha256()
