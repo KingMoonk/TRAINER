@@ -60,6 +60,17 @@ class ProjectionTests(unittest.TestCase):
     def test_a_run_that_ends_inside_the_window_says_nothing(self):
         self.assertIsNone(self.project(window_seconds=7200.))
 
+    def test_an_earlier_attempt_counts_against_the_window_but_not_the_pace(self):
+        resumed = dict(step=1010, first_step=1000, total=2000, trained_tokens=510_000, elapsed=3040., earlier_tokens=500_000,
+                       earlier_elapsed=3000., window_seconds=6000.)
+        found = self.project(**resumed)  # 990 steps at 4 s: ends at 3040 + 3960 = 7000 s
+        self.assertIn("250 tokens/s", found["text"])  # (not 510000 / 3040)
+        self.assertIn("past the 1.7 h window", found["text"])  # the earlier attempt's 3000 s are in the end
+        self.assertIsNone(self.project(**{**resumed, "window_seconds": 7200.}))
+        self.assertIsNone(self.project(**{**resumed, "total": 1030}))  # 3040 s + 20 steps at 4 s ends inside the window
+        self.assertIsNotNone(self.project(**{**resumed, "total": 1030, "window_seconds": 3050.}))
+        self.assertIsNone(self.project(**{**resumed, "token_budget": 510_500}))  # the budget counts the earlier tokens
+
     def test_the_token_budget_ends_the_run_before_the_last_step(self):
         self.assertIsNone(self.project(token_budget=100_000))
 
