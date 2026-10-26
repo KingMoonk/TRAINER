@@ -1,10 +1,12 @@
 """Post-training: what each round has done, the choices a round offers, queueing a round, and starting from a pretrained model."""
 
 import hashlib
+import json
 import uuid
 from pathlib import Path
 from typing import Any, Literal
 
+import numpy as np
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.exceptions import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -118,7 +120,7 @@ T = {
     "so_far": "So far: {verdict_start}",
     "will_read": "Will read: \"{verdict_full}\"",
     "result_kept": "Kept for comparison, not live. Chat stays on the previous checkpoint.",
-    "result_live": "Live: Chat uses {checkpoint} from the next message. Switch back any time in Chat.",
+    "result_live": "Live: Chat uses {checkpoint} from the next message.",
     "result_passed": "Passed and went live; round 2 started from this checkpoint.",
     "chat_keeps": "Chat keeps {checkpoint} until this round passes both checks.",
     "until_then": "Until then, Chat keeps its current checkpoint.",
@@ -209,7 +211,7 @@ class RoundQueued(BaseModel):
 
 
 class RowsRequest(BaseModel):
-    kind: Literal["conversations", "problems", "pairs", "corrections", "heldout_docs", "heldout_problems"]
+    kind: Literal["conversations", "problems", "pairs", "corrections", "heldout_docs", "heldout_conversations", "heldout_problems"]
 
 
 class StatusRequest(BaseModel):
@@ -250,12 +252,42 @@ def lora_default(version):
     return bool((((version.spec if version else None) or {}).get("train") or {}).get("run", {}).get("lora"))
 
 
-def teacher_options(versions, version):
-    """Trained versions that could teach `version`: any other one with a checkpoint, the same word list and the same reading window."""
-    def shape(v):
+def _tokenizer_hash(tokenizer):
+    """The same serialization studio_rl.check_teacher compares (Tokenizer.serialize), hashed."""
+    return hashlib.sha256(json.dumps(tokenizer, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _checkpoint_tokenizer_hash(version, root):
+    """Hash of the tokenizer stored in the version's checkpoint (only its metadata is read), or None when it cannot be read."""
+    try:
+        path = Path(version.best_checkpoint)
+        path = path if path.is_absolute() or root is None else Path(root) / path
+        with np.load(path, allow_pickle=False) as archive:
+            return _tokenizer_hash(json.loads(str(archive["metadata"].item()))["tokenizer"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def teacher_options(versions, version, root=None):
+    """Trained versions that could teach `version`: any other one with a checkpoint, the same word list and the same reading window.
+    The word lists are compared as the job will compare them (the tokenizers stored in the checkpoints, hashed), so a teacher
+    listed here does not fail in studio_rl.check_teacher after the job starts; a checkpoint that cannot be read falls back to the
+    spec's tokenizer entry. `root` is the workspace folder that relative checkpoint paths sit in."""
+    def spec_shape(v):
         spec = v.spec or {}
-        return spec.get("tokenizer"), (spec.get("dims") or {}).get("n_ctx")
-    return [v for v in versions if version and v.number != version.number and v.best_checkpoint and shape(v) == shape(version)]
+        return _tokenizer_hash(spec.get("tokenizer")), (spec.get("dims") or {}).get("n_ctx")
+    if not version:
+        return []
+    mine = _checkpoint_tokenizer_hash(version, root) if version.best_checkpoint else None
+    out = []
+    for v in versions:
+        if v.number == version.number or not v.best_checkpoint:
+            continue
+        theirs = _checkpoint_tokenizer_hash(v, root) if mine else None
+        words_match = theirs == mine if mine and theirs else spec_shape(v)[0] == spec_shape(version)[0]
+        if words_match and spec_shape(v)[1] == spec_shape(version)[1]:
+            out.append(v)
+    return out
 
 
 def default_teacher(options, version):
@@ -300,7 +332,7 @@ def read_rows(request: Request, body: RowsRequest):
 def options(version: int | None = None, services=Depends(get_services)):
     """The choices a round offers for a version: LoRA for round 1, the teachers for round 3, the leash for round 4."""
     chosen = pick_version(services, version)
-    teachers = teacher_options(services.versions(), chosen)
+    teachers = teacher_options(services.versions(), chosen, getattr(services, "root", None))
     teacher = default_teacher(teachers, chosen)
     return OptionsOut(leash=[LeashOut(name=name, beta=beta, note=note) for name, beta, note in LEASH], lora_ranks=list(LORA_RANKS),
                       lora_blocker=lora_blocker(chosen), lora_default=lora_default(chosen),
@@ -316,7 +348,7 @@ def queue_round(body: RoundRequest, services=Depends(get_services)):
     if version is None:
         raise ValueError("There is no version yet. Build one first.")
     counts = (services.post_training(version) or {}).get("counts", {})
-    teachers = teacher_options(services.versions(), version)
+    teachers = teacher_options(services.versions(), version, getattr(services, "root", None))
     why = round_blocker(body.round, counts, body.teacher == "version", bool(teachers), bool(version.best_checkpoint))
     if why:
         raise ValueError(why)

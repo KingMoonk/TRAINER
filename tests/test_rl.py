@@ -319,8 +319,11 @@ class RLChecks(unittest.TestCase):
         self.assertEqual([c["ok"] for c in run(3., 3.1, 5, 4)[1]], [False, False])
         self.assertTrue(run(3., 2.9, 2, 4, n0=4, n1=8)[0])          # 2/4 -> 4/8: same rate
         self.assertFalse(run(3., 2.9, 2, 3, n0=4, n1=8)[0])         # 2/4 -> 3/8: fell
-        self.assertFalse(run(None, 2.9, 4, 4)[0])                   # unmeasured error never passes
-        self.assertFalse(run(3., float("nan"), 4, 4)[0])
+        ok, checks = run(None, 2.9, 4, 4)
+        self.assertTrue(ok)                                         # unmeasured error is ok=None: not a failure
+        self.assertIsNone(checks[0]["ok"])
+        self.assertFalse(run(4, None, 4, 3)[0])                     # but another check still fails the round
+        self.assertTrue(run(3., float("nan"), 4, 4)[0])
         self.assertTrue(run(3., 2.9, 0, 0, n0=0, n1=0)[0])          # no problems: nothing can have fallen
 
     # ------------------------------------------------------------------ handler through a Runner

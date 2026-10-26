@@ -7874,7 +7874,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "conversations" | "problems" | "pairs" | "corrections" | "heldout_docs" | "heldout_problems";
+            kind: "conversations" | "problems" | "pairs" | "corrections" | "heldout_docs" | "heldout_conversations" | "heldout_problems";
         };
         /**
          * Rule
