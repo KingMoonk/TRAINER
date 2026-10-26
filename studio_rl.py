@@ -26,13 +26,22 @@ import torch
 import studio_rules
 from studio_backend import empty_cache
 from studio_core import atomic_json, now
-from studio_model import AdamW, LocalModel, ScratchTransformer, Tokenizer, batch_arrays, load_checkpoint, train
+from studio_core import messages_of
+from studio_model import DEFAULT_CONFIG, AdamW, LocalModel, ScratchTransformer, Tokenizer, batch_arrays, encode_example, load_checkpoint, train
 from studio_rlhf import _encode_pair, _save, token_logps
 
 RUBRIC_WEIGHT = .3   # the teacher's rubric adds at most this much; a failed rule is always the minimum, 0
 MEASURE_PROBLEMS = 200  # held-back problems answered per before/after measurement
 PROBE_PROBLEMS = 8      # problems answered before round 2 to see whether it can learn anything
 PROBE_ANSWERS = 4       # answers sampled per probe problem (the k of pass@k)
+MEASURE_CONVERSATIONS = 200  # held-back conversations scored and answered per measurement (a fixed sample, so before/after compare)
+EOS_TOKENS = 96         # a greedy reply that has not stopped by this many tokens counts as not stopping
+SFT_MAX_LR = 1e-4       # round 1 (answers from conversations) never trains faster than this ...
+SFT_LR_SHARE = .1       # ... nor than this share of the peak rate the base was pretrained at
+SFT_EPOCHS = 2          # passes over the conversations
+SFT_MAX_STEPS = 2000
+SFT_WARMUP = .03        # share of the steps spent warming up; the cosine floor is the schedule's own 10% of the peak
+SFT_SAMPLE_PROMPT = "Hello, how can you help me?"
 
 
 def _messages(item):
@@ -405,16 +414,98 @@ def _doc(row):
     return row if isinstance(row, str) else row.get("text") or f"{row.get('user', '')}\n{row.get('assistant', '')}"
 
 
-def measure(checkpoint, docs, problems):
-    """{bpc, pass_k, pass_n}: bits per character on held-back text; greedy answers checked by each problem's rule."""
+def sft_config(base, conversations, tokenizer_state=None, **overrides):
+    """Round 1's own recipe on top of the base's config: it learns the chat format, it does not pretrain again.
+
+    Learning rate min(1e-4, 0.1 x the pretraining peak); steps cover SFT_EPOCHS passes over the conversations' tokens (a batch is
+    batch_size x accumulation windows of `context` tokens), capped at SFT_MAX_STEPS; 3% warmup; evaluation ten times over the run, on
+    conversations held out of training (`validation`); a chat-shaped sample prompt. `overrides` (the job's steps, learning_rate and
+    config) win over all of it."""
+    peak = float(base.get("learning_rate", DEFAULT_CONFIG["learning_rate"]))
+    batch = int(base.get("batch_size", DEFAULT_CONFIG["batch_size"])) * int(base.get("accumulation", DEFAULT_CONFIG["accumulation"]))
+    context = int(base.get("context", DEFAULT_CONFIG["context"]))
+    tokens = 0
+    if conversations:
+        tokenizer = Tokenizer.restore(tokenizer_state)
+        tokens = sum(len(encode_example(row, tokenizer)[0]) for row in conversations)
+    steps = int(overrides.get("steps") or max(1, min(SFT_MAX_STEPS, math.ceil(SFT_EPOCHS * tokens / (batch * context)))))
+    validation = float(base.get("validation") or 0) or (DEFAULT_CONFIG["validation"] if len(conversations) >= 20 else 0.)
+    return {**base, "objective": "assistant", "learning_rate": min(SFT_MAX_LR, SFT_LR_SHARE * peak), "steps": steps,
+            "warmup": max(1, round(SFT_WARMUP * steps)), "eval_every": max(1, steps // 10), "validation": validation,
+            "sample_prompt": SFT_SAMPLE_PROMPT, **{k: v for k, v in overrides.items() if k != "steps"}}
+
+
+def doc_scores(checkpoint, docs, stop=None):
+    """Per held-back document (nats, characters): scored once, so the bpc and the noise band read the same numbers."""
+    import studio_eval
+    return studio_eval.score_docs(checkpoint, [_doc(d) for d in docs], stop=stop) if docs else None
+
+
+def _reply_prompt(row):
+    """The messages a conversation row answers: everything before its last assistant message (None when it has none)."""
+    messages = messages_of(row)
+    last = max((i for i, m in enumerate(messages) if m.get("role") == "assistant"), default=None)
+    return messages[:last] if last else None
+
+
+def conversation_checks(local, conversations, stop=None):
+    """(conv_loss, eos_rate) on held-back conversations: the mean loss over their assistant tokens, and the share whose prompt gets a
+    greedy reply that stops on its own end token within EOS_TOKENS (a reply that fills the budget exactly counts as not stopping).
+    (None, None) without conversations."""
+    import studio_eval
+    rows = list(conversations or [])
+    if len(rows) > MEASURE_CONVERSATIONS:
+        rows = random.Random(0).sample(rows, MEASURE_CONVERSATIONS)
+    context, nats, targets, stopped, asked = local.config["context"], 0., 0, 0, 0
+    for row in rows:
+        if stop is not None and stop.is_set():
+            raise studio_eval.Stopped("scoring was stopped")
+        tokens, mask = encode_example(row, local.tokenizer, assistant_only=True)
+        tokens, mask = np.asarray(tokens[:context + 1], dtype=np.int64), np.asarray(mask[:context + 1], dtype=bool)
+        y = np.where(mask[1:], tokens[1:], -100)
+        count = int((y != -100).sum())
+        if count:
+            with torch.no_grad():
+                nats += local.model.loss(tokens[None, :-1], y[None]) * count
+            targets += count
+        prompt = _reply_prompt(row)
+        if prompt:
+            reply = local.generate(prompt, max_tokens=EOS_TOKENS, temperature=0, stop=stop)
+            asked += 1
+            stopped += len(local.tokenizer.encode(reply)) < EOS_TOKENS
+    if stop is not None and stop.is_set():
+        raise studio_eval.Stopped("scoring was stopped")
+    return (nats / targets if targets else None), (stopped / asked if asked else None)
+
+
+def measure(checkpoint, docs, problems, stop=None, heldout_conversations=None, scores=None):
+    """{bpc, conv_loss, eos_rate, pass_k, pass_n}: bits per character on held-back text; the loss on the assistant tokens of
+    held-back conversations and the share of their prompts answered with a reply that ends; greedy answers to held-back problems
+    checked by each problem's rule. `scores` are `doc_scores` already in hand (not scored again); `stop` ends the work early with
+    studio_eval.Stopped. Without `heldout_conversations` conv_loss and eos_rate are None."""
     import studio_eval
     local = LocalModel(checkpoint, device="cpu")
     if len(problems) > MEASURE_PROBLEMS:  # imported sets hold back thousands; a fixed sample keeps before/after comparable
         problems = random.Random(0).sample(list(problems), MEASURE_PROBLEMS)
-    k = sum(studio_rules.check(q["rule"], q["prompt"], local.generate([{"role": "user", "content": q["prompt"]}], max_tokens=studio_rules.max_tokens(q["rule"]), temperature=0),
-                               q.get("params"))
-            for q in problems)
-    return {"bpc": studio_eval.bits_per_char(checkpoint, [_doc(d) for d in docs]) if docs else None, "pass_k": k, "pass_n": len(problems)}
+    k = 0
+    for q in problems:
+        if stop is not None and stop.is_set():
+            raise studio_eval.Stopped("scoring was stopped")
+        answer = local.generate([{"role": "user", "content": q["prompt"]}], max_tokens=studio_rules.max_tokens(q["rule"]), temperature=0, stop=stop)
+        k += studio_rules.check(q["rule"], q["prompt"], answer, q.get("params"))
+    if docs and scores is None:
+        scores = studio_eval.score_docs(local, [_doc(d) for d in docs], stop=stop)
+    conv_loss, eos_rate = conversation_checks(local, heldout_conversations, stop)
+    return {"bpc": studio_eval.corpus_bpc(scores) if docs else None, "conv_loss": conv_loss, "eos_rate": eos_rate, "pass_k": k, "pass_n": len(problems)}
+
+
+def verdict_for(trained, ok, checks):
+    """The sentence a finished round shows. `trained` says what training did; the gate result decides whether it is claimed:
+    passed (as is) or failed (naming the checks that did not hold)."""
+    if ok:
+        return trained
+    failed = ", ".join(c["name"].lower() for c in checks if c["ok"] is False)
+    return f"Training finished, but the held-back checks did not pass ({failed}), so Chat stays where it was."
 
 
 def skipped_round(probe, checkpoint):
@@ -433,7 +524,7 @@ def number_of(job):
 def rows_needed(number, params):
     """The post_rows kinds round `number` reads when `params` does not already carry them (`_rows`): what the owner ships with a round
     that runs on another machine, whose stores hold none of it."""
-    kinds = {1: ("heldout_docs", "heldout_problems", "conversations"), 2: ("problems", "heldout_docs", "heldout_problems"),
+    kinds = {1: ("heldout_docs", "heldout_problems", "conversations", "heldout_conversations"), 2: ("problems", "heldout_docs", "heldout_problems"),
              3: ("heldout_docs", "heldout_problems"), 4: ("heldout_docs", "heldout_problems", "pairs")}[number]
     if number == 3:
         kinds += ("corrections",) if params.get("teacher_choice") == "correction" else () if "prompts" in params else ("conversations",)
@@ -482,14 +573,22 @@ def run_round(number, job, context, emit, stop, pause):
             job.params["result"] = result
             return {"round": number, "ok": False, "checkpoint": checkpoint}
     docs, held = _rows(job, context, "heldout_docs", "heldout_docs"), _rows(job, context, "heldout_problems", "heldout_problems")
-    before = measure(checkpoint, docs, held)
     import studio_eval
-    band = studio_eval.noise_band(checkpoint, [_doc(d) for d in docs]) if docs else None
+    held_conversations = _rows(job, context, "heldout_conversations", "heldout_conversations") if number == 1 else None   # round 1's chat checks
+    try:   # held-back text is scored twice in all: here, where the bpc and the noise band come from the same per-document scores, and after training
+        scores = doc_scores(checkpoint, docs, stop)
+        band = studio_eval.band_from_scores(scores) if scores else None
+        before = measure(checkpoint, docs, held, stop, held_conversations, scores)
+    except studio_eval.Stopped:   # stopped while measuring: no result to gate or record
+        return {"round": number, "ok": False, "checkpoint": checkpoint, "stopped": True}
     kw = {k: p[k] for k in ("steps", "learning_rate") if p.get(k) is not None}
     verdict = VERDICTS.get(number, "")
     if number == 1:   # the version's own settings carry on, LoRA included: a LoRA version stays LoRA unless the job says {"config": {"lora": None}}
-        cfg = {**load_checkpoint(checkpoint)["config"], "objective": "assistant", **kw, **p.get("config", {})}
-        record = train(cfg, _rows(job, context, "conversations", "conversations"), out, emit=emit, stop=stop, pause=pause, init_from=checkpoint)
+        data = load_checkpoint(checkpoint)
+        conversations = _rows(job, context, "conversations", "conversations")
+        cfg = sft_config(data["config"], conversations, data.get("tokenizer"), **{**kw, **p.get("config", {})})
+        record = train(cfg, conversations, out, emit=emit, stop=stop, pause=pause, init_from=checkpoint,
+                       token_budget=p.get("token_budget"), wall_seconds=p.get("wall_seconds"))
     elif number == 2:
         record = practice_with_checks(checkpoint, problems, out, group=p.get("group", 6), emit=emit, stop=stop, pause=pause, **kw)
         if (record.get("last_mean") or 0) < (record.get("first_mean") or 0):
@@ -514,9 +613,15 @@ def run_round(number, job, context, emit, stop, pause):
     else:
         raise ValueError(f"Unknown round: {number}")
     candidate = record.get("checkpoint") or str(out / "last.npz")
-    after = measure(candidate, docs, held)
-    ok, checks = studio_gate.passes(before, after, band)
-    result = {"round": number, "ok": ok, "checks": checks, "verdict": verdict, "before": before, "after": after, "band": band, "checkpoint": candidate}
+    if number == 1 and (out / "best.npz").exists():   # the lowest held-back loss of the run, not wherever it ended
+        candidate = str(out / "best.npz")
+    try:
+        after = measure(candidate, docs, held, stop, held_conversations)
+    except studio_eval.Stopped:
+        return {"round": number, "ok": False, "checkpoint": checkpoint, "stopped": True}
+    ok, checks = studio_gate.passes(before, after, band, number=number)
+    result = {"round": number, "ok": ok, "checks": checks, "verdict": verdict_for(verdict, ok, checks), "before": before, "after": after,
+              "band": band, "checkpoint": candidate}
     if number == 2:   # groups that taught something: the share of reward groups with any spread
         result.update(groups=record.get("groups"), taught=record.get("taught"), probe=probe)
     emit({"type": "gate", **result})
