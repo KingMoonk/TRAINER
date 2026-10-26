@@ -36,6 +36,15 @@ def interrupted(root, after=3):
 
 
 class ResumeJob(unittest.TestCase):
+    def test_train_says_it_is_saving_before_it_writes_the_final_checkpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            events = []
+            studio_model.train(TINY, EXAMPLES, Path(directory) / "run", events.append)
+            kinds = [e["type"] for e in events]
+            self.assertEqual(kinds.count("saving"), 1)
+            self.assertLess(kinds.index("saving"), kinds.index("done"))
+            self.assertGreater(kinds.index("saving"), max(i for i, kind in enumerate(kinds) if kind == "metric"))
+
     def test_a_resumed_job_continues_with_its_optimizer_and_has_no_restart_spike(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

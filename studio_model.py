@@ -22,6 +22,7 @@ import array
 import bisect
 import gc
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -894,9 +895,10 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             tokenizer = Tokenizer.restore(checkpoint["tokenizer"])
         else:
             module, module_cfg = module_of("tokenizer", effective_spec(cfg)["tokenizer"])
-            if corpus is not None:
-                _prepare_reporter(emit, stop, "tokenizer", 40, 45)(0, 1)
-            tokenizer = module.fit(module_cfg, training)
+            fitting = _prepare_reporter(emit, stop, "tokenizer", 40, 45) if corpus is not None else None
+            if fitting:
+                fitting(0, 1)
+            tokenizer = module.fit(module_cfg, training, fitting) if fitting and "progress" in inspect.signature(module.fit).parameters else module.fit(module_cfg, training)
         streamed = reused = False
         if corpus is not None or characters_in(training) + characters_in(validation) >= stream_chars:
             # Big data: tokenize once into shards on disk and read windows from there, so the windows take no memory and the next run
@@ -950,13 +952,21 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     atomic_json(directory / "tokenizer.json", tokenizer.serialize())
     if distributed is None:
         shared = snapshot_dir if snapshot_dir is not None else studio_dataset_snapshot.folder_for(directory)
-        emit({"type": "info", "text": "Saving the dataset snapshot"})
+        # A resume on unchanged data (the digest above matched the checkpoint's) has those rows in the dataset.jsonl beside the
+        # checkpoint: the new run links that file, not a second copy of it to write and hash again.
+        before = Path(resume).parent / "dataset.jsonl" if checkpoint and not rebase else None
+        snapshot = None
         try:
-            snapshot, created, _ = studio_dataset_snapshot.adopt(examples, shared, directory / "dataset.jsonl")
+            if before is not None and before.is_file() and before.stat().st_size > 1:
+                emit({"type": "info", "text": "Linking the dataset snapshot of the run being resumed"})
+                studio_dataset_snapshot.link(before, directory / "dataset.jsonl")
+            else:
+                emit({"type": "info", "text": "Saving the dataset snapshot"})
+                snapshot, created, _ = studio_dataset_snapshot.adopt(examples, shared, directory / "dataset.jsonl")
         finally:
             if corpus is not None:
                 corpus.discard()
-        if shared is not None:
+        if snapshot is not None and shared is not None:
             emit({"type": "info", "text": f"Dataset snapshot {snapshot.stem[:12]} ({snapshot.stat().st_size / 1024 ** 2:,.0f} MB): "
                                           + ("written" if created else "already stored, linked")})
     else:
@@ -1148,6 +1158,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 report({"step": step, "loss": final_loss, "val_loss": final_validation, "tokens_per_second": 0.,
                         "lr": rate if step else cfg["learning_rate"], "grad_norm": 0., "trained_tokens": trained_tokens,
                         "elapsed_seconds": time.monotonic() - started})
+        emit({"type": "saving"})  # a "Stop now" in progress waits for this save instead of killing the worker halfway through it
         save("last.npz")
         record.update({"status": "stopped" if stop.is_set() else "completed", "step": step, "duration_seconds": time.monotonic() - started,
                        "trained_tokens": trained_tokens, "budget_reached": budget_reason, "finishedAt": now()})
@@ -1158,6 +1169,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         record.update(status="stopped" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "failed", error=str(exc), step=step)
         if step:  # keep what the run learned since its last checkpoint, so it can resume; a failing save must not hide `exc`
             try:
+                emit({"type": "saving"})
                 save("last.npz")
                 record["checkpoint"] = "last.npz"
             except Exception:

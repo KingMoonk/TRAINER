@@ -205,6 +205,8 @@ class Runner:
         self.stopping_job = ""         # the id of a running job the person stopped: persisted, so a restart does not run it again
         self.reap_grace = 35.          # seconds a worker an earlier app left gets to leave by itself (studio_worker.EXIT_GRACE and a margin)
         self.kill_grace = 8.           # seconds a worker gets to stop after "Stop now" (a step and a save) before its process is ended
+        self.save_ceiling = 120.       # seconds a worker that said it is saving its checkpoint may take (counted from that event) before "Stop now" ends it anyway
+        self._saving_since = None      # monotonic time of the running job's last "saving" event; None when it is not saving
         self._kill_at = None           # monotonic time "Stop now" ends the running job's process; None when no immediate stop is pending
         self.dead_runs = []            # jobs whose process an earlier app left running: their run.json is reconciled once it is stopped
         self._load()
@@ -808,7 +810,7 @@ class Runner:
             job.note = note
             self.notices, self._noted, self._read_at, self._pace_at = [], set(), time.monotonic(), 0.
             self.stop_event.clear()
-            self._kill_at = None
+            self._kill_at = self._saving_since = None
             self._save()
         started = time.monotonic()
 
@@ -817,6 +819,8 @@ class Runner:
         def emit(event):
             if event.get("type") in ("resumed", "resume_refused"):
                 self._resume_note(job, event)
+            if event.get("type") == "saving":  # the final checkpoint is being written: "Stop now" waits for it (up to save_ceiling)
+                self._saving_since = time.monotonic()
             self._watch_event(job, event, resumed_at[0])
             if event.get("type") == "prepare":  # the text is being tokenized: no step yet, only how far along it is
                 self.progress.update(phase="preparing", prepare=event.get("percent", 0), prepare_phase=event.get("phase"))
@@ -851,7 +855,10 @@ class Runner:
             handle.sync(self.stop_event, self.pause_event)  # whatever set them also set wake
             wait = self.tick
             if self._kill_at is not None and not handle.done.is_set():
-                left = self._kill_at - time.monotonic()
+                deadline = self._kill_at
+                if self._saving_since is not None:  # a kill mid-save leaves a half-written last.npz: give the save its own, longer allowance
+                    deadline = max(deadline, self._saving_since + self.save_ceiling)
+                left = deadline - time.monotonic()
                 if left <= 0:  # "Stop now" was not answered within the grace: end the process (the job still ends as stopped)
                     self._kill_at = None
                     handle.kill()
@@ -876,7 +883,7 @@ class Runner:
             self._sync_pause()
             self.stopping = False
             self.stopping_job = ""
-            self._kill_at = None
+            self._kill_at = self._saving_since = None
             self.follow_up(job)
             if self.closed.is_set() and job.status == "stopped":
                 job.status = "waiting"  # shut down mid-run: try again next start

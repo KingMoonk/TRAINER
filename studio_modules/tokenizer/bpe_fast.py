@@ -70,23 +70,34 @@ def texts_of(examples):
                 yield message["content"]
 
 
-def sample_texts(examples, fit_chars):
+def sample_texts(examples, fit_chars, progress=None):
     """The texts to learn from: all of them when they fit `fit_chars`, else every k-th text of the stream so the sample
-    spans the whole corpus (not just its start). A list is sized first; an iterator is read once, from its start."""
+    spans the whole corpus (not just its start). A sized corpus is indexed at the stride, so only the sampled rows are read, and when it knows its
+    character total (`characters()`, as spool-backed Rows do) there is no counting pass either; any other list is summed first.
+    An iterator is read once, from its start. `progress(done, total)` hears the characters taken against the budget."""
     taken = 0
     if hasattr(examples, "__len__"):
-        total = sum(len(text) for text in texts_of(examples))
+        known = getattr(examples, "characters", None)
+        total = known() if callable(known) else sum(len(text) for text in texts_of(examples))
         stride = max(1, math.ceil(total / fit_chars))
-        for index, text in enumerate(texts_of(examples)):
-            if index % stride == 0:
-                taken += len(text)
-                yield text
-                if taken >= fit_chars:
-                    return
+        goal = min(total, fit_chars)
+        if hasattr(examples, "__getitem__"):
+            source = (text for index in range(0, len(examples), stride) for text in texts_of([examples[index]]))
+        else:
+            source = (text for index, text in enumerate(texts_of(examples)) if index % stride == 0)
+        for text in source:
+            taken += len(text)
+            yield text
+            if progress:
+                progress(taken, goal)
+            if taken >= fit_chars:
+                return
         return
     for text in texts_of(examples):
         taken += len(text)
         yield text
+        if progress:
+            progress(taken, fit_chars)
         if taken >= fit_chars:
             return
 
@@ -139,7 +150,7 @@ class FastBPETokenizer:
 
     # -- fitting --------------------------------------------------------------------------------------------------
     @classmethod
-    def fit(cls, examples, vocab_size=16384, fit_chars=200_000_000, min_frequency=2):
+    def fit(cls, examples, vocab_size=16384, fit_chars=200_000_000, min_frequency=2, progress=None):
         """Learn `vocab_size - 7 - 256` merges from a sample of `examples` (any iterable of examples). Deterministic for the same
         sample, vocabulary size and library version; memory follows the number of distinct words in the sample, not the corpus."""
         tk = _tokenizers()
@@ -147,7 +158,7 @@ class FastBPETokenizer:
         tok.pre_tokenizer = tk.pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=True)
         trainer = tk.trainers.BpeTrainer(vocab_size=max(256, vocab_size - OFFSET), min_frequency=min_frequency, show_progress=False,
                                          initial_alphabet=tk.pre_tokenizers.ByteLevel.alphabet(), special_tokens=[])
-        tok.train_from_iterator(sample_texts(examples, fit_chars), trainer)
+        tok.train_from_iterator(sample_texts(examples, fit_chars, progress), trainer)
         ids = {BYTE_CHAR[byte]: byte for byte in range(256)}
         merges = []
         for entry in json.loads(tok.to_str())["model"]["merges"]:
@@ -249,8 +260,8 @@ class FastBPE(ModuleSpec):
     def vocab(self, cfg):
         return None
 
-    def fit(self, cfg, examples):
-        return FastBPETokenizer.fit(examples, cfg.vocab_size, cfg.fit_chars, cfg.min_frequency)
+    def fit(self, cfg, examples, progress=None):
+        return FastBPETokenizer.fit(examples, cfg.vocab_size, cfg.fit_chars, cfg.min_frequency, progress)
 
     def restore(self, data):
         return FastBPETokenizer.restore(data)

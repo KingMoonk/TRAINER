@@ -135,6 +135,48 @@ class StreamedRuns(unittest.TestCase):
             train(dict(TINY, steps=9), iter(documents(80, seed=5)), self.root / "third", resume=self.root / "first" / "last.npz", telemetry_every=0,
                   stream_chars=0, shard_dir=self.root / "shards")
 
+    def test_resuming_an_unchanged_run_writes_no_new_spool_and_no_new_snapshot(self):
+        from studio_dataset_snapshot import Snapshot, listing
+        shared = self.root / "shared"
+        self.run_training("first", documents(80), stream_chars=0, snapshot_dir=shared)
+        before = self.root / "first" / "dataset.jsonl"
+        stored = listing(shared)
+        self.assertEqual(len(stored), 1)
+        for name, chars in (("big", 0), ("small", 10 ** 9)):  # the on-disk path and the in-memory path
+            created = []
+            real = studio_corpus.Corpus.__init__
+
+            def watching(corpus, folder, *args, **kwargs):
+                created.append(folder)
+                real(corpus, folder, *args, **kwargs)
+            studio_corpus.Corpus.__init__ = watching
+            try:
+                events = []
+                train(dict(TINY, steps=9), Snapshot(before), self.root / name, events.append, resume=self.root / "first" / "last.npz",
+                      telemetry_every=0, stream_chars=chars, shard_dir=self.root / "shards", snapshot_dir=shared)
+            finally:
+                studio_corpus.Corpus.__init__ = real
+            self.assertEqual(created, [])  # no spool was made
+            self.assertEqual(max(e["step"] for e in events if e["type"] == "metric"), 9)
+            self.assertEqual([path for path, _, _ in listing(shared)], [path for path, _, _ in stored])  # no second snapshot
+            after = self.root / name / "dataset.jsonl"
+            self.assertTrue(after.samefile(before))  # linked, not rewritten
+            self.assertEqual(list((self.root / name).glob("corpus-*")), [])
+            rows = lambda path: [json.loads(line) for line in path.read_text(encoding="utf-8").split("\n") if line.strip()]
+            self.assertEqual(rows(after), rows(before))  # the resumed rows are the original rows, in order
+
+    def test_a_snapshot_with_a_repeated_row_is_read_the_long_way(self):
+        from studio_dataset_snapshot import Snapshot
+        path = self.root / "twice.jsonl"
+        row = json.dumps({"text": "same"})
+        path.write_text(row + "\n" + row + "\n", encoding="utf-8")
+        self.assertIsNone(studio_corpus.Corpus.over(path))
+        self.assertTrue(path.exists())
+        rows, corpus = studio_corpus.collect(Snapshot(path), self.root, 0)
+        self.assertEqual(len(corpus), 1)
+        self.assertFalse(corpus.existing)
+        corpus.discard()
+
     def test_a_job_streams_the_text_when_its_context_can(self):
         job = SimpleNamespace(params={"datasets": ["a"]})
         context = SimpleNamespace(example_stream=lambda params: iter([1]), examples=lambda params: [2])

@@ -1,5 +1,6 @@
 """precision/fp8: the quantize and padding maths on the CPU, the policy and API gates, and a CUDA loss-parity run (skipped where
 the device does not run float8)."""
+import contextlib
 import unittest
 from unittest import mock
 
@@ -122,6 +123,39 @@ class Policy(unittest.TestCase):
     def test_a_probe_on_the_cpu_says_no(self):
         self.assertFalse(fp8_ops.supported("cpu"))
         self.assertIn("RTX 40", fp8_ops.unsupported_reason("cpu"))
+
+    def _probe(self, capability=(9, 0), apply=None):
+        """Patches so supported("cuda") runs on the CPU: a fake GPU of `capability`, tensors built on the CPU, no real GPU touched."""
+        real = torch.linspace
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.dict(fp8_ops._answers, clear=True))
+        stack.enter_context(mock.patch.object(torch.cuda, "is_available", return_value=True))
+        stack.enter_context(mock.patch.object(torch.cuda, "get_device_capability", return_value=capability))
+        stack.enter_context(mock.patch.object(torch, "linspace", lambda *a, device=None, **k: real(*a, **k)))
+        if apply is not None:
+            stack.enter_context(mock.patch.object(fp8_ops.Fp8Linear, "apply", apply))
+        return stack
+
+    def test_a_probe_that_raises_is_retried_on_the_next_call(self):
+        calls = []
+
+        def flaky(x, w, dtype):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("CUDA out of memory")
+            return x @ w
+
+        with self._probe(apply=flaky):
+            self.assertFalse(fp8_ops.supported("cuda"))
+            self.assertTrue(fp8_ops.supported("cuda"))
+            self.assertTrue(fp8_ops.supported("cuda"))
+        self.assertEqual(len(calls), 2)
+
+    def test_a_capability_too_low_answer_stays_cached(self):
+        with self._probe(capability=(8, 6)):
+            self.assertFalse(fp8_ops.supported("cuda"))
+            with mock.patch.object(torch.cuda, "get_device_capability", side_effect=AssertionError("probed again")):
+                self.assertFalse(fp8_ops.supported("cuda"))
 
     def test_an_fp8_design_on_a_machine_without_it_warns_and_still_compiles_as_bfloat16(self):
         spec = validate_spec({"dims": {"d_model": 16, "n_layer": 1, "n_ctx": 32}, "train": {"precision": {"id": "fp8"}}})

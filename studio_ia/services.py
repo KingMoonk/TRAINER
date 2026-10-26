@@ -2237,16 +2237,22 @@ class WorkspaceServices(Services):
     def example_stream(self, params):
         """The rows examples(params) returns, as an iterator that holds one row at a time (disk sets are read in batches), with
         `expected_characters`, the text's size from the stored counts. studio_model.train reads it as a stream, so a text of billions of
-        characters never sits in memory. The first time (no data/heldout.json yet) the held-back split is made first, as a stream too."""
+        characters never sits in memory. When params["token_budget"] is smaller than the text, the sets are mixed in proportion to their
+        size (studio_data_kinds.interleaved_examples) so the budget does not use up the first sets only; without one the order is by set. The first time (no data/heldout.json yet) the held-back split is made first, as a stream too."""
         import studio_corpus
         import studio_data_kinds
         ids = params.get("datasets") or [d["id"] for d in self.workspace.state["datasets"]]
         self._fix_heldout(params)
         held = set(self._heldout())
         good_only = bool(params.get("reviewed_only"))
-        rows = (e for e in studio_data_kinds.pretraining_examples(self.workspace, ids)
-                if e.get("text") and e["text"] not in held and (not good_only or e.get("quality") == "Good"))
-        return studio_corpus.RowStream(rows, studio_data_kinds.text_characters(self.workspace, ids, exclude=held))
+        total = studio_data_kinds.text_characters(self.workspace, ids, exclude=held)
+        budget = studio_corpus.budget_chars(params.get("token_budget"))
+        source = studio_data_kinds.pretraining_examples(self.workspace, ids)
+        if budget is not None and len(ids) > 1 and budget < total:
+            # the budget ends the read before the last sets: draw from every set in proportion to its text instead
+            source = studio_data_kinds.interleaved_examples(self.workspace, ids, {i: studio_data_kinds.text_characters(self.workspace, [i], exclude=held) for i in ids})
+        rows = (e for e in source if e.get("text") and e["text"] not in held and (not good_only or e.get("quality") == "Good"))
+        return studio_corpus.RowStream(rows, total)
 
     def conversations(self, params):
         """The conversations of params["datasets"] (default: every set) that can make a teacher's prompt: a run with a teacher takes its

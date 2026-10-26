@@ -47,6 +47,8 @@ def _release(files, path):
         if handle is not None:
             handle.close()
         files[name] = None
+    if path is None:  # a corpus over a file that is not its own (Corpus.over): nothing to delete
+        return
     try:
         os.unlink(path)
     except OSError:
@@ -111,6 +113,51 @@ class Corpus:
 
     def __len__(self):
         return len(self.keys)
+
+    @classmethod
+    def over(cls, path, stop=None):
+        """A Corpus read in place from `path`, the dataset.jsonl a run already wrote: indexed in one pass, no spool and nothing
+        copied, so a resume of an unchanged run doubles no disk. The file is never changed or deleted by the corpus. Returns None
+        when it holds the same row twice (a file that is not a de-duplicated snapshot): the caller reads it the long way."""
+        corpus = cls.__new__(cls)
+        corpus.path = Path(path)
+        corpus._files = {"out": None, "in": open(path, "rb")}
+        corpus._release = weakref.finalize(corpus, _release, corpus._files, None)
+        corpus.keys, corpus.weights, corpus.offsets, corpus.identities = [], array("q"), array("q"), []
+        corpus._index, corpus._merges, corpus._position, corpus.digest = {}, {}, 0, hashlib.sha256()
+        corpus.read = corpus.characters = 0
+        corpus.existing = True
+        seen = set()
+        try:
+            while True:
+                if stop is not None and stop.is_set():
+                    raise InterruptedError("Training preparation cancelled.")
+                start = corpus._files["in"].tell()
+                line = corpus._files["in"].readline()
+                if not line:
+                    break
+                if not line.strip():
+                    continue
+                example = json.loads(line)
+                key = bytes.fromhex(fingerprint(example))
+                if key in seen:
+                    corpus.discard()
+                    return None
+                seen.add(key)
+                corpus.read += 1
+                corpus.keys.append(key)
+                corpus.offsets.append(start)
+                corpus.weights.append(characters_of(example))
+                identities = _identities(example)
+                corpus.identities.append(tuple(identities) if identities else None)
+                corpus.characters += corpus.weights[-1]
+                corpus.digest.update(key.hex().encode())
+        except BaseException:
+            corpus.discard()
+            raise
+        return corpus
+
+    existing = False   # True for a Corpus.over(): its rows are a run's dataset.jsonl, which a resume of that run links instead of writing again
 
     def add(self, example):
         """Keep the row unless one with the same fingerprint was kept; a duplicate's lineage is remembered for the kept row."""
@@ -186,7 +233,6 @@ def collect(examples, folder, stream_chars, wanted_chars=None, stop=None, say=No
     gone to a Corpus on disk, de-duplicated, and reading stopped once its text reached wanted_chars.
 
     say(read_characters, wanted_or_None) is told as rows are read; stop is a threading.Event checked on every row."""
-    stop = stop
     say = say or (lambda done, of: None)
     stream = iter(examples)
     limit = stream_chars if wanted_chars is None else min(stream_chars, wanted_chars)
@@ -202,6 +248,13 @@ def collect(examples, folder, stream_chars, wanted_chars=None, stop=None, say=No
         return buffered, None
     if wanted_chars is not None and characters >= wanted_chars and wanted_chars <= stream_chars:
         return buffered, None  # the budget needs no more than this: small enough for memory, nothing more is read
+    path = getattr(examples, "path", None)  # a Snapshot (studio_dataset_snapshot): a resume of rows already on disk
+    if path is not None:
+        corpus = Corpus.over(path, stop)
+        if corpus is not None:
+            buffered.clear()
+            say(corpus.characters, corpus.characters)
+            return None, corpus
     corpus = Corpus(folder)
     try:
         expected = getattr(examples, "expected_characters", None)

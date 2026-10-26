@@ -219,7 +219,7 @@ def _resume(job, cfg, out, init, options, context=None):
         if rebase:
             examples, steps = _example_source(job, context), cfg["steps"]
         else:
-            examples = studio_dataset_snapshot.read(path.parent / "dataset.jsonl")  # one row at a time: a big snapshot is never held whole
+            examples = studio_dataset_snapshot.Snapshot(path.parent / "dataset.jsonl")  # one row at a time, read in place: a big snapshot is never held or copied
             steps = int(job.params.get("resume_steps") or cfg["steps"])
         return studio_model.train(dict(cfg, steps=steps), examples, out, resume=path, rebase=rebase, **{**options, "emit": relay})
     except (OSError, ValueError, KeyError) as exc:

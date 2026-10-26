@@ -25,7 +25,6 @@ export function rowChoices(saved: string | null): string[] {
 export const HOLD = ["2%", "5%", "10%"] as const;
 export const LENGTHS = { Short: 1, Medium: 2, Long: 4 } as const; // passes over the chosen text
 export type Length = keyof typeof LENGTHS;
-export const WINDOW_HOURS = 72; // the longest a run may take before the server cuts its token budget (studio_fit.DEFAULT_WINDOW_HOURS); the "Time you can give" choice only shapes the suggestion
 export const PREVIEW_ROWS = 6; // rows of the size preview the page draws
 // Theme tokens (globals.css), as CSS values for an inline style.
 export const PALETTE = ["var(--viz-1)", "var(--viz-2)", "var(--viz-3)", "var(--viz-4)", "var(--viz-5)"];
@@ -57,7 +56,7 @@ export function planBody(c: {
     steps: c.steps ?? null,
     plateau: STOP_WHEN_FLAT[c.stopWhenFlat ?? "Auto"],
     from_version: c.fromVersion ?? null,
-    window_hours: WINDOW_HOURS,
+    window_hours: HOURS[c.hours ?? DEFAULT_HOURS], // the longest the run may take: the server cuts a token budget that needs longer
     keep_my_settings: c.keepMine ?? false,
   };
 }
@@ -98,7 +97,7 @@ export function hardwareLine(h: Hardware): string {
 export function scalingView(plan: Plan | undefined): { hardware: string; lead: string; notes: Scaling["notes"]; canKeep: boolean; kept: boolean; refused: string } | null {
   const s = plan?.scaling;
   if (!plan || !s) return null;
-  const refused = s.blocker ? plan.reason : "";
+  const refused = s.refusal;
   const lead = refused ? T.scalingRefused : s.scaled ? T.scalingScaled : s.notes.length ? T.scalingHeadsUp : T.scalingFits;
   return { hardware: hardwareLine(s.hardware), lead, notes: s.notes, canKeep: s.can_keep_mine, kept: s.kept_mine, refused };
 }
