@@ -289,6 +289,38 @@ class WorkspaceRows(unittest.TestCase):
         self.assertEqual([e["text"] for e in self.svc.example_stream({"datasets": [self.text], "reviewed_only": True})],
                          [e["text"] for e in self.svc.examples({"datasets": [self.text], "reviewed_only": True})])
 
+    def three_sets(self):
+        """Three text sets whose rows are 100, 200 and 400 characters long, 30 rows each: shares of 1/7, 2/7 and 4/7."""
+        ids = []
+        for name, size in (("short", 100), ("middle", 200), ("long", 400)):
+            ids.append(self.ws.create_dataset(name))
+            self.ws.add(ids[-1], [{"text": (f"{name} {i} " * 100)[:size]} for i in range(30)])
+        self.svc.examples({"datasets": ids})  # fixes the held-back split once
+        return ids
+
+    def test_a_budget_smaller_than_the_selection_draws_from_every_set_by_share(self):
+        import studio_corpus
+        ids = self.three_sets()
+        total = self.svc.example_stream({"datasets": ids}).expected_characters
+        token_budget = total // 2 // studio_corpus.CHARS_PER_TOKEN
+        read, taken = 0, {"short": 0, "middle": 0, "long": 0}
+        for example in self.svc.example_stream({"datasets": ids, "token_budget": token_budget}):
+            taken[example["text"].split()[0]] += len(example["text"])
+            read += len(example["text"])
+            if read >= studio_corpus.budget_chars(token_budget):
+                break
+        sizes = {name: sum(len(e["text"]) for e in self.svc.examples({"datasets": [i]})) for name, i in zip(taken, ids)}
+        for name in taken:
+            self.assertAlmostEqual(taken[name] / read, sizes[name] / sum(sizes.values()), delta=.1, msg=name)
+            self.assertGreater(taken[name], 0, name)
+
+    def test_without_a_budget_the_rows_stay_in_dataset_order(self):
+        ids = self.three_sets()
+        in_order = [e["text"] for i in ids for e in self.svc.examples({"datasets": [i]})]
+        self.assertEqual([e["text"] for e in self.svc.example_stream({"datasets": ids})], in_order)
+        roomy = [e["text"] for e in self.svc.example_stream({"datasets": ids, "token_budget": 10 ** 9})]
+        self.assertEqual(roomy, in_order)  # a budget the text does not exceed changes nothing
+
     @staticmethod
     def _words(seed, count=40):
         import random

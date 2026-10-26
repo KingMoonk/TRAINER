@@ -51,6 +51,23 @@ def pretraining_examples(workspace, dataset_ids):
                 yield example
 
 
+def interleaved_examples(workspace, dataset_ids, shares):
+    """pretraining_examples of several sets mixed in proportion to `shares` (a text-character count per dataset id) instead of one
+    set after another, so a reader that stops early (a token budget smaller than the selection) still gets every set's share.
+    Each step takes the next row of the set that has given the least text relative to its share; a set that runs out drops out.
+    The order is deterministic."""
+    streams = {i: pretraining_examples(workspace, [i]) for i in dataset_ids if shares.get(i, 0) > 0}
+    given = dict.fromkeys(streams, 0)
+    while streams:
+        pick = min(streams, key=lambda i: given[i] / shares[i])
+        example = next(streams[pick], None)
+        if example is None:
+            del streams[pick]
+            continue
+        given[pick] += len(example.get("text") or "")
+        yield example
+
+
 def text_sample(workspace, dataset_ids, budget=5_000_000, exclude=()):
     """(documents, total characters) for sizing pretraining without reading it all: disk sets give their size from the
     stored character counts and an evenly spread sample of about `budget` characters (every k-th row); in-memory sets
