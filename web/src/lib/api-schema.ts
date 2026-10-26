@@ -6290,6 +6290,22 @@ export interface components {
              */
             state: "attention" | "live" | "neutral";
         };
+        /**
+         * NoticeModel
+         * @description One thing the running job reports while it goes (studio_run_watch): its batch halved after running out of memory, free disk or RAM
+         *     below what it needs, or a projected end past the time window.
+         */
+        NoticeModel: {
+            /** At */
+            at: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "oom" | "disk" | "ram" | "overrun";
+            /** Text */
+            text: string;
+        };
         /** Option */
         Option: {
             /** Blurb */
@@ -7134,6 +7150,11 @@ export interface components {
             job?: components["schemas"]["JobModel"] | null;
             /** Lr */
             lr?: number | null;
+            /**
+             * Notices
+             * @default []
+             */
+            notices: components["schemas"]["NoticeModel"][];
             /**
              * Paused
              * @default false
