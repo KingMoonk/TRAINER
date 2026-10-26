@@ -11,6 +11,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import studio_worker
 from studio_queue import Job, Plan, Runner
@@ -79,6 +80,17 @@ def saves_then_hangs(job, context, emit, stop, pause):
     time.sleep(2.5)
     (Path(context.root) / "saved").write_text("yes")
     emit({"type": "saved", "file": "last.npz"})
+    (Path(context.root) / "stuck").write_text(str(os.getpid()))
+    time.sleep(120)
+
+
+def ignores_stop_with_tmp(job, context, emit, stop, pause):
+    """Stuck while the in-app coordinator of the run has last.tmp half written in the same folder."""
+    out = Path(context.root) / "out"
+    out.mkdir(exist_ok=True)
+    (out / "run.json").write_text(json.dumps({"status": "training", "step": 3}))
+    (out / "last.tmp").write_bytes(b"half")
+    emit({"type": "metric", "step": 1, "total": 10 ** 6})
     (Path(context.root) / "stuck").write_text(str(os.getpid()))
     time.sleep(120)
 
@@ -274,6 +286,19 @@ class WorkerTests(unittest.TestCase):
         record = json.loads((out / "run.json").read_text())
         self.assertEqual((record["status"], record["interrupted"]), ("stopped", True))  # without a queue restart
         self.assertFalse(list(out.glob("corpus-*.spool")))
+
+    def test_a_hard_kill_leaves_the_temporaries_a_live_coordinator_owns(self):
+        import studio_diloco
+        out = self.root / "out"
+        coordinator = mock.Mock(finished=False, stopped=False, directory=out)
+        with mock.patch.dict(studio_diloco.COORDINATORS, {"run": coordinator}):
+            runner, job, handle = self.start_and_remove(ignores_stop_with_tmp, grace=.5, output_dir=str(out))
+            self.assertTrue(wait(lambda: (self.root / "stuck").exists()))
+            runner.remove(job.id)
+            self.assertTrue(wait(lambda: job.status == "stopped", 30))
+            self.assertTrue(handle._killed)
+            self.assertTrue((out / "last.tmp").exists())
+            self.assertEqual(json.loads((out / "run.json").read_text())["status"], "stopped")
 
     def test_a_worker_that_stops_normally_keeps_its_files(self):
         out = self.root / "out"

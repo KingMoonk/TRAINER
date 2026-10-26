@@ -528,6 +528,7 @@ class Runner:
                 failed=[j for j in self.jobs if j.status == "failed"][-FAILED_SHOWN:])
 
     def start(self):
+        self.started_at = time.time()  # the startup sweep leaves what is written after this to the work that wrote it
         self._writer = threading.Thread(target=self._write_loop, daemon=True, name="queue-save")
         self._writer.start()
         self.thread = threading.Thread(target=self._loop, daemon=True)
@@ -620,8 +621,14 @@ class Runner:
             for job in self.jobs:
                 folders.update(Path(folder) for folder in run_folders(self.root, job))
         for folder in folders:
-            if folder.resolve() not in busy:
-                studio_cleanup.sweep_temporaries(folder)
+            if folder.resolve() not in busy and not self._coordinated(folder):
+                studio_cleanup.sweep_temporaries(folder, before=getattr(self, "started_at", None))
+
+    @staticmethod
+    def _coordinated(folder):
+        """A live in-app coordinator of a distributed run writes last.tmp / best.tmp into `folder`: no sweep may take them."""
+        import studio_diloco
+        return studio_diloco.is_coordinating(folder)
 
     def _start(self, job, handler, emit, on_end=None):
         """Start `job` in a worker process; the handle is tracked until the process ends."""
@@ -902,7 +909,8 @@ class Runner:
                 job.params.update(handle.params)
             for folder in run_folders(self.root, job):
                 reconcile_run(folder)
-                studio_cleanup.sweep_temporaries(folder)
+                if not self._coordinated(folder):  # the in-app coordinator of a distributed run may outlive its local member's kill
+                    studio_cleanup.sweep_temporaries(folder)
         with self.lock:
             if handle:
                 job.params.update(handle.params)
