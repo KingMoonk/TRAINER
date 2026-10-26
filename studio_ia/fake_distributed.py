@@ -50,6 +50,11 @@ class FakeCoordinator:
         self.opened, self.roster, self.drops, self.logged = 0., [], {}, set()
         self.lock = threading.Lock()
 
+    @property
+    def directory(self):
+        """The folder the made-up run keeps its stub weights in (the real coordinator's `directory`): the queue's sweep of temporary files asks every coordinator in studio_diloco.COORDINATORS where it writes."""
+        return self.run.folder or ""
+
     def delta_size(self):
         """Bytes of one member's change: its dtype's share of the weights; sparse int8 sends `sparsity` of the entries at 5 bytes each."""
         dense = BYTES * DELTA_SCALE.get(self.dtype, .5)

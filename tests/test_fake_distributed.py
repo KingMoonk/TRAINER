@@ -23,6 +23,18 @@ class Simulation(unittest.TestCase):
         self.clock.now = beat
         return self.coordinator.snapshot()
 
+    def test_a_made_up_run_in_the_registry_does_not_break_the_queue_s_sweep_of_temporary_files(self):
+        import tempfile
+        import studio_diloco
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as own, tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as other:
+            self.coordinator.run.folder = own
+            studio_diloco.COORDINATORS["fake1"] = self.coordinator
+            self.addCleanup(studio_diloco.COORDINATORS.pop, "fake1", None)
+            self.assertTrue(studio_diloco.is_coordinating(own))  # it writes there while it runs
+            self.assertFalse(studio_diloco.is_coordinating(other))  # no AttributeError that would end the queue's thread
+            self.coordinator.run.folder = ""
+            self.assertFalse(studio_diloco.is_coordinating(other))
+
     def test_two_members_one_cuda_one_mps_pass_through_the_phases_of_a_round_at_their_own_speed(self):
         early = self.at(.2)["nodes"]
         self.assertEqual((early["mac"]["progress"]["phase"], early["box"]["progress"]["phase"]), ("downloading", "downloading"))

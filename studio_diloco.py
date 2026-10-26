@@ -2445,7 +2445,7 @@ IDLE_RELEASE = 3600.  # seconds untouched after which a coordinator is forgotten
 def is_coordinating(folder):
     """Whether a live coordinator of this process (not finished or stopped) writes into `folder`: its last.tmp and best.tmp are in use."""
     target = Path(folder).resolve()
-    return any(not (c.finished or c.stopped) and Path(c.directory).resolve() == target for c in list(COORDINATORS.values()))
+    return any(not (c.finished or c.stopped) and c.directory and Path(c.directory).resolve() == target for c in list(COORDINATORS.values()))
 
 
 _LOCK = threading.Lock()
