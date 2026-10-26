@@ -36,7 +36,7 @@ const preview = {
   tokens_per_second: null,
 };
 
-type PlanBody = { dataset_ids: string[]; mode: string; rows: number; hold: number; passes: number; hours: number; steps: number | null; plateau: boolean | null; keep_my_settings: boolean };
+type PlanBody = { dataset_ids: string[]; mode: string; rows: number; hold: number; passes: number; hours: number; steps: number | null; plateau: boolean | null; keep_my_settings: boolean; window_hours: number };
 
 const SIZING = {
   verdict: "model_too_small",
@@ -229,11 +229,11 @@ describe("Pretraining page", () => {
     expect(screen.getByTestId("sizing-suggestion")).toHaveTextContent("a design about 192 wide and 4 layers deep");
     expect(screen.getByRole("link", { name: /Open the Network designer/ })).toHaveAttribute("href", "/builder");
     expect(screen.getByTestId("sizing-gpu")).toHaveTextContent("RTX 4090");
-    expect(state.plans.at(-1)).toMatchObject({ hours: 4, steps: null });
+    expect(state.plans.at(-1)).toMatchObject({ hours: 4, window_hours: 4, steps: null });
     expect(state.rates).toEqual([]); // measured already: no timing job
 
     await user.click(screen.getByRole("radio", { name: "12 h" }));
-    await waitFor(() => expect(state.plans.at(-1)).toMatchObject({ hours: 12 }));
+    await waitFor(() => expect(state.plans.at(-1)).toMatchObject({ hours: 12, window_hours: 12 })); // the scaling is asked again for the new window
   });
 
   test("the plan says how the run was scaled to this computer, and the override keeps the person's settings", async () => {
@@ -255,12 +255,21 @@ describe("Pretraining page", () => {
 
   test("a run that cannot fit is refused with the plain message and cannot be added", async () => {
     const message = "Not enough GPU memory: 0.0 GB free for this run, and even the smallest model needs about 0.2 GB.";
-    server({ scaling: { ...SCALING, notes: [], scaled: false, can_keep_mine: false, blocker: { resource: "vram", needed: 200_000_000, available: 0 } }, refusal: message });
+    server({ scaling: { ...SCALING, notes: [], scaled: false, can_keep_mine: false, blocker: { resource: "vram", needed: 200_000_000, available: 0 }, refusal: message }, refusal: message });
     renderPage(<PretrainingPage />, { route: "/pretraining/" });
     expect(await screen.findByTestId("scaling-refused")).toHaveTextContent(message);
     expect(screen.getByTestId("scaling-lead")).toHaveTextContent("This run cannot start here:");
     expect(screen.queryByTestId("keep-mine")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add to the queue" })).toBeDisabled();
+  });
+
+  test("a device mismatch is refused with its sentence even without a blocker, and never says the run fits", async () => {
+    const message = "This run is set to use the CUDA, but this computer has no CUDA GPU.";
+    server({ scaling: { ...SCALING, notes: [], scaled: false, can_keep_mine: false, blocker: null, refusal: message }, refusal: message });
+    renderPage(<PretrainingPage />, { route: "/pretraining/" });
+    expect(await screen.findByTestId("scaling-refused")).toHaveTextContent(message);
+    expect(screen.getByTestId("scaling-lead")).toHaveTextContent("This run cannot start here:");
+    expect(screen.queryByText("The run fits this computer as it is set.")).not.toBeInTheDocument();
   });
 
   test("a run that fits shows the machine and no changes", async () => {

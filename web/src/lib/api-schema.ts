@@ -8169,6 +8169,11 @@ export interface components {
              * @default false
              */
             offload: boolean;
+            /**
+             * Refusal
+             * @default
+             */
+            refusal: string;
             /** Scaled */
             scaled: boolean;
             /** Token Budget */

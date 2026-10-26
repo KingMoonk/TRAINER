@@ -584,10 +584,12 @@ class PlanScalingTests(ApiCase):
         return studio_fit.Profile(device="cuda", gpu_name="Fake 8 GB", vram_total=int(vram * G), vram_free=int(free * G), ram_total=32 * G,
                                   ram_free=24 * G, disk_free=int(disk * G), cpu_cores=16)
 
-    def plan_for(self, profile, width=1024, layers=24, rate=None, **body):
+    def plan_for(self, profile, width=1024, layers=24, rate=None, device=None, **body):
         spec = default_spec()
         spec["dims"].update(d_model=width, n_layer=layers, n_ctx=1024)
         spec["block"]["mixer"]["config"]["heads"] = 16
+        if device:
+            spec.setdefault("train", {}).setdefault("run", {})["device"] = device
         self.services.save_version(spec, "big")
         self.services.hardware = profile
         self.services.cached_preview = lambda ids, rows=16: {"pieces": 40_000_000, "params": 300_000_000, "vocab": 263, "context": 1024, "first_rows": []}
@@ -626,6 +628,18 @@ class PlanScalingTests(ApiCase):
         self.assertIn("GPU memory", plan["reason"])
         self.assertEqual(plan["scaling"]["blocker"]["resource"], "vram")
         self.assertIsNone(plan["job"])
+
+    def test_a_device_mismatch_is_refused_with_its_sentence_and_no_blocker(self):
+        cpu = studio_fit.Profile(device="cpu", ram_total=32 * self.G, ram_free=24 * self.G, disk_free=300 * self.G, cpu_cores=16)
+        plan = self.plan_for(cpu, device="cuda")
+        scaling = plan["scaling"]
+        self.assertFalse(plan["can_add"])
+        self.assertIsNone(scaling["blocker"])
+        self.assertIn("no CUDA GPU", scaling["refusal"])
+        self.assertEqual(plan["reason"], scaling["refusal"])
+
+    def test_a_fitting_run_has_no_refusal(self):
+        self.assertEqual(self.plan_for(self.machine(vram=80, free=78))["scaling"]["refusal"], "")
 
     def test_the_window_caps_the_token_budget_and_the_override_keeps_it(self):
         big = self.machine(vram=80, free=78)
