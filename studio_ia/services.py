@@ -582,8 +582,14 @@ class Services:
         """[(from_step, to_step, name)] of the run's schedule, from its spec alone: cheap, so the Tk thread may ask it."""
         raise NotImplementedError
 
-    def chat(self, version, messages, on_text, stop, ablate=None):
-        """ablate: optional [(block, head), ...] mean-ablated for this reply only."""
+    def chat(self, version, messages, on_text, stop, ablate=None, round=None):
+        """ablate: optional [(block, head), ...] mean-ablated for this reply only. round: answer from the checkpoint that post-training
+        round kept without making it live (adopt_round), instead of the version's own; ValueError when the round has none."""
+        raise NotImplementedError
+
+    def adopt_round(self, version, round) -> dict:
+        """Make the checkpoint a post-training round kept (its gate failed) the version's best_checkpoint, so Chat and later rounds use it:
+        {"version", "round", "checkpoint"}. ValueError with a sentence when the round has no kept checkpoint to adopt."""
         raise NotImplementedError
 
     # voice mode (studio_voice): speech in, speech out ------------------------------------------------------------
@@ -1299,7 +1305,10 @@ class FakeServices(Services):
     def run_phases(self, run_dir):
         return []
 
-    def chat(self, version, messages, on_text, stop, ablate=None):
+    def chat(self, version, messages, on_text, stop, ablate=None, round=None):
+        if round:
+            self._kept_round(version, round)
+            return f"[reply from round {round}'s kept checkpoint]"
         v = next((x for x in self._versions if x.number == version), None)
         if v is not None and not v.best_checkpoint and v.status == "training" and not any(c["version"] == version for c in self.live_checkpoints()):
             raise NoCheckpoint(version, f"Version {version} is still on its first run and has not saved a checkpoint yet. "
@@ -1308,6 +1317,21 @@ class FakeServices(Services):
 
     def live_checkpoints(self):
         return [dict(c) for c in self.live]
+
+    def _kept_round(self, version, number):
+        """(version, kept checkpoint) of a round `kept` in the fake's `kept_rounds` ({(version, round): checkpoint}, set by a test)."""
+        v = next((x for x in self._versions if x.number == version), None) or (self._versions[-1] if self._versions else None)
+        path = getattr(self, "kept_rounds", {}).get((getattr(v, "number", None), number))
+        if v is None or not path:
+            raise ValueError(f"Round {number} has no kept checkpoint to use.")
+        return v, path
+
+    def adopt_round(self, version, round):
+        v, path = self._kept_round(version, round)
+        self.kept_rounds.pop((v.number, round))
+        v.best_checkpoint = path
+        self.emit("versions", None)
+        return {"version": v.number, "round": round, "checkpoint": path}
 
     def score_live(self, version, stop=None):
         live = next((c for c in self.live_checkpoints() if c["version"] == version), None)
@@ -2871,19 +2895,50 @@ class WorkspaceServices(Services):
         done.setdefault(str(v.number), {})[str(number)] = {k: result.get(k) for k in ("ok", "checks", "verdict", "before", "after", "band", "checkpoint", "groups", "taught", "skipped")}
         self._save_json("post_training.json", done)
         if result.get("ok"):
-            card = dict(v.scorecard or {})
-            after = result.get("after") or {}
-            import studio_eval
-            card.update({"bpc": after.get("bpc", card.get("bpc")), **({"bpc_method": studio_eval.SCORE_METHOD} if after.get("bpc") is not None else {}),
-                         "problems": [after.get("pass_k"), after.get("pass_n")] if after.get("pass_n") else card.get("problems")})
-            if number == 1:
-                card["answers"] = True
-            self.store.set_best_checkpoint(v.number, result["checkpoint"])
-            self.store.set_scorecard(v.number, card)
-            self._note_devices(v.number, self._abs(result["checkpoint"]))
+            self._make_live(v, number, result)
         self.emit("versions", None)
         if result.get("ok"):
             self._bench_later(v.number)  # the weights changed: score the new file
+
+    def _make_live(self, v, number, result):
+        """Version `v`'s checkpoint becomes the round's (Chat follows it), with the scorecard the round measured."""
+        card = dict(v.scorecard or {})
+        after = result.get("after") or {}
+        import studio_eval
+        card.update({"bpc": after.get("bpc", card.get("bpc")), **({"bpc_method": studio_eval.SCORE_METHOD} if after.get("bpc") is not None else {}),
+                     "problems": [after.get("pass_k"), after.get("pass_n")] if after.get("pass_n") else card.get("problems")})
+        if number == 1:
+            card["answers"] = True
+        self.store.set_best_checkpoint(v.number, result["checkpoint"])
+        self.store.set_scorecard(v.number, card)
+        self._note_devices(v.number, self._abs(result["checkpoint"]))
+
+    def _kept_round(self, version, number):
+        """(version, its gate record, the checkpoint file) of a round that failed its gate and was kept, not live; ValueError with a sentence otherwise."""
+        v = self._as_version(version) if version else self.current_version()
+        if v is None:
+            raise ValueError("There is no version yet. Build one first.")
+        gate = self._json("post_training.json", {}).get(str(v.number), {}).get(str(number))
+        if not gate:
+            raise ValueError(f"Round {number} has not run on version {v.number}.")
+        if gate.get("ok"):
+            raise ValueError(f"Round {number} passed its gate and is already live on version {v.number}.")
+        if gate.get("adopted"):
+            raise ValueError(f"Round {number}'s checkpoint is already adopted on version {v.number}.")
+        path = self._abs(gate.get("checkpoint"))
+        if not path or not Path(path).is_file():
+            raise ValueError(f"Round {number} kept no checkpoint file on version {v.number} to use.")
+        return v, gate, path
+
+    def adopt_round(self, version, round):
+        v, gate, path = self._kept_round(version, round)
+        self._make_live(v, round, gate)
+        done = self._json("post_training.json", {})
+        done[str(v.number)][str(round)]["adopted"] = True
+        self._save_json("post_training.json", done)
+        self.emit("versions", None)
+        self._bench_later(v.number)  # the weights changed: score the new file
+        return {"version": v.number, "round": round, "checkpoint": str(gate["checkpoint"])}
 
     def _human_pairs(self):
         from studio_rlhf import PreferenceStore
@@ -2902,7 +2957,7 @@ class WorkspaceServices(Services):
         for n in range(1, 5):
             g = done.get(str(n))
             status = "running" if running == n else "queued" if n in waiting else "done" if g else "idle"
-            rounds[n] = {"status": status, "note": ("live" if g["ok"] else "kept, not live") if g and status == "done" else ""}
+            rounds[n] = {"status": status, "note": ("live" if g["ok"] else "adopted" if g.get("adopted") else "kept, not live") if g and status == "done" else ""}
         convs = self.data("conversations")
         return {"rounds": rounds, "gates": {int(n): g for n, g in done.items()},
                 "counts": {"conversations": convs.count, "corrections": len(self._json("corrections.json", [])),
@@ -3819,10 +3874,10 @@ class WorkspaceServices(Services):
         return {"version": number, "step": self._live_meta(snapshot).get("step"), "saved_at": snapshot.stat().st_mtime,
                 "bpc": studio_eval.corpus_bpc(scores), "documents": len(docs)}
 
-    def chat(self, version, messages, on_text, stop, ablate=None):
+    def chat(self, version, messages, on_text, stop, ablate=None, round=None):
         from studio_model import LocalModel, load_checkpoint
         import studio_memory
-        ckpt = self._checkpoint(version, live=True)
+        ckpt = self._kept_round(version, round)[2] if round else self._checkpoint(version, live=True)
         with self._chat_lock:
             model = self._models.pop(ckpt, None)
             if model is None:

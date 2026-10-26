@@ -84,6 +84,46 @@
         "title": "Added",
         "type": "object"
       },
+      "AdoptRequest": {
+        "properties": {
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "AdoptRequest",
+        "type": "object"
+      },
+      "AdoptedOut": {
+        "properties": {
+          "checkpoint": {
+            "title": "Checkpoint",
+            "type": "string"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "round",
+          "checkpoint"
+        ],
+        "title": "AdoptedOut",
+        "type": "object"
+      },
       "AskPause": {
         "properties": {
           "from_node": {
@@ -9226,6 +9266,19 @@
             "minItems": 1,
             "title": "Messages",
             "type": "array"
+          },
+          "round": {
+            "anyOf": [
+              {
+                "maximum": 4.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Round"
           },
           "version": {
             "anyOf": [
@@ -20505,6 +20558,59 @@
           }
         },
         "summary": "Queue Round",
+        "tags": [
+          "post-training"
+        ]
+      }
+    },
+    "/post-training/rounds/{round}/adopt": {
+      "post": {
+        "description": "Make the checkpoint a round kept (its gate failed, so it is not live) the version's best checkpoint: Chat and later rounds\nuse it from now on. Refused with a sentence when the round passed, has not run, or kept no checkpoint file.",
+        "operationId": "adopt_round_post_training_rounds__round__adopt_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "round",
+            "required": true,
+            "schema": {
+              "title": "Round",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdoptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdoptedOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Adopt Round",
         "tags": [
           "post-training"
         ]

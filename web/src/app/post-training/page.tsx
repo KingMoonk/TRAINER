@@ -9,6 +9,8 @@ import { cn } from "@/lib/utils";
 import { ROUNDS, STATUS_TEXT, T } from "./copy";
 import { GateCard } from "./gate-card";
 import { count, errorText, firstOpenRound, roundBlocker, type Gate, type JobOut, type Status } from "./logic";
+import { BaseWarning, KeptCard } from "./kept-card";
+import { baseWarning, isKept, type KeptGate } from "./kept-logic";
 import { LoopCard } from "./loop-card";
 import { RoundCard, type Choices, type Live } from "./round-card";
 import { ImportCard, RowsCard, VersionsCard } from "./side-cards";
@@ -106,6 +108,7 @@ export default function PostTrainingPage() {
   const spec = ROUNDS[selected - 1];
   const roundStatus = rounds[String(selected)]?.status ?? "idle";
   const gate = (liveGates[selected] ?? status?.gates?.[String(selected)]) as Gate | undefined;
+  const warning = baseWarning(selected, status?.gates as Record<string, KeptGate> | undefined, rounds["1"]?.status, version?.number);
   const reading = !status || statusFor !== (version?.number ?? null);
   const set = (patch: Partial<Choices>) => setChoices((c) => ({ ...c, ...patch }));
 
@@ -203,6 +206,7 @@ export default function PostTrainingPage() {
         </div>
       ) : (
         <>
+          {warning && <BaseWarning text={warning} />}
           <RoundCard
             spec={spec}
             props={{ counts, options, choices, set, live, gate, loading: optionsQuery.isLoading }}
@@ -221,6 +225,7 @@ export default function PostTrainingPage() {
             checkpoint={version ? `version ${version.number}` : "its current checkpoint"}
             overlap={status?.overlap}
           />
+          {isKept(gate as KeptGate | undefined) && <KeptCard round={selected} version={version?.number} onAdopted={refreshSoon} />}
         </>
       )}
 

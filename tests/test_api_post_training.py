@@ -191,6 +191,23 @@ class PostTrainingApiTest(unittest.TestCase):
         self.assertEqual(job["status"], "done", job)
         self.assertFalse(job["result"]["ok"])
 
+    def test_a_kept_round_can_be_tried_then_adopted(self):
+        trained(self.services)
+        self.services.kept_rounds = {(1, 1): "/x/kept.npz"}
+        tried = self.client.post("/chat/reply", json={"messages": [{"role": "user", "content": "hi"}], "round": 1})
+        self.assertIn("kept checkpoint", tried.text)
+        adopted = self.client.post("/post-training/rounds/1/adopt", json={"version": 1})
+        self.assertEqual(adopted.status_code, 200, adopted.text)
+        self.assertEqual(adopted.json(), {"version": 1, "round": 1, "checkpoint": "/x/kept.npz"})
+        self.assertEqual(self.services.versions()[0].best_checkpoint, "/x/kept.npz")
+
+    def test_adopting_a_round_with_nothing_kept_says_why(self):
+        trained(self.services)
+        refused = self.client.post("/post-training/rounds/2/adopt", json={})
+        self.assertEqual(refused.status_code, 400, refused.text)
+        self.assertIn("Round 2 has no kept checkpoint", refused.text)
+        self.assertEqual(self.client.post("/post-training/rounds/9/adopt", json={}).status_code, 404)
+
     def test_import_saves_a_version_and_says_so_on_events(self):
         response = self.client.post("/post-training/imports", data={"name": "gpt2"})
         self.assertEqual(response.status_code, 200, response.text)
