@@ -246,7 +246,7 @@ describe("New run", () => {
       expect(section).toHaveTextContent("beast: batch 16 -> 2 x 8 accumulation to fit 5.0 GB of GPU memory.");
     });
 
-    test("a member that cannot fit is named, Start waits, and ticking start-without sends leave_out_unfit", async () => {
+    test("a member that cannot fit is named, Start waits, and ticking start-without sends the flagged names as leave_out", async () => {
       const { sent } = server({ nodes: MORE, sized: answer([mem("mac"), mem("beast", { fits: false, refusal: "beast cannot take part: it has 200 MB of GPU memory for this run and the design needs about 9 GB even at one row." })], { flagged: ["beast"] }) });
       const user = userEvent.setup();
       renderPage(<NewRunPage />, { route: "/runs/new/" });
@@ -258,7 +258,7 @@ describe("New run", () => {
       await waitFor(() => expect(screen.queryByTestId("blocker")).toBeNull());
       await user.click(await cta());
       await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=run-3"));
-      expect(sent("POST", "/distributed/runs")?.body).toMatchObject({ machines: ["beast"], leave_out_unfit: true });
+      expect(sent("POST", "/distributed/runs")?.body).toMatchObject({ machines: ["beast"], leave_out: ["beast"] });
     });
 
     test("when this computer cannot fit, nothing offers to start without it", async () => {
@@ -270,7 +270,7 @@ describe("New run", () => {
       expect(screen.queryByRole("checkbox", { name: /Start without/ })).toBeNull();
     });
 
-    test("cut rounds are told, and a start with nothing flagged sends no leave_out_unfit", async () => {
+    test("cut rounds are told, and a start with nothing flagged sends no leave_out", async () => {
       const { sent } = server({ nodes: MORE, sized: answer([mem("mac"), mem("beast")], { rounds: 12, rounds_cut: true, note: "Token budget 5B -> 100M to finish in about 1 h at the 38,000 tokens/s the members that fit measure together. Rounds 40 -> 12." }) });
       const user = userEvent.setup();
       renderPage(<NewRunPage />, { route: "/runs/new/" });
@@ -278,7 +278,7 @@ describe("New run", () => {
       expect(await screen.findByTestId("member-sizing")).toHaveTextContent("Rounds 40 -> 12.");
       await user.click(await cta());
       await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=run-3"));
-      expect(sent("POST", "/distributed/runs")?.body).not.toHaveProperty("leave_out_unfit");
+      expect(sent("POST", "/distributed/runs")?.body).not.toHaveProperty("leave_out");
     });
   });
 

@@ -132,27 +132,43 @@ class SizingTests(unittest.TestCase):
         self.assertEqual(refused.status_code, 409)
         self.assertIn("tiny cannot take part", refused.json()["detail"])
         self.assertEqual(list(self.services.queue().up_next), [])
-        started = self.start(machines=["laptop", "tiny"], leave_out_unfit=True)
+        started = self.start(machines=["laptop", "tiny"], leave_out=["tiny"])
         self.assertEqual(started.status_code, 201, started.text)
         params = self.job(started.json()).params
         self.assertEqual([m["address"] for m in params["machines"]], ["local", "laptop"])
         self.assertEqual([row["node"] for row in params["left_out"]], ["tiny"])
         self.assertIn("cannot take part", params["left_out"][0]["reason"])
 
+    def test_a_start_whose_unfit_machines_differ_from_the_confirmed_ones_is_a_409_and_starts_nothing(self):
+        # tiny cannot hold the design now, but the person confirmed leaving out laptop (the machine that was unfit when they looked)
+        refused = self.start(machines=["laptop", "tiny"], leave_out=["laptop"])
+        self.assertEqual(refused.status_code, 409, refused.text)
+        self.assertIn("changed since you confirmed", refused.json()["detail"])
+        self.assertIn("laptop", refused.json()["detail"])
+        self.assertIn("tiny", refused.json()["detail"])
+        # confirming nobody while tiny cannot hold it is not a go-ahead either, nor is confirming one when nothing is unfit
+        self.assertEqual(self.start(machines=["laptop", "tiny"], leave_out=[]).status_code, 409)
+        self.assertEqual(self.start(machines=["laptop"], leave_out=["laptop"]).status_code, 409)
+        self.assertEqual(list(self.services.queue().up_next), [])
+
+    def test_a_confirmed_empty_list_starts_when_nothing_is_unfit(self):
+        started = self.start(machines=["laptop"], leave_out=[])
+        self.assertEqual(started.status_code, 201, started.text)
+
     def test_a_coordinator_that_would_be_left_out_as_unfit_is_a_409_and_nothing_is_queued(self):
-        refused = self.start(machines=["laptop", "tiny"], coordinator="tiny", leave_out_unfit=True)
+        refused = self.start(machines=["laptop", "tiny"], coordinator="tiny", leave_out=["tiny"])
         self.assertEqual(refused.status_code, 409, refused.text)
         self.assertIn("tiny cannot coordinate", refused.json()["detail"])
         self.assertIn("tiny cannot take part", refused.json()["detail"])
         self.assertEqual(list(self.services.queue().up_next), [])
-        kept = self.start(machines=["laptop", "tiny"], coordinator="laptop", leave_out_unfit=True)  # a fitting coordinator stays
+        kept = self.start(machines=["laptop", "tiny"], coordinator="laptop", leave_out=["tiny"])  # a fitting coordinator stays
         self.assertEqual(kept.status_code, 201, kept.text)
         self.assertEqual(self.job(kept.json()).params["coordinator"], "laptop")
 
     def test_a_coordinator_that_does_not_answer_is_a_409_with_all_machines(self):
         self.peers["down"] = studio_cluster.NodeInfo(address="down", hostname="down", online=False, error="down did not answer.")
         self.services.set_setting("nodes", list(self.peers))
-        refused = self.start(all_machines=True, coordinator="down", leave_out_unfit=True)
+        refused = self.start(all_machines=True, coordinator="down", leave_out=["tiny"])
         self.assertEqual(refused.status_code, 409, refused.text)
         self.assertIn("down cannot coordinate", refused.json()["detail"])
         self.assertEqual(list(self.services.queue().up_next), [])
@@ -229,7 +245,7 @@ class SizingTests(unittest.TestCase):
         self.assertTrue(rows["10.0.0.2"]["fits"])
         self.assertFalse(rows["10.0.0.3"]["fits"])  # the small box is not hidden behind the big one of its name
         self.assertEqual(rows["10.0.0.2"]["batch_size"] * rows["10.0.0.2"]["accumulation"], distributed.ROWS)
-        started = self.start(machines=list(self.peers), leave_out_unfit=True)
+        started = self.start(machines=list(self.peers), leave_out=["box"])
         self.assertEqual(started.status_code, 201, started.text)
         params = self.job(started.json()).params
         self.assertEqual([m["address"] for m in params["machines"]], ["local", "10.0.0.2"])

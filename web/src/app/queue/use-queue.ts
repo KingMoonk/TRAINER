@@ -1,9 +1,10 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api, subscribe, unwrap, type ApiEvent } from "@/lib/api";
+import type { components } from "@/lib/api-schema";
 import { deltaDtypeOf } from "../cluster/training/logic";
 import { T, fill } from "./copy";
 import { errorText, type Job, type Plan, type Queue } from "./logic";
@@ -52,9 +53,13 @@ export function useJobOutlook(jobId: string) {
   });
 }
 
+/** An "All machines" start that waits for the person: the machines the sizing says cannot hold their share, and the start they would confirm. */
+export type AllMachinesAsk = { job: Job; body: components["schemas"]["StartRun"]; sizing: components["schemas"]["RunSizing"] };
+
 /** Every control on the page. A reply that carries the new queue state replaces it at once; a problem is a toast. */
 export function useQueueActions() {
   const client = useQueryClient();
+  const [ask, setAsk] = useState<AllMachinesAsk | null>(null);
   const keep = (state: Queue) => client.setQueryData(QUEUE, state);
   const failed = (error: unknown) => {
     toast.error(errorText(error));
@@ -114,22 +119,37 @@ export function useQueueActions() {
     },
     onError: failed,
   });
-  // "All machines (DiLoCo)": the Cluster › Training form's own start, from its defaults, taking the waiting pretrain job's place.
+  const allStarted = (run: { members: unknown[] }) => {
+    toast.success(fill(T.allStarted, { count: String(run.members.length) }));
+    client.invalidateQueries({ queryKey: QUEUE });
+    client.invalidateQueries({ queryKey: ["cluster", "queue"] });
+  };
+  // "All machines (DiLoCo)": the Cluster › Training form's own start, from its defaults, taking the waiting pretrain job's place. The
+  // sizing is read first: when machines cannot hold their share the person confirms leaving exactly those out (`ask`), and the start
+  // carries their names, so a machine whose memory changed meanwhile is a refusal and not a different machine dropped.
   const allMachines = useMutation({
     mutationFn: async (waiting: Job) => {
       const defaults = await unwrap(api.GET("/distributed/defaults"));
       const datasets = Array.isArray(waiting.params?.datasets) ? waiting.params.datasets.map(String) : [];
       const version = typeof waiting.params?.version === "number" ? waiting.params.version : null;
-      return unwrap(api.POST("/distributed/runs", {
-        body: { replaces: waiting.id, all_machines: true, machines: [], version, dataset_ids: datasets, rounds: defaults.rounds, inner_steps: defaults.inner_steps,
-                outer_lr: defaults.outer_lr, outer_momentum: defaults.outer_momentum, overlap: null, time_box: null, delta_dtype: deltaDtypeOf(defaults.delta_dtype), delta_sparsity: 0, reviewed_only: false },
-      }));
+      const body: AllMachinesAsk["body"] = {
+        replaces: waiting.id, all_machines: true, machines: [], version, dataset_ids: datasets, rounds: defaults.rounds, inner_steps: defaults.inner_steps,
+        outer_lr: defaults.outer_lr, outer_momentum: defaults.outer_momentum, overlap: null, time_box: null, delta_dtype: deltaDtypeOf(defaults.delta_dtype), delta_sparsity: 0, reviewed_only: false,
+      };
+      const sizing = await unwrap(api.POST("/distributed/sizing", { body }));
+      // This computer is in every run, so a start cannot go on without it: let the start say so instead of asking.
+      if (sizing && sizing.flagged.length > 0 && !sizing.members.some((m) => !m.fits && m.address === "local")) return { ask: { job: waiting, body, sizing } };
+      return { run: await unwrap(api.POST("/distributed/runs", { body })) };
     },
-    onSuccess: (run) => {
-      toast.success(fill(T.allStarted, { count: String(run.members.length) }));
-      client.invalidateQueries({ queryKey: QUEUE });
-      client.invalidateQueries({ queryKey: ["cluster", "queue"] });
+    onSuccess: (result) => {
+      if (result.ask) setAsk(result.ask);
+      else if (result.run) allStarted(result.run);
     },
+    onError: failed,
+  });
+  const confirmAll = useMutation({
+    mutationFn: (confirmed: AllMachinesAsk) => unwrap(api.POST("/distributed/runs", { body: { ...confirmed.body, leave_out: confirmed.sizing.flagged } })),
+    onSuccess: allStarted,
     onError: failed,
   });
   const savePlan = useMutation({
@@ -153,7 +173,7 @@ export function useQueueActions() {
       failed(error);
     },
   });
-  return { pause, resume, start, stopAfterCooldown, checkpointNow, remove, restart, hold, move, startNow, pin, allMachines, savePlan };
+  return { pause, resume, start, stopAfterCooldown, checkpointNow, remove, restart, hold, move, startNow, pin, allMachines, confirmAll, ask, dismissAsk: () => setAsk(null), savePlan };
 }
 
 export type QueueActions = ReturnType<typeof useQueueActions>;

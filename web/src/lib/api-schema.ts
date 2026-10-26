@@ -8748,8 +8748,8 @@ export interface components {
              * @default 100
              */
             inner_steps: number;
-            /** Leave Out Unfit */
-            leave_out_unfit?: boolean | null;
+            /** Leave Out */
+            leave_out?: string[] | null;
             /**
              * Machines
              * @default []

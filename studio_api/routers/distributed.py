@@ -81,7 +81,7 @@ class StartRun(BaseModel):
     pivots: list[Literal["halve_lr", "next_dataset", "drop_lessons"]] | None = None  # what the run tries, in this order, when the loss plateaus: back to the best weights, then the change; with none left, or no plateau window, it ends. Needs plateau_checks
     stages: Stages | None = None  # next_dataset moves on to the workspace's unseen text sets, worst held-out loss first; needs next_dataset in pivots
     window_hours: float | None = Field(None, gt=0, le=24 * 365)  # the longest the run may take (default studio_fit.DEFAULT_WINDOW_HOURS): rounds the members cannot finish in it at their measured speed are cut
-    leave_out_unfit: bool | None = None  # (default false) true: start without the machines that cannot hold their share (the start is a 409 naming what blocks them otherwise)
+    leave_out: list[str] | None = None  # the machines (by the names RunSizing.flagged gives) the person confirmed to start without because they cannot hold their share; the start is a 409 when the machines that cannot hold it NOW differ from this list, and without it a machine that cannot is a 409 naming it
 
 
 class MemberSizing(BaseModel):
@@ -589,8 +589,14 @@ def _check_coordinator(address, chosen, peers, own):
         raise HTTPException(409, f"{name} cannot coordinate the run: it runs app version {peer.version}; this computer runs {own.version}.")
 
 
+def _names(names):
+    """"nobody", "A", "A and B", "A, B and C": the machines a 409 talks about."""
+    names = sorted(set(names))
+    return "no machine" if not names else names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
 def _check_coordinator_kept(address, peers, left_out):
-    """After machines are left out (not answering, or unfit with `leave_out_unfit`), the coordinator must still be among the peers the run
+    """After machines are left out (not answering, or unfit and confirmed in `leave_out`), the coordinator must still be among the peers the run
     invites: a left-out machine gets no member invite, so members pointing at it would never find their coordinator. 409 naming it and why."""
     if not address or any(peer.address == address for peer in peers):
         return
@@ -727,11 +733,15 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
             raise HTTPException(409, f"{name} cannot join with receiver grants: it runs app version {mismatched.version}; "
                                     f"this computer runs {own.version}.")
     sizing = _sizing(body, services, version, peers, own)
+    unfit = sorted(m.name for m in sizing.members if not m.fits) if sizing is not None else []
+    if body.leave_out is not None and sorted(set(body.leave_out)) != sorted(set(unfit)):  # what was confirmed is not what would be dropped: starting would drop another machine than the one agreed to
+        raise HTTPException(409, f"The machines that cannot take part changed since you confirmed: you agreed to start without {_names(body.leave_out)}, "
+                                 f"but now {_names(unfit)} cannot. Nothing was started; check the sizing and start again.")
     if sizing is not None and sizing.flagged:
         refusals = [m.refusal for m in sizing.members if not m.fits]
         if any(m.address == studio_cluster.LOCAL and not m.fits for m in sizing.members):
             raise HTTPException(409, " ".join([*refusals, "This computer is a member of every run it starts, so the run cannot start."]))
-        if not body.leave_out_unfit:
+        if body.leave_out is None:
             raise HTTPException(409, " ".join([*refusals, "Start without " + ("it" if len(refusals) == 1 else "them") + " (leave out the machines that cannot fit) or choose a smaller design."]))
         out = {m.address: m.refusal for m in sizing.members if not m.fits}  # by address: two machines may share a hostname
         left_out = [*left_out, *({"node": peer.hostname or peer.address, "address": peer.address, "reason": out[peer.address]}

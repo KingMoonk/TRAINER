@@ -1,12 +1,16 @@
 "use client";
 
 import Link from "next/link";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { nodeName, seenText, type ClusterQueue, type QueueNode, type QueueRow } from "@/lib/cluster";
 import { cn } from "@/lib/utils";
 import { T, fill } from "./copy";
 import { ALL_MACHINES, canRunOnAll, memberLines, nodeLabel, pinChoice, placeText, type Job } from "./logic";
+import { nameList } from "../runs/new/logic";
 import type { QueueActions } from "./use-queue";
 
 /** The line under a job that says where it runs, or where it will, and why it waits. Only for a cluster of several machines. */
@@ -33,18 +37,52 @@ export function MembersLine({ job }: { job: Job }) {
   );
 }
 
+/** "All machines" found machines that cannot hold their share: name them with why, and the rounds cut, and start without exactly those once confirmed. */
+export function LeaveOutConfirm({ job, actions }: { job: Job; actions: QueueActions }) {
+  const ask = actions.ask?.job.id === job.id ? actions.ask : null;
+  if (!ask) return null;
+  const { sizing } = ask;
+  const names = nameList(sizing.flagged);
+  return (
+    <AlertDialog open onOpenChange={(open) => !open && actions.dismissAsk()}>
+      <AlertDialogContent data-testid={`leave-out-${job.id}`}>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{fill(T.allLeaveOutTitle, { names })}</AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div>
+              <p>{fill(T.allLeaveOutBody, { names })}</p>
+              <ul className="mt-2 list-disc pl-5">
+                {sizing.members.filter((m) => !m.fits).map((m) => (
+                  <li key={m.address}>{m.refusal}</li>
+                ))}
+              </ul>
+              {sizing.rounds_cut && sizing.note && <p className="mt-2">{sizing.note}</p>}
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{T.cancel}</AlertDialogCancel>
+          <AlertDialogAction onClick={() => actions.confirmAll.mutate(ask)}>{fill(T.allLeaveOutConfirm, { names })}</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 /** Pin a waiting job to one machine, or let it go anywhere again. A pretrain job can instead run on all machines at once (DiLoCo). */
 export function PinSelect({ job, name, row, nodes, actions }: { job: Job; name: string; row: QueueRow | undefined; nodes: QueueNode[]; actions: QueueActions }) {
   const pinned = row?.pinned ?? "";
   const value = pinChoice(nodes, pinned);
   return (
+    <>
+    <LeaveOutConfirm job={job} actions={actions} />
     <label className="flex items-center gap-1 text-xs text-muted-foreground">
       {T.runOn}
       <select
         aria-label={`${T.runOn}: ${name}`}
         data-testid={`pin-${job.id}`}
         value={value}
-        disabled={actions.pin.isPending || actions.allMachines.isPending}
+        disabled={actions.pin.isPending || actions.allMachines.isPending || actions.confirmAll.isPending}
         onChange={(e) =>
           e.target.value === ALL_MACHINES ? actions.allMachines.mutate(job) : actions.pin.mutate({ id: job.id, pinned: e.target.value || null })
         }
@@ -60,6 +98,7 @@ export function PinSelect({ job, name, row, nodes, actions }: { job: Job; name: 
         ))}
       </select>
     </label>
+    </>
   );
 }
 

@@ -12110,16 +12110,19 @@
             "title": "Inner Steps",
             "type": "integer"
           },
-          "leave_out_unfit": {
+          "leave_out": {
             "anyOf": [
               {
-                "type": "boolean"
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Leave Out Unfit"
+            "title": "Leave Out"
           },
           "machines": {
             "default": [],
