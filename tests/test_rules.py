@@ -1,4 +1,5 @@
 """studio_rules and studio_data_kinds: rule checks, generators, classification, near-duplicates, summaries."""
+import itertools
 import random
 import tempfile
 import time
@@ -137,6 +138,39 @@ class Kinds(unittest.TestCase):
         ws.add(small, ["a short note kept whole", "held back"])
         self.assertEqual(dk.text_characters(ws, [disk, small], exclude={"held back"}), sum(map(len, docs)) + len("a short note kept whole"))
         self.assertEqual(dk.text_characters(ws, []), 0)
+
+    def test_text_characters_counts_only_training_text_of_disk_sets(self):
+        ws = workspace()
+        plain, heavy = ws.create_dataset("plain", storage="sqlite"), ws.create_dataset("heavy", storage="sqlite")
+        docs = [f"document {i:03d} " + "x" * 40 for i in range(30)]
+        ws.add(plain, docs)
+        ws.add(heavy, [{"text": d, "metadata": {"note": "m" * 500}, "intent": "i" * 300} for d in docs]
+               + [{"user": "q" * 200, "assistant": "a" * 200}, {"text": "an unreviewed draft", "quality": "Review", "synthetic": True}])
+        dk.add_problems(ws, heavy, rules.generate("copy", random.Random(1), 3))
+        self.assertEqual(dk.text_characters(ws, [heavy]), sum(map(len, docs)))
+        self.assertEqual(dk.text_characters(ws, [plain]), dk.text_characters(ws, [heavy]))  # equal text, equal shares
+        in_memory = ws.create_dataset("memory")
+        ws.add(in_memory, docs + [{"user": "q" * 200, "assistant": "a" * 200}])
+        self.assertEqual(dk.text_characters(ws, [in_memory]), dk.text_characters(ws, [heavy]))
+
+    def test_text_characters_leaves_out_held_back_rows_of_disk_sets(self):
+        ws = workspace()
+        disk = ws.create_dataset("disk", storage="sqlite")
+        docs = [f"document {i:03d} " + "x" * 40 for i in range(30)]
+        ws.add(disk, docs)
+        held = {docs[0], docs[7], "text that is in no set"}
+        self.assertEqual(dk.text_characters(ws, [disk], exclude=held), sum(map(len, docs)) - len(docs[0]) - len(docs[7]))
+
+    def test_interleaved_shares_follow_text_not_record_weight(self):
+        ws = workspace()
+        a, b = ws.create_dataset("a", storage="sqlite"), ws.create_dataset("b", storage="sqlite")
+        docs = [f"document {i:03d} " + "x" * 40 for i in range(20)]
+        ws.add(a, docs)
+        ws.add(b, [{"text": d, "metadata": {"note": "m" * 5000}} for d in docs])
+        shares = {i: dk.text_characters(ws, [i]) for i in (a, b)}
+        self.assertEqual(shares[a], shares[b])
+        first = list(itertools.islice(dk.interleaved_examples(ws, [a, b], shares), 20))
+        self.assertEqual(sorted(e["datasetId"] for e in first), [a] * 10 + [b] * 10)
 
     def test_sqlite_storage_problems(self):
         ws = workspace()
