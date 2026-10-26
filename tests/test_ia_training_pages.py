@@ -278,6 +278,17 @@ class WorkspaceRows(unittest.TestCase):
         self.assertEqual(set(self.svc._heldout()), held)  # fixed on first use
         self.assertEqual(len(again), len(train))
 
+    def test_the_stream_gives_the_rows_examples_gives_one_at_a_time(self):
+        first = self.svc.example_stream({"datasets": [self.text], "heldout_fraction": .2})  # no held-back file yet: examples() makes it
+        listed = self.svc.examples({"datasets": [self.text]})
+        self.assertEqual(list(first), listed)
+        stream = self.svc.example_stream({"datasets": [self.text]})
+        self.assertEqual(stream.expected_characters, sum(len(e["text"]) for e in listed))
+        self.assertEqual(list(stream), listed)
+        self.ws.add(self.text, [{"text": "an unreviewed row", "quality": "Review"}])
+        self.assertEqual([e["text"] for e in self.svc.example_stream({"datasets": [self.text], "reviewed_only": True})],
+                         [e["text"] for e in self.svc.examples({"datasets": [self.text], "reviewed_only": True})])
+
     def test_post_rows_keep_held_back_apart(self):
         train, held = self.svc.post_rows("problems"), self.svc.post_rows("heldout_problems")
         self.assertEqual(len(train) + len(held), 6)

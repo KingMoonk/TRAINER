@@ -24,6 +24,7 @@
       "start_hour": 22
     },
     "prepare": null,
+    "prepare_phase": null,
     "step": 0,
     "stopping": false,
     "total": 0,

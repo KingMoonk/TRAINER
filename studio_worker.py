@@ -229,6 +229,9 @@ class JobContext:
     def examples(self, params):
         return self._data().examples(params)
 
+    def example_stream(self, params):
+        return self._data().example_stream(params)
+
     def post_rows(self, kind):
         return self._data().post_rows(kind)
 

@@ -85,6 +85,7 @@ class QueueStateModel(Model):
     total: int = 0
     phase: str = ""
     prepare: int | None = None  # percent of the text prepared while phase is "preparing"
+    prepare_phase: Literal["reading", "tokenizer", "tokenizing"] | None = None  # what the preparation is doing now
     lr: float | None = None
     eta_s: float | None = None
     paused: bool = False

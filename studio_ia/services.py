@@ -68,6 +68,7 @@ class QueueState:
     total: int = 0
     phase: str = ""  # warm-up | steady | cool-down | preparing
     prepare: int | None = None  # percent of the text prepared, while phase == "preparing"
+    prepare_phase: str | None = None  # reading | tokenizer | tokenizing
     lr: float | None = None
     eta_s: float | None = None
     paused: bool = False  # by the user; stays true with no job running ("Paused by you")
@@ -2158,6 +2159,22 @@ class WorkspaceServices(Services):
         held = set(self._heldout())
         good_only = bool(params.get("reviewed_only"))  # after the split: the held-back text is the same for every run, reviewed or not
         return [e for e in rows if e["text"] not in held and (not good_only or e.get("quality") == "Good")]
+
+    def example_stream(self, params):
+        """The rows examples(params) returns, as an iterator that holds one row at a time (disk sets are read in batches), with
+        `expected_characters`, the text's size from the stored counts. studio_model.train reads it as a stream, so a text of billions of
+        characters never sits in memory. The first time (no data/heldout.json yet) the held-back split needs every text, so examples()
+        makes it and its rows are the stream."""
+        import studio_corpus
+        import studio_data_kinds
+        ids = params.get("datasets") or [d["id"] for d in self.workspace.state["datasets"]]
+        if not (self.root / "data" / "heldout.json").exists():
+            return studio_corpus.RowStream(iter(self.examples(params)), None)
+        held = set(self._heldout())
+        good_only = bool(params.get("reviewed_only"))
+        rows = (e for e in studio_data_kinds.pretraining_examples(self.workspace, ids)
+                if e.get("text") and e["text"] not in held and (not good_only or e.get("quality") == "Good"))
+        return studio_corpus.RowStream(rows, studio_data_kinds.text_characters(self.workspace, ids, exclude=held))
 
     def conversations(self, params):
         """The conversations of params["datasets"] (default: every set) that can make a teacher's prompt: a run with a teacher takes its

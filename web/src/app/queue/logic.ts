@@ -42,7 +42,10 @@ export function jobFraction(s: Queue): number {
 }
 
 export function progressLine(s: Queue): string {
-  if (isPreparing(s)) return fill(T.preparingText, { percent: String(s.prepare) });
+  if (isPreparing(s)) {
+    const phase = s.prepare_phase ? T.preparingPhases[s.prepare_phase] : undefined;
+    return phase ? fill(T.preparingPhaseText, { phase, percent: String(s.prepare) }) : fill(T.preparingText, { percent: String(s.prepare) });
+  }
   const lr = s.lr == null ? "auto" : `auto (${Number(s.lr.toPrecision(2))})`;
   const parts = [
     s.total ? `step ${s.step.toLocaleString("en-US")} of ${s.total.toLocaleString("en-US")}` : "starting",

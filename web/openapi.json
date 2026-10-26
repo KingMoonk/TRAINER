@@ -7923,6 +7923,22 @@
             ],
             "title": "Prepare"
           },
+          "prepare_phase": {
+            "anyOf": [
+              {
+                "enum": [
+                  "reading",
+                  "tokenizer",
+                  "tokenizing"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prepare Phase"
+          },
           "step": {
             "default": 0,
             "title": "Step",

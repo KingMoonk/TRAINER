@@ -72,6 +72,7 @@ class QueueState:
     total: int = 0
     phase: str = ""                # warm-up | steady | cool-down, or "preparing" while the text is tokenized
     prepare: int | None = None     # percent of the text prepared, while phase == "preparing"
+    prepare_phase: str | None = None  # what the preparation is doing: reading | tokenizer | tokenizing
     lr: float | None = None
     eta_s: float | None = None
     paused: bool = False           # by the user; persisted, so true when idle too ("Paused by you")
@@ -508,7 +509,7 @@ class Runner:
         with self.lock:
             p = self.progress
             return QueueState(
-                job=self.running, step=p.get("step", 0), total=p.get("total", 0), phase=p.get("phase", ""), prepare=p.get("prepare"), lr=p.get("lr"),
+                job=self.running, step=p.get("step", 0), total=p.get("total", 0), phase=p.get("phase", ""), prepare=p.get("prepare"), prepare_phase=p.get("prepare_phase"), lr=p.get("lr"),
                 eta_s=p.get("eta_s"), paused=self.user_paused, blocked=gate.reason, gate=gate, stopping=self.stopping,
                 up_next=self._queued(), plan=dataclasses.asdict(self.plan),
                 failed=[j for j in self.jobs if j.status == "failed"][-FAILED_SHOWN:])
@@ -721,13 +722,14 @@ class Runner:
             if event.get("type") in ("resumed", "resume_refused"):
                 self._resume_note(job, event)
             if event.get("type") == "prepare":  # the text is being tokenized: no step yet, only how far along it is
-                self.progress.update(phase="preparing", prepare=event.get("percent", 0))
+                self.progress.update(phase="preparing", prepare=event.get("percent", 0), prepare_phase=event.get("phase"))
             elif event.get("total"):
                 step, total = event.get("step", 0), event["total"]
                 if event.get("type") == "resumed":  # progress starts from the checkpoint's step, not 0
                     step = resumed_at[0] = event.get("base", 0) + step
                 before = self.progress.get("phase", "")
                 self.progress.pop("prepare", None)  # the first step ends the preparing phase
+                self.progress.pop("prepare_phase", None)
                 self.progress.update(step=step, total=total, lr=event.get("lr", self.progress.get("lr")),
                                      phase=event.get("phase", "" if before == "preparing" else before))
                 if step > resumed_at[0]:
