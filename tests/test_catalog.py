@@ -280,7 +280,7 @@ class CatalogMetadataTests(unittest.TestCase):
     def test_default_ids_are_the_nanochat_recipe_and_stay_in_stage_order(self):
         defaults = default_catalog_ids()
         self.assertEqual(defaults, ["fineweb_edu_00", "fineweb_edu_01", "fineweb_edu_02", "fineweb_edu_03", "cosmopedia_khan", "cosmopedia_v2",
-                                    "mmlu_auxiliary", "gsm8k", "smol_smoltalk", "toolace"])
+                                    "mmlu_auxiliary", "gsm8k", "smol_smoltalk", "everyday_conversations", "smoltalk_systemchats", "toolace"])
         self.assertEqual(STARTER_IDS, tuple(defaults))
         for catalog_id in defaults:
             self.assertTrue(_entry(catalog_id)["license"])
@@ -290,13 +290,28 @@ class CatalogMetadataTests(unittest.TestCase):
         self.assertTrue(all(not e["default"] for e in LEGACY_CATALOG))
         optional = {e["id"] for e in CATALOG if not e["default"]}
         self.assertEqual(optional, {"fineweb_edu_04", "fineweb_edu_05", "fineweb_edu_06", "fineweb_edu_07", "cosmopedia_openstax", "cosmopedia_openstax_b",
-                                    "dolly15k", "squad2", "oasst1", "smol_smoltalk_b"})
+                                    "dolly15k", "squad2", "oasst1", "smol_smoltalk_b", "tinystories", "tinystories_valid", "wizard143k", "ultrachat_a",
+                                    "smoltalk_magpie", "reddit_instruct", "smoltalk_rewrite", "smoltalk_summarize"})
+        self.assertEqual(sum(1 for i in defaults if _entry(i)["stage"] == "conversation"), 4)  # chat data is a third of the starter recipe
+
+    def test_tinystories_and_the_conversational_sources_are_offered_again_without_non_commercial_ones(self):
+        offered = {e["id"] for e in CATALOG}
+        self.assertTrue({"tinystories", "tinystories_valid", "ultrachat_a", "smoltalk_magpie", "reddit_instruct", "wizard143k"} <= offered)
+        self.assertEqual((_entry("tinystories")["stage"], _entry("tinystories_valid")["split"]), ("language", "validation"))
+        for entry in CATALOG:
+            self.assertNotIn("non-commercial", entry["license"].lower(), entry["id"])
+        for catalog_id in ("everyday_conversations", "smoltalk_systemchats", "smoltalk_rewrite", "smoltalk_summarize", "tinystories_valid", "ultrachat_a", "wizard143k"):
+            with self.subTest(catalog_id):
+                self.assertRegex(_entry(catalog_id)["sha256"], r"^[0-9a-f]{64}$")
+                self.assertGreater(_entry(catalog_id)["bytes"], 0)
+        self.assertEqual(_entry("smoltalk_summarize")["max_records"], 40_000)
 
     def test_hugging_face_entries_are_hashed_pinned_and_under_the_download_cap(self):
         for entry in CATALOG:
             if entry.get("repo"):
                 with self.subTest(entry["id"]):
-                    self.assertTrue(entry["id"] in {"dolly15k", "oasst1"} or "sha256" in entry)
+                    # tinystories reads a bounded prefix of a 2 GB file, so there is no whole-file hash to pin
+                    self.assertTrue(entry["id"] in {"dolly15k", "oasst1", "tinystories"} or "sha256" in entry)
                     if "sha256" in entry:
                         self.assertRegex(entry["sha256"], r"^[0-9a-f]{64}$")
         shard = _entry("fineweb_edu_00")
@@ -468,7 +483,7 @@ class HigherQualityCorpusTests(unittest.TestCase):
     def test_large_legacy_sources_are_not_in_the_replacement_catalog(self):
         defaults = set(default_catalog_ids())
         for catalog_id in ("fineweb_edu", "openwebmath", "gutenberg", "orca_math",
-                           "stackexchange_math", "magicoder_oss", "stackexchange_unix", "smoltalk_magpie", "reddit_instruct"):
+                           "stackexchange_math", "magicoder_oss", "stackexchange_unix"):
             self.assertNotIn(catalog_id, defaults)
             self.assertNotIn(catalog_id, {entry["id"] for entry in CATALOG})
             self.assertRegex(_entry(catalog_id)["revision"], r"^[0-9a-f]{40}$")
@@ -557,6 +572,23 @@ class HigherQualityCorpusTests(unittest.TestCase):
                                        "choices": {"text": ["puppies", "children", "flowers", "plants sprouting"], "label": ["A", "B", "C", "D"]}})[0]
         self.assertEqual((obqa["assistant"], obqa["sourceId"], obqa["intent"]), ("D) plants sprouting", "7-980", "science_qa"))
         self.assertIn("Question: The sun is responsible for", obqa["user"])
+
+    def test_smoltalk_subsets_keep_system_prompts_and_need_an_answer(self):
+        chat = {"messages": [{"role": "system", "content": "Always end with an emoji."}, {"role": "user", "content": "Hi!"},
+                             {"role": "assistant", "content": "Hello there 😊"}]}
+        row = _convert("smoltalk_systemchats", chat)[0]
+        self.assertEqual(([m["role"] for m in row["messages"]], row["intent"]), (["system", "user", "assistant"], "system_prompt"))
+        self.assertEqual(row["groupId"], row["sourceId"])
+        self.assertNotEqual(row["groupId"], _convert("smoltalk_rewrite", chat)[0]["groupId"])  # one prompt in two subsets stays two groups
+        everyday = _convert("everyday_conversations", {"full_topic": "Travel/Beaches", "messages": chat["messages"][1:]})[0]
+        self.assertEqual((everyday["intent"], everyday["metadata"]), ("everyday_chat", {"topic": "Travel/Beaches"}))
+        self.assertEqual(_convert("smoltalk_summarize", {"messages": [{"role": "user", "content": "Long email"}]}), [])
+        self.assertEqual(_convert("smoltalk_summarize", {"messages": [{"role": "assistant", "content": "x"}]}), [])
+        self.assertEqual(_convert("smoltalk_rewrite", {"messages": []}), [])
+        blank = _convert("smoltalk_rewrite", {"messages": [{"role": "user", "content": "Fix this"}, {"role": "assistant", "content": " "}]})
+        self.assertEqual(blank, [])
+        normal = normalize(row, source="catalog:smoltalk_systemchats")
+        self.assertTrue(normal["messages"] or (normal["user"] and normal["assistant"]))
 
     def test_catalog_rows_normalise_into_training_records(self):
         for catalog_id, raw in (("stackexchange_math", {"qid": 1, "question": "<p>Q?</p>", "answers": [{"pm_score": 2, "selected": True, "text": "<p>A.</p>"}]}),
