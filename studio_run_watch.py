@@ -35,7 +35,7 @@ def needs(params):
     from studio_model import validate_config, vocabulary_guess
     try:
         cfg = validate_config(params["config"])
-        weights = studio_memory.training_bytes(cfg, vocabulary_guess(cfg), False)[0] // studio_memory.ADAMW_COPIES
+        weights = studio_memory.weights_of(cfg, vocabulary_guess(cfg))
         host = studio_memory.host_bytes(cfg, vocabulary_guess(cfg), True) if params.get("offload_optimizer") else 0
     except Exception:  # noqa: BLE001 - a config that cannot be sized has nothing to compare
         return {}

@@ -332,7 +332,7 @@ def fit_solo(config, profile, *, share=1., pieces=None, chars_per_piece=4., toke
     floor_tokens = MIN_STEPS * per_step
 
     # the text read: disk and RAM, scaled with the token budget (a budget below one pass reads less, studio_corpus) -------------------
-    weights = studio_memory.training_bytes(new, sizer.vocab, False)[0] // studio_memory.ADAMW_COPIES
+    weights = studio_memory.weights_of(new, sizer.vocab)
     host = (sizer.host_moments(new) if offload else 0) + 2 * weights  # a checkpoint's copy of the weights, and the moments when offloaded
     checkpoints = CHECKPOINTS * weights * 3  # each holds the weights and AdamW's two moments
     reads = min(pieces, planned) if pieces else planned
@@ -418,7 +418,7 @@ def refit(params, profile, share, remote=False):
     return fit_solo(config, profile, share=share, pieces=seen.get("pieces") or params.get("pieces_per_pass"),
                     chars_per_piece=seen.get("chars_per_piece") or 4., token_budget=budget,
                     window_hours=seen.get("window_hours") or DEFAULT_WINDOW_HOURS, speed=None if remote else seen.get("speed"),
-                    keep_mine=bool(seen.get("keep_mine")), fixed_architecture=bool(params.get("init_from")) and params.get("mode") == "catch_up")
+                    keep_mine=bool(seen.get("keep_mine")), fixed_architecture=bool(params.get("init_from")))
 
 
 def applied(params, fit):

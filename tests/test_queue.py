@@ -584,6 +584,23 @@ class QueueTests(unittest.TestCase):
         self.assertIn(studio_queue.SCALED_NOTE, r.jobs[0].note)
         self.assertIn("batch", r.jobs[0].note.lower())
 
+    def test_a_resume_note_survives_the_scaling_text_being_rewritten(self):
+        import studio_fit
+        G = 2 ** 30
+        job, _ = self.fit_job()
+        tight = studio_fit.Profile(device="cuda", vram_total=80 * G, vram_free=5 * G, ram_total=64 * G, ram_free=48 * G, disk_free=500 * G)
+        r = self.runner(profile=lambda: tight)
+        params, note, problem = r._fitted(job, 1.)
+        self.assertEqual(problem, "")
+        job.params, job.note = params, note
+        self.assertIn(studio_queue.SCALED_NOTE, note)
+        job.note += " The app stopped while this ran; it continued from its own checkpoint at step 40."
+        params, again, problem = r._fitted(job, 1.)
+        self.assertEqual(problem, "")
+        self.assertEqual(again.count(studio_queue.SCALED_NOTE), 1)
+        self.assertTrue(again.endswith("continued from its own checkpoint at step 40."))
+        self.assertEqual(again, job.note)  # the same machine says the same thing again
+
     def test_a_job_that_fits_is_started_as_planned(self):
         import studio_fit
         G = 2 ** 30

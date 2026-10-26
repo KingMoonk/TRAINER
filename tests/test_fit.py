@@ -164,6 +164,36 @@ class RefitTests(unittest.TestCase):
         found = F.refit(self.params(mode="catch_up", init_from="best.npz"), machine(vram=2, free=.3), 1.)
         self.assertEqual(found.blocker["resource"], "vram")
 
+    def test_any_init_from_keeps_its_design_whatever_the_mode(self):
+        for mode in ("catch_up", "from_scratch", "grow", None):
+            params = self.params(init_from="best.npz")
+            params["mode"] = mode
+            found = F.refit(params, machine(vram=2, free=.3), 1.)
+            self.assertEqual(found.blocker["resource"], "vram", mode)
+            self.assertIn("the model it continues from", found.refusal, mode)
+        self.assertNotIn("the model it continues from", F.refit(self.params(), machine(vram=2, free=.3), 1.).refusal)  # no weights to keep: it may shrink
+
+    def test_a_lora_job_is_sized_by_its_adapters_and_keeps_its_design(self):
+        plain = validate_config(config(rows=1, context=128))
+        lora = validate_config(dict(config(rows=1, context=128), lora={"rank": 8}))
+        fixed_full, per_sample = studio_memory.training_bytes(plain, 256)
+        fixed_lora = studio_memory.training_bytes(lora, 256)[0]
+        self.assertLess(fixed_lora, fixed_full)
+        # a card with room for the LoRA run's weights and a few rows, but not for the whole model with AdamW's state
+        card = (fixed_lora + 4 * per_sample) / 0.9
+        self.assertLess(card, fixed_full)
+        sized = studio_memory.training_bytes(lora, 256)
+        self.assertGreater(card, sized[0] + 2 * sized[1])
+        profile = F.Profile(device="cuda", vram_total=int(card), vram_free=int(card), ram_total=64 * G, ram_free=48 * G, disk_free=500 * G, cpu_cores=8)
+        kept = F.fit_solo(lora, profile, fixed_architecture=True, vocab=256)
+        self.assertFalse(kept.refusal)
+        self.assertEqual(kept.config["architecture"], lora["architecture"])
+        self.assertFalse(kept.offload)  # the adapters' state stays on the card
+        sizer = F._Sizer(profile, "cuda", 1., 256)
+        self.assertGreaterEqual(sizer.largest_batch(lora, False), 1)
+        self.assertEqual(sizer.largest_batch(plain, False), 0)  # the same design in full needs the optimizer in RAM
+        self.assertTrue(F.fit_solo(plain, profile, fixed_architecture=True, vocab=256).offload)
+
     def test_free_memory_that_dropped_changes_the_fit(self):
         params = self.params()
         before = F.refit(params, machine(vram=80, free=78), 1.)

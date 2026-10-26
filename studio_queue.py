@@ -714,7 +714,7 @@ class Runner:
         disk are read again, since another app or an earlier run may hold more than when the plan was made), the job's note with what
         that scaled and why, and a sentence when even the smallest scaled run cannot fit (the job then fails with it before a worker
         starts). A job that is not a fresh pretrain run, or a queue without a profile, is left as it is."""
-        params, note = job.params, job.note.split(SCALED_NOTE)[0].strip()
+        params, (note, later) = job.params, self._split_note(job)
         if self.profile is None or job.kind != "pretrain":
             return params, job.note, ""
         import studio_fit
@@ -726,10 +726,22 @@ class Runner:
         if found is None:
             return params, job.note, ""
         if found.refusal:
-            return params, note, found.refusal
+            return params, f"{note} {later}".strip(), found.refusal
         params = studio_fit.applied(params, found)
         said = " ".join(n.text for n in found.notes)
-        return params, f"{note} {SCALED_NOTE} {said}".strip() if said else note, ""
+        return params, " ".join(part for part in (note, f"{SCALED_NOTE} {said}" if said else "", later) if part), ""
+
+    @staticmethod
+    def _split_note(job):
+        """(the note before the scaling text, what was added after it): the scaling text is rewritten at each start, but a resume note or
+        a notice the run added behind it is kept. The scaling text written last is the notes of the job's fit record."""
+        head, mark, tail = job.note.partition(SCALED_NOTE)
+        if not mark:
+            return job.note.strip(), ""
+        tail = tail.strip()
+        import studio_fit
+        said = " ".join(n.get("text", "") for n in (job.params.get(studio_fit.RECORD) or {}).get("notes") or [])
+        return head.strip(), tail[len(said):].strip() if said and tail.startswith(said) else ""
 
     def follow_up(self, job):
         """Queue what a job that ended leaves to do (the caller holds the lock and saves): after a pretrain on new text, the
