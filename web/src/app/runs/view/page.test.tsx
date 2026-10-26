@@ -227,7 +227,25 @@ describe("Run view: a single job on this computer", () => {
     expect(screen.queryByTestId("round-banner")).not.toBeInTheDocument();
     expect(screen.queryByText("Rounds done")).not.toBeInTheDocument();
     expect(screen.queryByText(/transfer|traffic/i)).not.toBeInTheDocument();
-    expect(screen.getByText("A single job on this computer does not record events.")).toBeInTheDocument();
+    expect(screen.getByText(/^Nothing to report\./)).toBeInTheDocument();
+    expect(screen.queryByTestId("run-notices")).not.toBeInTheDocument();
+  });
+
+  test("shows what the running job reports: a halved batch, low disk and a projected overrun", async () => {
+    soloServer({
+      queue: {
+        notices: [
+          { kind: "oom", text: "Ran out of memory at step 3: the batch was halved to 4 with accumulation 2 (8 rows a step) and training went on.", at: 10 },
+          { kind: "disk", text: "Free disk is down to 1 MB while the run goes; its checkpoints need about 5 MB.", at: 20 },
+          { kind: "overrun", text: "At 250 tokens/s the run ends in about 1.1 h, 1.1 h in all: 7 min past the 1.0 h window you allowed.", at: 30 },
+        ],
+      },
+    });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=j1" });
+    expect(await screen.findByTestId("notice-oom")).toHaveTextContent("batch was halved to 4 with accumulation 2");
+    expect(screen.getByTestId("notice-disk")).toHaveTextContent("Free disk is down to 1 MB");
+    expect(screen.getByTestId("notice-overrun")).toHaveTextContent("7 min past the 1.0 h window");
+    expect(screen.queryByText(/^Nothing to report\./)).not.toBeInTheDocument();
   });
 
   test("the loss chart reads L_train, L_val and the gap, and the overfit pill fires when L_val stopped improving", async () => {

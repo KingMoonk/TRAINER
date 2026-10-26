@@ -78,6 +78,7 @@ class QueueState:
     up_next: list = field(default_factory=list)
     plan: dict = field(default_factory=dict)
     failed: list = field(default_factory=list)  # jobs that ended failed, newest last; see studio_queue.QueueState
+    notices: list = field(default_factory=list)  # what the running job reports while it goes: {kind: oom | disk | ram | overrun, text, at}
 
 
 _log = logging.getLogger(__name__)
@@ -2189,19 +2190,46 @@ class WorkspaceServices(Services):
         ids = dataset_ids or [d["id"] for d in self.workspace.state["datasets"]]
         return [e for e in studio_data_kinds.pretraining_examples(self.workspace, ids) if e.get("text")]
 
+    def _fix_heldout(self, params):
+        """Make data/heldout.json when it is missing (exact duplicates removed, seeded split). Text under studio_model.STREAM_CHARS is
+        split as a list; more is read once as a stream (studio_eval.streamed_heldout_split), holding only the held-back side and the
+        overlap index, so the first run over a big catalogue stays bounded."""
+        import itertools
+
+        import studio_data_kinds
+        import studio_decontam
+        import studio_eval
+        import studio_model
+        path = self.root / "data" / "heldout.json"
+        if path.exists():
+            return
+        fraction = params.get("heldout_fraction", .05)
+        ids = params.get("datasets") or [d["id"] for d in self.workspace.state["datasets"]]
+        stream = (e["text"] for e in studio_data_kinds.pretraining_examples(self.workspace, ids) if e.get("text"))
+        buffered, characters = [], 0
+        for text in stream:
+            buffered.append(text)
+            characters += len(text)
+            if characters >= studio_model.STREAM_CHARS:
+                index = studio_decontam.Index()
+                held = studio_eval.streamed_heldout_split(itertools.chain(buffered, stream), index, fraction)
+                buffered.clear()
+                break
+        else:
+            if len(buffered) <= 1:  # ponytail: later sets never join the held-back text; delete the file to re-split
+                return
+            train, held = studio_eval.heldout_split(buffered, fraction)
+            index = studio_decontam.Index().add_all(train)
+        held, report = studio_decontam.exclude_overlap(held, index)  # a held-back text that shares a 13-gram with training is not scored
+        self._note_overlap("text", report)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps([{"id": f"heldout_{i}", "text": t} for i, t in enumerate(held)]), encoding="utf-8")
+
     def examples(self, params):
         """Plain-text rows of params["datasets"] (default: every set) without the held-back documents. data/heldout.json is
         fixed the first time (exact duplicates removed, seeded split) and then kept, so every version is scored on the same text."""
-        import studio_decontam
-        import studio_eval
+        self._fix_heldout(params)
         rows = self._text_rows(params.get("datasets"))
-        path = self.root / "data" / "heldout.json"
-        if not path.exists() and len(rows) > 1:  # ponytail: later sets never join the held-back text; delete the file to re-split
-            train, held = studio_eval.heldout_split([e["text"] for e in rows], params.get("heldout_fraction", .05))
-            held, report = studio_decontam.exclude_overlap(held, studio_decontam.Index().add_all(train))  # a held-back text that shares a 13-gram with training is not scored
-            self._note_overlap("text", report)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps([{"id": f"heldout_{i}", "text": t} for i, t in enumerate(held)]), encoding="utf-8")
         held = set(self._heldout())
         good_only = bool(params.get("reviewed_only"))  # after the split: the held-back text is the same for every run, reviewed or not
         return [e for e in rows if e["text"] not in held and (not good_only or e.get("quality") == "Good")]
@@ -2209,13 +2237,11 @@ class WorkspaceServices(Services):
     def example_stream(self, params):
         """The rows examples(params) returns, as an iterator that holds one row at a time (disk sets are read in batches), with
         `expected_characters`, the text's size from the stored counts. studio_model.train reads it as a stream, so a text of billions of
-        characters never sits in memory. The first time (no data/heldout.json yet) the held-back split needs every text, so examples()
-        makes it and its rows are the stream."""
+        characters never sits in memory. The first time (no data/heldout.json yet) the held-back split is made first, as a stream too."""
         import studio_corpus
         import studio_data_kinds
         ids = params.get("datasets") or [d["id"] for d in self.workspace.state["datasets"]]
-        if not (self.root / "data" / "heldout.json").exists():
-            return studio_corpus.RowStream(iter(self.examples(params)), None)
+        self._fix_heldout(params)
         held = set(self._heldout())
         good_only = bool(params.get("reviewed_only"))
         rows = (e for e in studio_data_kinds.pretraining_examples(self.workspace, ids)

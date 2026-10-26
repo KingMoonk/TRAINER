@@ -289,6 +289,64 @@ class WorkspaceRows(unittest.TestCase):
         self.assertEqual([e["text"] for e in self.svc.example_stream({"datasets": [self.text], "reviewed_only": True})],
                          [e["text"] for e in self.svc.examples({"datasets": [self.text], "reviewed_only": True})])
 
+    @staticmethod
+    def _words(seed, count=40):
+        import random
+        pick = random.Random(seed)
+        return " ".join(f"w{pick.randrange(10 ** 6)}" for _ in range(count))
+
+    def test_a_big_text_is_split_as_a_stream_and_a_small_one_as_a_list(self):
+        import studio_eval
+        small = self.svc.examples({"datasets": [self.text], "heldout_fraction": .2})
+        listed = self.svc._heldout()
+        self.assertEqual(len(small) + len(listed), 20)
+        (self.svc.root / "data" / "heldout.json").unlink()
+        self.svc._heldout_hit = (None,)
+        with mock.patch.object(studio_eval, "heldout_split", side_effect=AssertionError("listed")), \
+                mock.patch("studio_model.STREAM_CHARS", 100):
+            streamed = self.svc.examples({"datasets": [self.text], "heldout_fraction": .2})
+        held = set(self.svc._heldout())
+        self.assertTrue(held)
+        self.assertFalse(held & {e["text"] for e in streamed})
+        self.assertEqual(len(streamed) + len(held), 20)
+        self.assertEqual(streamed, self.svc.examples({"datasets": [self.text], "heldout_fraction": .5}))  # fixed once made
+
+    def test_the_streamed_split_still_leaves_out_a_held_back_text_that_shares_a_13_gram_with_training(self):
+        import studio_decontam
+        import studio_eval
+        rows = [self._words(n) for n in range(300)]
+        held_of = lambda texts: set(studio_eval.streamed_heldout_split(texts, studio_decontam.Index(), .2))
+        held = held_of(rows)
+        self.assertTrue(held)
+        victim = next(t for t in rows if t in held)
+        phrase = " ".join(victim.split()[5:25])
+        for k in range(100):  # a training row that quotes the victim (and, by chance, still is not held back itself)
+            quoting = f"{self._words(1000 + k, 10)} {phrase} tail{k}"
+            if quoting not in held_of(rows + [quoting]):
+                break
+        data = [{"text": t} for t in rows + [quoting]]
+        with mock.patch("studio_data_kinds.pretraining_examples", return_value=iter(data)), mock.patch("studio_model.STREAM_CHARS", 100):
+            self.svc._fix_heldout({"datasets": [self.text], "heldout_fraction": .2})
+        written = {d["text"] for d in __import__("json").loads((self.svc.root / "data" / "heldout.json").read_text(encoding="utf-8"))}
+        self.assertNotIn(victim, written)
+        self.assertEqual(written, held - {victim})
+
+    def test_the_first_split_of_a_big_text_holds_the_held_back_side_not_the_text(self):
+        import json
+        import tracemalloc
+        count, size = 3000, 5000  # 15 million characters
+        data = ({"text": f"{n} " + "x" * size} for n in range(count))
+        with mock.patch("studio_data_kinds.pretraining_examples", return_value=data), mock.patch("studio_model.STREAM_CHARS", 1_000_000):
+            tracemalloc.start()
+            try:
+                self.svc._fix_heldout({"datasets": [self.text], "heldout_fraction": .05})
+                _, peak = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+        written = json.loads((self.svc.root / "data" / "heldout.json").read_text(encoding="utf-8"))
+        self.assertTrue(0 < len(written) < count // 5)
+        self.assertLess(peak, 4 * 1024 ** 2)  # the whole text would hold 15 MB of strings
+
     def test_post_rows_keep_held_back_apart(self):
         train, held = self.svc.post_rows("problems"), self.svc.post_rows("heldout_problems")
         self.assertEqual(len(train) + len(held), 6)
