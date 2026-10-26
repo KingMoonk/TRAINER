@@ -35,6 +35,16 @@ def halving(job, context, emit, stop, pause):
     _hold(context, stop)
 
 
+def burst(job, context, emit, stop, pause):
+    """Steady until the test lets it go, then six halvings in a row."""
+    emit({"type": "metric", "step": 1, "total": 1000, "lr": .001})
+    while not ((Path(context.root) / "go").exists() or stop.is_set()):
+        time.sleep(.005)
+    for step in range(1, 7):
+        emit({"type": "info", "kind": "oom", "step": step, "batch": 8 - step, "accumulation": step, "text": f"Out of memory at step {step}."})
+    _hold(context, stop)
+
+
 def steady(job, context, emit, stop, pause):
     emit({"type": "metric", "step": 1, "total": 1000, "lr": .001})
     _hold(context, stop)
@@ -116,16 +126,16 @@ class RunningJobTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "data" / "queue.json"
 
-    def start(self, handler, profile=None, **params):
+    def start(self, handler, profile=None, kind="pretrain", **params):
         from studio_ia import pretraining_plan as plan
         from studio_spec import default_spec, validate_spec
         cfg = plan.pretrain_config(validate_spec(default_spec()), 1000, 8, .05)
-        r = Runner(self.path, {"pretrain": handler}, tick=.01, profile=profile)
+        r = Runner(self.path, {kind: handler}, tick=.01, profile=profile)
         r.watch_every = .03
         r.set_plan(ANY)
         self.addCleanup(r.shutdown)
         self.addCleanup(Path(self.tmp.name, "gate").touch)
-        r.enqueue(Job("pretrain", "run", params={"config": cfg, "mode": "from_scratch", **params}))
+        r.enqueue(Job(kind, "run", params={"config": cfg, "mode": "from_scratch", **params}))
         r.start()
         return r
 
@@ -139,6 +149,24 @@ class RunningJobTests(unittest.TestCase):
         self.assertIn("halved to 4 with accumulation 2", texts[0])
         self.assertIn("halved to 2 with accumulation 4", texts[1])
         self.assertIn("halved to 2 with accumulation 4", r.jobs[0].note)  # the job keeps it after the run
+
+    def test_a_burst_of_halvings_does_not_push_out_the_disk_notice(self):
+        seen = [ROOMY]
+        r = self.start(burst, profile=lambda: seen[-1])
+        self.assertTrue(wait(lambda: r.state().step == 1))
+        seen.append(studio_fit.Profile(device="cuda", vram_total=80 * G, vram_free=78 * G, ram_total=64 * G, ram_free=48 * G, disk_free=1024))
+        self.assertTrue(wait(lambda: self.kinds(r) == ["disk"]))
+        Path(self.tmp.name, "go").touch()
+        self.assertTrue(wait(lambda: self.kinds(r).count("oom") == W.OOM_SHOWN))
+        self.assertEqual(sorted(self.kinds(r)), ["disk"] + ["oom"] * W.OOM_SHOWN)
+        self.assertIn("step 6", r.state().notices[-1]["text"])  # the newest halvings are the ones kept
+
+    def test_the_local_member_of_a_distributed_run_is_watched_too(self):
+        seen = [ROOMY]
+        r = self.start(halving, profile=lambda: seen[-1], kind="pretrain_distributed")
+        self.assertTrue(wait(lambda: self.kinds(r) == ["oom", "oom"]))
+        seen.append(studio_fit.Profile(device="cuda", vram_total=80 * G, vram_free=78 * G, ram_total=64 * G, ram_free=48 * G, disk_free=1024))
+        self.assertTrue(wait(lambda: "disk" in self.kinds(r)))
 
     def test_low_disk_during_the_run_is_reported_and_clears_when_space_returns(self):
         seen = [ROOMY]  # roomy when the job is fitted and started; the disk fills while it trains

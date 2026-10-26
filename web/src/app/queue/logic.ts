@@ -52,6 +52,7 @@ export function progressLine(s: Queue): string {
     s.phase ? `schedule: ${s.phase}` : "",
     `learning rate: ${lr}`,
     s.eta_s != null ? `${minutes(s.eta_s)} left` : "",
+    s.saving ? T.savingText : "",
   ];
   return parts.filter(Boolean).join(" · ");
 }

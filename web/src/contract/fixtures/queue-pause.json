@@ -26,6 +26,7 @@
     },
     "prepare": null,
     "prepare_phase": null,
+    "saving": false,
     "step": 0,
     "stopping": false,
     "total": 0,

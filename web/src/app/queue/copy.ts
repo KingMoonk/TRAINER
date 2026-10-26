@@ -14,6 +14,7 @@ export const T = {
   clusterLink: "Open the Cluster page for each machine.",
   trainingLink: "Train on several machines at once",
   trainingTip: "A run that spreads over machines is started and watched on the Cluster page.",
+  savingText: "Saving checkpoint",
   preparingText: "Preparing text: {percent}%",
   preparingPhaseText: "Preparing text, {phase}: {percent}%",
   preparingPhases: {
