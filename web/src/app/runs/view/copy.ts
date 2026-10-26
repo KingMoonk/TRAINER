@@ -128,7 +128,8 @@ export const T = {
   // events
   events: "Events",
   noEvents: "Nothing has happened yet.",
-  soloNoEvents: "A single job on this computer does not record events.",
+  soloNoEvents: "Nothing to report. This shows when the run halves its batch after running out of memory, when free disk or RAM falls below what it needs, or when its pace will end it after the time window.",
+  noticeKinds: { oom: "Out of memory", disk: "Disk", ram: "RAM", overrun: "Time window" } as Record<string, string>,
   eventDetails: "Event details",
   eventKind: "What",
   eventWho: "Machine",

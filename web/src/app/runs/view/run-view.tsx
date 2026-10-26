@@ -21,7 +21,7 @@ import { ProgressCard, RunHeader } from "./header";
 import { HealthPanel } from "./health-panel";
 import { factAge, memberPhaseText, roundNumber } from "./live";
 import { LossPanel } from "./loss-panel";
-import { dilocoShape, runViewHref, gapNow, gapText, lastOf, lossText, overfit, percentOf, soloShape, stepSeries, trainLine } from "./logic";
+import { dilocoShape, runViewHref, gapNow, gapText, lastOf, lossText, overfit, percentOf, soloNotices, soloShape, stepSeries, trainLine } from "./logic";
 import { OutcomePanel } from "./outcome-panel";
 import { OpenRoundPanel } from "./open-round-panel";
 import { RoundBanner } from "./round-banner";
@@ -110,6 +110,7 @@ export function SoloView({ view }: { view: Extract<RunView, { kind: "solo" }> })
     running && queue.lr != null ? fill(T.lr, { lr: queue.lr.toExponential(1) }) : "",
     eta != null ? fill(T.eta, { eta: etaText(eta) }) : "",
   ].filter(Boolean).join(" · ");
+  const notices = soloNotices(queue, running);
   const train = curve ? lastOf(trainLine(curve)) : null;
   const val = curve ? lastOf(curve.heldout) : null;
   const readouts = [
@@ -168,7 +169,18 @@ export function SoloView({ view }: { view: Extract<RunView, { kind: "solo" }> })
         />
         <section aria-labelledby="run-events" className={PANEL}>
           <h2 id="run-events" className="text-lg font-semibold">{T.events}</h2>
-          <p className="text-sm text-muted-foreground">{T.soloNoEvents}</p>
+          {notices.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{T.soloNoEvents}</p>
+          ) : (
+            <ul className="flex flex-col gap-2" data-testid="run-notices">
+              {notices.map((notice) => (
+                <li key={`${notice.kind}-${notice.at}`} className="flex flex-col gap-1 rounded-lg border border-warning/40 bg-warning-soft p-3 text-sm" data-testid={`notice-${notice.kind}`}>
+                  <Badge variant="secondary" className="w-fit">{T.noticeKinds[notice.kind] ?? notice.kind}</Badge>
+                  <span>{notice.text}</span>
+                </li>
+              ))}
+            </ul>
+          )}
           <Link href="/runs/new/" className="w-fit text-sm text-highlight underline-offset-4 hover:underline">{T.relaunch}</Link>
         </section>
       </div>
