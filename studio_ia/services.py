@@ -2830,8 +2830,10 @@ class WorkspaceServices(Services):
         path = out / f"last_term{term}.npz"
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_name(path.name + ".part")
-        part.write_bytes(body)
-        part.replace(path)
+        import studio_cleanup
+        with studio_cleanup.hold(out):  # a queue sweep must not take the half-written file
+            part.write_bytes(body)
+            part.replace(path)
         return path
 
     def _note_devices(self, number, ckpt, scored=False):
