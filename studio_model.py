@@ -22,6 +22,7 @@ import array
 import bisect
 import gc
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -894,9 +895,10 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             tokenizer = Tokenizer.restore(checkpoint["tokenizer"])
         else:
             module, module_cfg = module_of("tokenizer", effective_spec(cfg)["tokenizer"])
-            if corpus is not None:
-                _prepare_reporter(emit, stop, "tokenizer", 40, 45)(0, 1)
-            tokenizer = module.fit(module_cfg, training)
+            fitting = _prepare_reporter(emit, stop, "tokenizer", 40, 45) if corpus is not None else None
+            if fitting:
+                fitting(0, 1)
+            tokenizer = module.fit(module_cfg, training, fitting) if fitting and "progress" in inspect.signature(module.fit).parameters else module.fit(module_cfg, training)
         streamed = reused = False
         if corpus is not None or characters_in(training) + characters_in(validation) >= stream_chars:
             # Big data: tokenize once into shards on disk and read windows from there, so the windows take no memory and the next run
