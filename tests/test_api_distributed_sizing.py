@@ -127,6 +127,24 @@ class SizingTests(unittest.TestCase):
         self.assertEqual([row["node"] for row in params["left_out"]], ["tiny"])
         self.assertIn("cannot take part", params["left_out"][0]["reason"])
 
+    def test_a_coordinator_that_would_be_left_out_as_unfit_is_a_409_and_nothing_is_queued(self):
+        refused = self.start(machines=["laptop", "tiny"], coordinator="tiny", leave_out_unfit=True)
+        self.assertEqual(refused.status_code, 409, refused.text)
+        self.assertIn("tiny cannot coordinate", refused.json()["detail"])
+        self.assertIn("tiny cannot take part", refused.json()["detail"])
+        self.assertEqual(list(self.services.queue().up_next), [])
+        kept = self.start(machines=["laptop", "tiny"], coordinator="laptop", leave_out_unfit=True)  # a fitting coordinator stays
+        self.assertEqual(kept.status_code, 201, kept.text)
+        self.assertEqual(self.job(kept.json()).params["coordinator"], "laptop")
+
+    def test_a_coordinator_that_does_not_answer_is_a_409_with_all_machines(self):
+        self.peers["down"] = studio_cluster.NodeInfo(address="down", hostname="down", online=False, error="down did not answer.")
+        self.services.set_setting("nodes", list(self.peers))
+        refused = self.start(all_machines=True, coordinator="down", leave_out_unfit=True)
+        self.assertEqual(refused.status_code, 409, refused.text)
+        self.assertIn("down cannot coordinate", refused.json()["detail"])
+        self.assertEqual(list(self.services.queue().up_next), [])
+
     def test_each_member_s_sizing_is_kept_on_the_job_and_told_in_its_note(self):
         started = self.start(machines=["laptop"])
         job = self.job(started.json())
