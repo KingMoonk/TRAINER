@@ -732,7 +732,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
         "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("inner_steps", "outer_lr", "outer_momentum")}, "rounds": rounds,
         "delta_dtype": settings.delta_dtype, "delta_sparsity": settings.delta_sparsity, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **rules["settings"], **rules["params"], **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": member_options} if member_options else {}), "machines": machines, "owner": own.hostname,
         **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
-        **({"left_out": left_out} if body.all_machines or left_out else {}), **({"sizing": fit_of} if fit_of else {})}, note=_sizing_note(sizing))
+        **({"left_out": left_out} if body.all_machines or left_out else {}), **({"member_fit": fit_of} if fit_of else {})}, note=_sizing_note(sizing))
     runs.open_run(job)
     if replaced is not None:
         services.remove(replaced.id)

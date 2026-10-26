@@ -44,7 +44,14 @@ def big_design():
 class SizingTests(unittest.TestCase):
     PEERS = {}
 
+    @staticmethod
+    def estimate(cfg, vocab=None, offload=False):
+        """(fixed, per_sample) bytes of a step: 1 GB + 1 GB a row, or with the optimizer in RAM 0.5 GB + 0.25 GB a row. The real estimate
+        differs by runner (CPU or GPU); the sizing rules under test do not."""
+        return (int(.5 * G), int(.25 * G)) if offload else (G, G)
+
     def setUp(self):
+        self.enterContext(mock.patch("studio_memory.training_bytes", self.estimate))
         self.services = FakeServices(step_seconds=.005)
         self.services.save_version(big_design(), "big")
         self.services.pause()  # the job stays in Up next to be read; nobody is invited
@@ -105,7 +112,7 @@ class SizingTests(unittest.TestCase):
         self.assertIsNone(self.client.post("/distributed/sizing", json=self.body(machines=["laptop"])).json())
         run = self.start(machines=["laptop"])
         self.assertEqual(run.status_code, 201, run.text)
-        self.assertNotIn("sizing", self.job(run.json()).params)
+        self.assertNotIn("member_fit", self.job(run.json()).params)
 
     def test_a_start_with_a_member_that_cannot_fit_is_refused_until_the_person_confirms(self):
         refused = self.start(machines=["laptop", "tiny"])
@@ -122,16 +129,16 @@ class SizingTests(unittest.TestCase):
     def test_each_member_s_sizing_is_kept_on_the_job_and_told_in_its_note(self):
         started = self.start(machines=["laptop"])
         job = self.job(started.json())
-        local, laptop = job.params["sizing"][job.params["owner"]], job.params["sizing"]["laptop"]
+        local, laptop = job.params["member_fit"][job.params["owner"]], job.params["member_fit"]["laptop"]
         self.assertEqual((local["batch_size"], local["accumulation"], local["offload_optimizer"]), (16, 1, False))
         self.assertLess(laptop["batch_size"], 16)
         self.assertIn("Sized per machine:", job.note)
         self.assertIn("laptop", job.note)
 
     def test_a_member_whose_optimizer_must_move_to_ram_is_told_to(self):
-        self.peers["laptop"] = peer("laptop", machine(3.5, 3, speed=8000.))
+        self.peers["laptop"] = peer("laptop", machine(1.7, 1.2, speed=8000.))
         laptop = self.sizing(machines=["laptop"])["members"][1]
-        self.assertEqual((laptop["fits"], laptop["offload"], laptop["batch_size"], laptop["accumulation"]), (True, True, 1, 16))
+        self.assertEqual((laptop["fits"], laptop["offload"], laptop["batch_size"], laptop["accumulation"]), (True, True, 2, 8))
         self.assertTrue(any("optimizer" in note for note in laptop["notes"]))
 
     def test_the_rounds_are_cut_to_what_the_members_can_train_in_the_window(self):
@@ -158,7 +165,7 @@ class MemberSizingReachesTheMember(unittest.TestCase):
         sizing = {"box": {"batch_size": 4, "accumulation": 4, "offload_optimizer": False}, "mac": {"batch_size": 16, "accumulation": 1, "offload_optimizer": False}}
         machines = [{"node": "mac", "address": "local", "device": "mps", "device_name": "M3"},
                     {"node": "box", "address": "box", "device": "cuda", "device_name": "RTX"}]
-        runs.invite(owner_job(machines, sizing=sizing), clients())
+        runs.invite(owner_job(machines, member_fit=sizing), clients())
         self.assertEqual(FakeClient.calls[0][3]["params"]["fit"], sizing["box"])
 
     def test_a_member_without_one_is_invited_as_before(self):
