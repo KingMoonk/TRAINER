@@ -195,7 +195,7 @@ class RefitTests(unittest.TestCase):
         fixed_lora = studio_memory.training_bytes(lora, 256)[0]
         self.assertLess(fixed_lora, fixed_full)
         # a card with room for the LoRA run's weights and a few rows, but not for the whole model with AdamW's state
-        card = (fixed_lora + 4 * per_sample) / 0.9
+        card = fixed_lora + 3 * per_sample  # holds under either precision (#746)
         self.assertLess(card, fixed_full)
         sized = studio_memory.training_bytes(lora, 256)
         self.assertGreater(card, sized[0] + 2 * sized[1])
