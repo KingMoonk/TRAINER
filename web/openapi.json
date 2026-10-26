@@ -10669,6 +10669,11 @@
             "title": "Offload",
             "type": "boolean"
           },
+          "refusal": {
+            "default": "",
+            "title": "Refusal",
+            "type": "string"
+          },
           "scaled": {
             "title": "Scaled",
             "type": "boolean"
