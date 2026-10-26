@@ -210,6 +210,16 @@ class RoundQueued(BaseModel):
     params: dict[str, Any]
 
 
+class AdoptRequest(BaseModel):
+    version: int | None = None  # None = the current version
+
+
+class AdoptedOut(BaseModel):
+    version: int
+    round: int
+    checkpoint: str  # the checkpoint that is now the version's best
+
+
 class RowsRequest(BaseModel):
     kind: Literal["conversations", "problems", "pairs", "corrections", "heldout_docs", "heldout_conversations", "heldout_problems"]
 
@@ -382,6 +392,15 @@ def queue_round(body: RoundRequest, services=Depends(get_services)):
         for _ in range(len(services.queue().up_next)):
             services.move_up(job.id)
     return RoundQueued(id=job.id, label=job.label, round=body.round, params=params)
+
+
+@router.post("/rounds/{round}/adopt", response_model=AdoptedOut)
+def adopt_round(round: int, body: AdoptRequest, services=Depends(get_services)):
+    """Make the checkpoint a round kept (its gate failed, so it is not live) the version's best checkpoint: Chat and later rounds
+    use it from now on. Refused with a sentence when the round passed, has not run, or kept no checkpoint file."""
+    if not 1 <= round <= 4:
+        raise HTTPException(404, f"There is no round {round}.")
+    return AdoptedOut(**services.adopt_round(pick_version(services, body.version).number, round))
 
 
 class LoopConfigIn(BaseModel):

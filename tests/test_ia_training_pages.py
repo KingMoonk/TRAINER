@@ -1,5 +1,6 @@
 """Decision logic of the training pages, window-free."""
 import tempfile
+from pathlib import Path
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -446,6 +447,24 @@ class WorkspaceRows(unittest.TestCase):
         self.assertTrue(v.best_checkpoint.endswith("last.npz"))
         self.assertEqual((v.scorecard["bpc"], v.scorecard["answers"], v.scorecard["problems"]), (1.5, True, [2, 4]))
         self.assertEqual(self.svc.post_training(1)["rounds"][2]["status"], "idle")
+
+    def test_a_kept_round_is_adopted_on_request_only(self):
+        self.svc.save_version(default_spec(), "first design")
+        kept = Path(self.ws.root if hasattr(self.ws, "root") else ".") / "kept.npz"
+        kept.write_bytes(b"x")
+        result = {"ok": False, "checks": [], "verdict": "v", "before": {"bpc": 2.}, "after": {"bpc": 2.5}, "checkpoint": str(kept)}
+        self.svc.record_round(1, 1, result)
+        self.assertIsNone(self.svc.versions()[0].best_checkpoint)
+        with self.assertRaises(ValueError):
+            self.svc.adopt_round(1, 2)  # round 2 never ran
+        with mock.patch.object(type(self.svc), "_bench_later"), mock.patch.object(type(self.svc), "_note_devices"):
+            self.assertEqual(self.svc.adopt_round(1, 1)["checkpoint"], str(kept))
+        self.assertEqual(self.svc.versions()[0].best_checkpoint, str(kept))
+        self.assertEqual(self.svc.post_training(1)["rounds"][1]["note"], "adopted")
+        with self.assertRaises(ValueError):
+            self.svc.adopt_round(1, 1)  # already adopted
+        with self.assertRaises(ValueError):
+            self.svc.chat(1, [{"role": "user", "content": "x"}], print, None, round=1)
 
     def test_verdict_needs_finished_runs(self):
         self.svc.save_version(default_spec(), "a")

@@ -2492,6 +2492,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/post-training/rounds/{round}/adopt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adopt Round
+         * @description Make the checkpoint a round kept (its gate failed, so it is not live) the version's best checkpoint: Chat and later rounds
+         *     use it from now on. Refused with a sentence when the round passed, has not run, or kept no checkpoint file.
+         */
+        post: operations["adopt_round_post_training_rounds__round__adopt_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/post-training/rows": {
         parameters: {
             query?: never;
@@ -3885,6 +3906,20 @@ export interface components {
         Added: {
             /** Added */
             added: boolean;
+        };
+        /** AdoptRequest */
+        AdoptRequest: {
+            /** Version */
+            version?: number | null;
+        };
+        /** AdoptedOut */
+        AdoptedOut: {
+            /** Checkpoint */
+            checkpoint: string;
+            /** Round */
+            round: number;
+            /** Version */
+            version: number;
         };
         /** AskPause */
         AskPause: {
@@ -7622,6 +7657,8 @@ export interface components {
             ][] | null;
             /** Messages */
             messages: components["schemas"]["Message"][];
+            /** Round */
+            round?: number | null;
             /** Version */
             version?: number | null;
         };
@@ -13655,6 +13692,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RoundQueued"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    adopt_round_post_training_rounds__round__adopt_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                round: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdoptRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptedOut"];
                 };
             };
             /** @description Validation Error */
