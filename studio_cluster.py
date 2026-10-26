@@ -48,6 +48,7 @@ class NodeInfo:
     online: bool = True
     error: str = ""
     speeds: dict = field(default_factory=dict)  # design shape (studio_probe.shape_key) -> {device, seconds: {device: s}, tokens, age_s}: what this node measured
+    profile: dict | None = None  # studio_fit.Profile.to_dict(): the memory free now, disk and measured speed; None from a node that does not report it
 
     def seconds_for(self, shape):
         """(device, seconds per step) this node measured for the design `shape`, or None when it has not (or reports none). The device
@@ -80,7 +81,19 @@ def info_from_payload(address, payload):
                     device_name=str(payload.get("device_name", "")), memory_bytes=memory if isinstance(memory, int) and memory > 0 else 0,
                     busy=bool(payload.get("busy", False)),
                     dtypes=tuple(str(d) for d in dtypes) if isinstance(dtypes, list) and dtypes else ("float32",),
-                    speeds=clean_speeds(payload.get("speeds")))
+                    speeds=clean_speeds(payload.get("speeds")), profile=clean_profile(payload.get("profile")))
+
+
+def clean_profile(value):
+    """The `profile` of a peer's report (studio_fit.Profile.to_dict), or None when it is missing or malformed (a peer may be a different version)."""
+    from studio_fit import Profile
+    if not isinstance(value, dict) or value.get("device") not in DTYPES:
+        return None
+    try:
+        return Profile.from_dict(value).to_dict() if all(isinstance(value.get(k), (int, float)) or value.get(k) is None
+                                                         for k in ("vram_total", "vram_free", "ram_total", "ram_free", "disk_free", "tokens_per_second")) else None
+    except (TypeError, ValueError):
+        return None
 
 
 def clean_speeds(value):
@@ -216,9 +229,10 @@ def funnel_token(state):
     return token
 
 
-def own_info(busy=False, version="", status=None, memory=None, speeds=None):
+def own_info(busy=False, version="", status=None, memory=None, speeds=None, profile=None):
     """This machine's NodeInfo. `status` is `studio_backend.gpu_status()` and `memory` the computer's memory in bytes; both are
-    probed when not given. `speeds` is `studio_probe.reported(status)`, read from the cache when not given. `busy` is whether the queue is running a job; the caller knows, this module does not."""
+    probed when not given. `speeds` is `studio_probe.reported(status)`, read from the cache when not given. `busy` is whether the queue is running a job; the caller knows, this module does not. `profile` is this machine's
+    studio_fit.Profile (or its dict) for a peer that sizes a distributed run per member; it is not read here, so most callers leave it out."""
     if status is None:
         try:
             from studio_backend import gpu_status
@@ -240,7 +254,8 @@ def own_info(busy=False, version="", status=None, memory=None, speeds=None):
         except Exception:  # a probe cache that cannot be read is no speeds, not a node that cannot report
             speeds = {}
     return NodeInfo(address=LOCAL, hostname=socket.gethostname(), version=version, device=kind, device_name=status.get("name") or "",
-                    memory_bytes=size, busy=bool(busy), dtypes=DTYPES[kind], speeds=speeds)
+                    memory_bytes=size, busy=bool(busy), dtypes=DTYPES[kind], speeds=speeds,
+                    profile=profile.to_dict() if hasattr(profile, "to_dict") else profile)
 
 
 def fetch_json(url, timeout=POLL_TIMEOUT):

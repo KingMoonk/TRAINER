@@ -1,5 +1,30 @@
 import { describe, expect, test } from "vitest";
-import { busyPeers, ctaLabel, defaultSftVersion, durationText, nameList, runningText, localForced, peersOf, runHref, shapeOf, sourceFacts, workersOf, type Node, type Source } from "./logic";
+import { busyPeers, ctaLabel, defaultSftVersion, durationText, memberLine, nameList, runningText, localForced, peersOf, runHref, shapeOf, sizingBlocker, sourceFacts, workersOf, type Node, type Sizing, type Source } from "./logic";
+
+const member = (over: Partial<Sizing["members"][number]>): Sizing["members"][number] => ({
+  name: "box", address: "box", sized: true, fits: true, batch_size: 16, accumulation: 1, offload: false, notes: [], refusal: "", ...over,
+});
+const sizing = (over: Partial<Sizing> = {}): Sizing => ({ members: [], flagged: [], rounds: 10, rounds_cut: false, note: "", ...over });
+
+describe("per-member sizing", () => {
+  test("a member's line says its batch, accumulation and where its optimizer lives", () => {
+    expect(memberLine(member({}))).toBe("box: batch 16, 1 accumulation steps");
+    expect(memberLine(member({ batch_size: 1, accumulation: 16, offload: true }))).toBe("box: batch 1, 16 accumulation steps, optimizer in RAM");
+  });
+
+  test("a member that cannot fit is named with the reason, and one that reports nothing says so", () => {
+    expect(memberLine(member({ fits: false, refusal: "box cannot take part: it has 200 MB of GPU memory for this run." }))).toBe("box cannot take part. it has 200 MB of GPU memory for this run.");
+    expect(memberLine(member({ sized: false }))).toBe("box: did not report what it has free, so it trains as the design says.");
+  });
+
+  test("a flagged peer blocks Start until it is left out; this computer blocks it always", () => {
+    expect(sizingBlocker(undefined, "mac", false)).toBe("");
+    expect(sizingBlocker(sizing(), "mac", false)).toBe("");
+    expect(sizingBlocker(sizing({ flagged: ["box"] }), "mac", false)).toContain("box cannot hold the design");
+    expect(sizingBlocker(sizing({ flagged: ["box"] }), "mac", true)).toBe("");
+    expect(sizingBlocker(sizing({ flagged: ["mac"] }), "mac", true)).toContain("This computer cannot hold the design");
+  });
+});
 
 const node = (address: string, over: Partial<Node> = {}): Node => ({
   address, busy: false, device: "cuda", device_name: "", dtypes: [], error: "", hostname: address, local: false, memory_bytes: 0, online: true, tailnet_name: "", origin: "", origin_down: false, version: "", ...over,

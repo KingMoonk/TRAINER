@@ -2622,7 +2622,7 @@ class Member:
 
     def __init__(self, client, run, node, epoch, shard_dir, stop, clock=time.monotonic, emit=None, wait=LONG_POLL, patience=300., sleep=time.sleep,
                  progress=True, overlap=False, spawn=Background, replica_dir=None, locate=None, pause=None, memory_share=None,
-                 cache_dir=None, streams=None, receiver_grants=False):
+                 cache_dir=None, streams=None, receiver_grants=False, fit=None):
         if streams is not None and hasattr(client, "streams"):
             client.streams = max(1, int(streams))  # parallel streams per transfer (studio_peer.PeerClient); None keeps the client's default
         self.receiver_grants = bool(receiver_grants)
@@ -2631,6 +2631,7 @@ class Member:
             client.receiver_downloads = self.receiver_grants
         self.down_bps = 0.  # how fast the latest weights came down, bytes per second; told to the coordinator with the change
         self.pause, self.memory_share = pause, memory_share  # this node's queue plan: its pause event and its share of memory
+        self.fit = fit  # {batch_size, accumulation, offload_optimizer}: what the coordinator sized this member to (studio_fit.fit_members); None: as the design says
         self.client, self.run, self.node, self.epoch, self.shard_dir, self.stop = client, run, node, epoch, Path(shard_dir), stop
         self.cache_dir = Path(cache_dir) if cache_dir else None  # shards by content hash, kept across runs (None: per-run copies only)
         self.replica_dir = Path(replica_dir) if replica_dir else None  # where a replica keeps the latest round (None: it keeps none)
@@ -3409,6 +3410,10 @@ class Member:
             cfg = {**self.info["config"], "eval_every": 100000, "sample_every": 0, "steps": studio_model.MAX_STEPS}  # the loop bound, as high as train() lets it go: the run's rounds end it (it can be extended while it goes), and the schedule's length is total_steps
             import studio_memory
             offload = studio_memory.offload_wanted(studio_model.validate_config(cfg), self.memory_share or 1.)  # as a job does: CUDA only, and only when the state cannot fit; train() says so
+            if self.fit:  # the coordinator sized this member from its own memory: its rows per step in the pieces that fit, and where its optimizer lives
+                cfg["batch_size"] = int(self.fit.get("batch_size") or cfg["batch_size"])
+                cfg["accumulation"] = int(self.fit.get("accumulation") or cfg.get("accumulation", 1))
+                offload = offload or bool(self.fit.get("offload_optimizer"))
             if self.memory_share or offload:  # an offloading member without a plan still has the whole device to fit
                 share = self.memory_share or 1.
                 declared = cfg["batch_size"]

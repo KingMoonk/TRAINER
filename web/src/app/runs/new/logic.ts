@@ -68,6 +68,22 @@ export function shapeOf(workers: string[], nodes: Node[]): { label: string; tip:
     : { label: T.shapeRemote, tip: fill(T.shapeRemoteTip, { node: name(only) }) };
 }
 
+export type Sizing = components["schemas"]["RunSizing"];
+
+/** The sentence the Start button waits on, or "" when nothing blocks: a flagged peer blocks until the person ticks "start without", this computer always. */
+export function sizingBlocker(sizing: Sizing | null | undefined, localName: string | undefined, confirmed: boolean): string {
+  if (!sizing || sizing.flagged.length === 0) return "";
+  if (localName && sizing.flagged.includes(localName)) return T.sizingLocalBlocked;
+  return confirmed ? "" : fill(T.sizingBlocked, { names: nameList(sizing.flagged) });
+}
+
+/** What a member trains with, in one line: its batch, its accumulation, and where its optimizer lives. */
+export function memberLine(member: Sizing["members"][number]): string {
+  if (!member.sized) return fill(T.sizingUnsized, { name: member.name });
+  if (!member.fits) return fill(T.sizingCannot, { name: member.name, why: member.refusal.replace(`${member.name} cannot take part: `, "") });
+  return fill(T.sizingBatch, { name: member.name, batch: member.batch_size ?? "", accumulation: member.accumulation ?? "", offload: member.offload ? T.sizingOffload : "" });
+}
+
 /** "Start" when the queue would start the job at once, else "Add to queue". */
 export function ctaLabel(outlook: string | undefined): string {
   return outlook === STARTS_NOW ? T.startNow : T.addToQueue;

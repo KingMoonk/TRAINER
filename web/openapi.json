@@ -5677,6 +5677,75 @@
         "title": "MemberHealth",
         "type": "object"
       },
+      "MemberSizing": {
+        "description": "One machine's share of a run (studio_fit.fit_members): the batch it trains with and whether it can take part.",
+        "properties": {
+          "accumulation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accumulation"
+          },
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "batch_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Size"
+          },
+          "fits": {
+            "default": true,
+            "title": "Fits",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "offload": {
+            "default": false,
+            "title": "Offload",
+            "type": "boolean"
+          },
+          "refusal": {
+            "default": "",
+            "title": "Refusal",
+            "type": "string"
+          },
+          "sized": {
+            "title": "Sized",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "address",
+          "sized"
+        ],
+        "title": "MemberSizing",
+        "type": "object"
+      },
       "Message": {
         "properties": {
           "content": {
@@ -5915,6 +5984,16 @@
           "memory_bytes": {
             "title": "Memory Bytes",
             "type": "integer"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Hardware"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "speeds": {
             "additionalProperties": {
@@ -10614,6 +10693,68 @@
         "title": "RunPageModel",
         "type": "object"
       },
+      "RunSizing": {
+        "description": "A distributed run sized per member: what each machine trains with, who cannot take part, and the rounds the window allows.",
+        "properties": {
+          "flagged": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Flagged",
+            "type": "array"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/MemberSizing"
+            },
+            "title": "Members",
+            "type": "array"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "rounds": {
+            "title": "Rounds",
+            "type": "integer"
+          },
+          "rounds_cut": {
+            "default": false,
+            "title": "Rounds Cut",
+            "type": "boolean"
+          },
+          "token_budget": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Budget"
+          },
+          "tokens_per_second": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Per Second"
+          }
+        },
+        "required": [
+          "members",
+          "flagged",
+          "rounds"
+        ],
+        "title": "RunSizing",
+        "type": "object"
+      },
       "ScaleNote": {
         "description": "One thing the run was scaled for (studio_fit.Note). `advisory`: it only says the run is tight or slow, and \"use my settings anyway\" keeps the figure.",
         "properties": {
@@ -11958,6 +12099,17 @@
             "title": "Inner Steps",
             "type": "integer"
           },
+          "leave_out_unfit": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leave Out Unfit"
+          },
           "machines": {
             "default": [],
             "items": {
@@ -12164,6 +12316,19 @@
               }
             ],
             "title": "Version"
+          },
+          "window_hours": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 8760.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Hours"
           }
         },
         "required": [
@@ -19672,6 +19837,56 @@
           }
         },
         "summary": "Stop Run",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/sizing": {
+      "post": {
+        "description": "What a start with these settings would give each machine, before it is started: the Training tab shows it beside the form.\nNull when this computer cannot read its own hardware. The machines are the ones a start would invite; nothing is queued.",
+        "operationId": "size_run_distributed_sizing_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRun"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/RunSizing"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Size Run Distributed Sizing Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Size Run",
         "tags": [
           "distributed"
         ]

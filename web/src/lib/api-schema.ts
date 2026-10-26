@@ -2173,6 +2173,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/distributed/sizing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Size Run
+         * @description What a start with these settings would give each machine, before it is started: the Training tab shows it beside the form.
+         *     Null when this computer cannot read its own hardware. The machines are the ones a start would invite; nothing is queued.
+         */
+        post: operations["size_run_distributed_sizing_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events": {
         parameters: {
             query?: never;
@@ -6102,6 +6123,42 @@ export interface components {
             /** Wait S */
             wait_s: number | null;
         };
+        /**
+         * MemberSizing
+         * @description One machine's share of a run (studio_fit.fit_members): the batch it trains with and whether it can take part.
+         */
+        MemberSizing: {
+            /** Accumulation */
+            accumulation?: number | null;
+            /** Address */
+            address: string;
+            /** Batch Size */
+            batch_size?: number | null;
+            /**
+             * Fits
+             * @default true
+             */
+            fits: boolean;
+            /** Name */
+            name: string;
+            /**
+             * Notes
+             * @default []
+             */
+            notes: string[];
+            /**
+             * Offload
+             * @default false
+             */
+            offload: boolean;
+            /**
+             * Refusal
+             * @default
+             */
+            refusal: string;
+            /** Sized */
+            sized: boolean;
+        };
         /** Message */
         Message: {
             /** Content */
@@ -6223,6 +6280,7 @@ export interface components {
             hostname: string;
             /** Memory Bytes */
             memory_bytes: number;
+            profile?: components["schemas"]["Hardware"] | null;
             /**
              * Speeds
              * @default {}
@@ -8118,6 +8176,32 @@ export interface components {
             version?: number | null;
         };
         /**
+         * RunSizing
+         * @description A distributed run sized per member: what each machine trains with, who cannot take part, and the rounds the window allows.
+         */
+        RunSizing: {
+            /** Flagged */
+            flagged: string[];
+            /** Members */
+            members: components["schemas"]["MemberSizing"][];
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /** Rounds */
+            rounds: number;
+            /**
+             * Rounds Cut
+             * @default false
+             */
+            rounds_cut: boolean;
+            /** Token Budget */
+            token_budget?: number | null;
+            /** Tokens Per Second */
+            tokens_per_second?: number | null;
+        };
+        /**
          * ScaleNote
          * @description One thing the run was scaled for (studio_fit.Note). `advisory`: it only says the run is tight or slow, and "use my settings anyway" keeps the figure.
          */
@@ -8662,6 +8746,8 @@ export interface components {
              * @default 100
              */
             inner_steps: number;
+            /** Leave Out Unfit */
+            leave_out_unfit?: boolean | null;
             /**
              * Machines
              * @default []
@@ -8714,6 +8800,8 @@ export interface components {
             time_box?: boolean | null;
             /** Version */
             version?: number | null;
+            /** Window Hours */
+            window_hours?: number | null;
         };
         /** StateEntry */
         StateEntry: {
@@ -13054,6 +13142,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    size_run_distributed_sizing_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartRun"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSizing"] | null;
                 };
             };
             /** @description Validation Error */

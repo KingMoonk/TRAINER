@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 import studio_cluster
 import studio_distributed as runs
 import studio_diloco
+import studio_fit
 import studio_facts
 import studio_membership
 import studio_model
@@ -78,6 +79,34 @@ class StartRun(BaseModel):
     plateau_min_improvement: float | None = Field(None, gt=0, lt=1)  # the share the loss must fall by over those rounds (default 0.01)
     pivots: list[Literal["halve_lr", "next_dataset", "drop_lessons"]] | None = None  # what the run tries, in this order, when the loss plateaus: back to the best weights, then the change; with none left, or no plateau window, it ends. Needs plateau_checks
     stages: Stages | None = None  # next_dataset moves on to the workspace's unseen text sets, worst held-out loss first; needs next_dataset in pivots
+    window_hours: float | None = Field(None, gt=0, le=24 * 365)  # the longest the run may take (default studio_fit.DEFAULT_WINDOW_HOURS): rounds the members cannot finish in it at their measured speed are cut
+    leave_out_unfit: bool | None = None  # (default false) true: start without the machines that cannot hold their share (the start is a 409 naming what blocks them otherwise)
+
+
+class MemberSizing(BaseModel):
+    """One machine's share of a run (studio_fit.fit_members): the batch it trains with and whether it can take part."""
+
+    name: str
+    address: str  # "local" for this computer
+    sized: bool  # false: the machine did not report what it has free (an older version, or it did not answer), so it trains as the design says
+    fits: bool = True
+    batch_size: int | None = None
+    accumulation: int | None = None
+    offload: bool = False  # its optimizer state lives in RAM
+    notes: list[str] = []
+    refusal: str = ""  # why it cannot take part, naming the resource and the figure
+
+
+class RunSizing(BaseModel):
+    """A distributed run sized per member: what each machine trains with, who cannot take part, and the rounds the window allows."""
+
+    members: list[MemberSizing]
+    flagged: list[str]  # names of the machines that cannot take part
+    tokens_per_second: float | None = None  # the members that fit, measured together
+    token_budget: int | None = None  # tokens the members that fit can train in the window, set only when it is under what the rounds need
+    rounds: int  # the rounds the run is started with
+    rounds_cut: bool = False  # rounds is fewer than asked, to finish in the window
+    note: str = ""
 
 
 class Sample(BaseModel):
@@ -559,6 +588,75 @@ def _check_coordinator(address, chosen, peers, own):
         raise HTTPException(409, f"{name} cannot coordinate the run: it runs app version {peer.version}; this computer runs {own.version}.")
 
 
+def _chosen_peers(body, services, own):
+    """(chosen addresses, the peers surveyed) for the machines a start names; 400 for one that is not on the Machines tab."""
+    listed = studio_cluster.configured_nodes({"studioConfig": {"nodes": services.setting("nodes", [])}})
+    for address in body.machines:
+        if address not in listed:
+            raise HTTPException(400, f"{address} is not on the Machines tab.")
+    chosen = listed if body.all_machines else [a for a in listed if a in body.machines]
+    return chosen, studio_cluster.survey({"studioConfig": {"nodes": chosen}}, own)[1:]
+
+
+def _sizing(body, services, version, peers, own):
+    """RunSizing for a run of `version` over this computer and `peers` (studio_fit.fit_members, each member from its own profile), or
+    None when this computer cannot read its own hardware (no scaling then, as for a solo run). A machine without a profile is `sized:
+    false`. The rounds are cut when the members that fit cannot train them within `window_hours` at their measured speed."""
+    local = services.hardware_profile()
+    if local is None:
+        return None
+    members = [{"name": own.hostname, "address": studio_cluster.LOCAL, "profile": local, "share": services.memory_share(), "speed": local.tokens_per_second}]
+    for peer in peers:
+        if peer.online and peer.profile:
+            members.append({"name": peer.hostname or peer.address, "address": peer.address, "profile": studio_fit.Profile.from_dict(peer.profile),
+                            "share": 1., "speed": peer.profile.get("tokens_per_second")})
+    config = plan.pretrain_config(version.spec, body.rounds * body.inner_steps, ROWS, HOLD)
+    window = body.window_hours or studio_fit.DEFAULT_WINDOW_HOURS
+    first = studio_fit.fit_members(config, members, window_hours=window)
+    fits = [m for m in first["members"] if m["fits"]]
+    per_round = body.inner_steps * ROWS * config["context"]  # tokens one member trains in a round (a batch of ROWS rows, however it is split)
+    found = studio_fit.fit_members(config, members, token_budget=body.rounds * per_round * len(fits), window_hours=window)
+    rounds, budget = body.rounds, found["token_budget"]
+    if budget and fits:
+        rounds = max(1, min(body.rounds, budget // (per_round * len(fits))))
+    sized = {m["name"]: m for m in found["members"]}
+    rows = []
+    for member in members:
+        row = sized[member["name"]]
+        rows.append(MemberSizing(name=row["name"], address=member["address"], sized=True, fits=row["fits"], batch_size=row["batch_size"],
+                                 accumulation=row["accumulation"], offload=row["offload"], notes=row["notes"], refusal=row["refusal"]))
+    named = {m.name for m in rows}
+    rows += [MemberSizing(name=peer.hostname or peer.address, address=peer.address, sized=False) for peer in peers
+             if (peer.hostname or peer.address) not in named]
+    note = f"{found['note']} Rounds {body.rounds} -> {rounds}." if found["note"] and rounds < body.rounds else found["note"]
+    return RunSizing(members=rows, flagged=found["flagged"], tokens_per_second=found["tokens_per_second"], token_budget=budget, rounds=rounds,
+                     rounds_cut=rounds < body.rounds, note=note)
+
+
+def _sizing_note(sizing):
+    """The job's note: what was sized per member and why, in the words the Training tab shows."""
+    if sizing is None:
+        return ""
+    said = [*(n for m in sizing.members for n in m.notes), sizing.note]
+    return " ".join(["Sized per machine:", *(t for t in said if t)]) if any(said) else ""
+
+
+@router.post("/sizing")
+def size_run(body: StartRun, services: Services) -> RunSizing | None:
+    """What a start with these settings would give each machine, before it is started: the Training tab shows it beside the form.
+    Null when this computer cannot read its own hardware. The machines are the ones a start would invite; nothing is queued."""
+    replaced, _ = _replaced(services, body.replaces) if body.replaces else (None, None)
+    number = replaced.params.get("version") if replaced is not None else body.version
+    version = services.current_version() if number is None else _version(services, number)
+    if version is None:
+        raise HTTPException(409, "Save a design in the Network designer first.")
+    own = studio_cluster.own_info(busy=services.queue().job is not None, version=app_version())
+    _, peers = _chosen_peers(body, services, own)
+    if body.all_machines:
+        peers, _ = _answering(peers, own)
+    return _sizing(body, services, version, peers, own)
+
+
 @router.post("/runs", status_code=201)
 def start_run(body: StartRun, request: Request, services: Services) -> Run:
     """Queue a distributed pretraining run of a design on the chosen text, with this computer as coordinator and member. The chosen
@@ -587,12 +685,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     settings = studio_diloco.Settings(rounds=body.rounds, inner_steps=body.inner_steps, outer_lr=body.outer_lr,
                                       outer_momentum=body.outer_momentum, delta_dtype=body.delta_dtype, delta_sparsity=body.delta_sparsity, **shape, **teaching, **rules["settings"])  # ValueError -> 400
     own = studio_cluster.own_info(busy=services.queue().job is not None, version=app_version())
-    listed = studio_cluster.configured_nodes({"studioConfig": {"nodes": services.setting("nodes", [])}})
-    for address in body.machines:
-        if address not in listed:
-            raise HTTPException(400, f"{address} is not on the Machines tab.")
-    chosen = listed if body.all_machines else [a for a in listed if a in body.machines]
-    peers = studio_cluster.survey({"studioConfig": {"nodes": chosen}}, own)[1:]
+    chosen, peers = _chosen_peers(body, services, own)
     _check_coordinator(body.coordinator, chosen, peers, own)
     if teaching and body.coordinator:  # after the coordinator's own checks, so an offline or unknown one is told so
         raise HTTPException(400, "The teacher runs only on the computer that starts the run, so another computer cannot coordinate a run with a teacher. "
@@ -606,6 +699,22 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
             name = mismatched.hostname or mismatched.address
             raise HTTPException(409, f"{name} cannot join with receiver grants: it runs app version {mismatched.version}; "
                                     f"this computer runs {own.version}.")
+    sizing = _sizing(body, services, version, peers, own)
+    if sizing is not None and sizing.flagged:
+        refusals = [m.refusal for m in sizing.members if not m.fits]
+        if own.hostname in sizing.flagged:
+            raise HTTPException(409, " ".join([*refusals, "This computer is a member of every run it starts, so the run cannot start."]))
+        if not body.leave_out_unfit:
+            raise HTTPException(409, " ".join([*refusals, "Start without " + ("it" if len(refusals) == 1 else "them") + " (leave out the machines that cannot fit) or choose a smaller design."]))
+        out = {m.name: m.refusal for m in sizing.members if not m.fits}
+        left_out = [*left_out, *({"node": peer.hostname or peer.address, "address": peer.address, "reason": out[peer.hostname or peer.address]}
+                                 for peer in peers if (peer.hostname or peer.address) in out)]
+        peers = [peer for peer in peers if (peer.hostname or peer.address) not in out]
+    rounds = sizing.rounds if sizing is not None else body.rounds
+    if rounds != body.rounds:
+        settings = replace(settings, rounds=rounds)
+    fit_of = {m.name: {"batch_size": m.batch_size, "accumulation": m.accumulation, "offload_optimizer": m.offload}
+              for m in (sizing.members if sizing is not None else ()) if m.sized and m.fits}
     machines = [{"node": own.hostname, "address": studio_cluster.LOCAL, "device": own.device, "device_name": own.device_name},
                 *({"node": peer.hostname or peer.address, "address": peer.address, "device": peer.device if peer.online else "",
                    "device_name": peer.device_name, "error": "" if peer.online else peer.error} for peer in peers)]
@@ -616,14 +725,14 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     member_options = {**({"overlap": True} if overlap else {}), **({"receiver_grants": True} if body.receiver_grants else {})}
     boxed = body.time_box if body.time_box is not None else len(machines) > 1  # machines differ in speed, and none should wait for another
     settings = replace(settings, time_box=boxed)
-    config = plan.pretrain_config(version.spec, body.rounds * body.inner_steps, ROWS, HOLD)
+    config = plan.pretrain_config(version.spec, rounds * body.inner_steps, ROWS, HOLD)
     label = runs.across_label(version.number, len(machines))
     job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
         "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
-        "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("rounds", "inner_steps", "outer_lr", "outer_momentum")},
+        "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("inner_steps", "outer_lr", "outer_momentum")}, "rounds": rounds,
         "delta_dtype": settings.delta_dtype, "delta_sparsity": settings.delta_sparsity, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **rules["settings"], **rules["params"], **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": member_options} if member_options else {}), "machines": machines, "owner": own.hostname,
         **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
-        **({"left_out": left_out} if body.all_machines else {})})
+        **({"left_out": left_out} if body.all_machines or left_out else {}), **({"member_fit": fit_of} if fit_of else {})}, note=_sizing_note(sizing))
     runs.open_run(job)
     if replaced is not None:
         services.remove(replaced.id)
