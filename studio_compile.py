@@ -18,7 +18,8 @@ from torch.utils.checkpoint import checkpoint
 
 import studio_registry as registry
 from studio_backend import Backend, get_backend
-from studio_modules.precision.policy import LossScaler, plan
+from studio_modules.precision import fp8_ops
+from studio_modules.precision.policy import LossScaler, plan, uses_fp8
 from studio_slots import Ctx, Dims, as_tensor
 from studio_spec import block_at, module_of, validate_spec
 from studio_validate import errors
@@ -73,6 +74,7 @@ class CompiledModel:
         self.device = self.backend.device
         # Mixed precision: the weights stay `dtype`; matrix multiplies run in `compute` under autocast (None: plain `dtype`).
         self.compute, self.precision_note = plan(precision, self.device)
+        self.fp8 = uses_fp8(precision, self.device)     # the linear layers' products run in float8 (studio_modules.precision.fp8_ops)
         self.scaler = LossScaler() if self.compute is not None and precision.scaled else None
         self.overflowed = False     # a scaled backward pass produced inf or nan gradients; accept_gradients() reports it
         self.checkpointing = bool(spec["train"].get("run", {}).get("checkpointing"))
@@ -150,6 +152,7 @@ class CompiledModel:
         self.backend, self.device = backend, backend.device
         self.dims = dataclasses.replace(self.dims, device=self.device)
         self.compute, self.precision_note = plan(self._precision, self.device)
+        self.fp8 = uses_fp8(self._precision, self.device)
         for table, key, value in moves:
             if table is self.p or table is self.g:
                 table[key].data = value  # the same tensor object: the layers' dicts alias it
@@ -187,7 +190,15 @@ class CompiledModel:
         return not overflowed
 
     def _autocast(self):
-        return torch.autocast(device_type=self.device, dtype=self.compute) if self.compute is not None else contextlib.nullcontext()
+        if self.compute is None:
+            return contextlib.nullcontext()
+        autocast = torch.autocast(device_type=self.device, dtype=self.compute)
+        if not self.fp8:
+            return autocast
+        stack = contextlib.ExitStack()
+        stack.enter_context(autocast)
+        stack.enter_context(fp8_ops.enabled())
+        return stack
 
     def _ids(self, ids):
         if isinstance(ids, torch.Tensor):

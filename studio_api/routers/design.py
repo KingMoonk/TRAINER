@@ -111,6 +111,7 @@ class Precision(BaseModel):
     short: str
     name: str
     blurb: str
+    reason: str  # why this machine cannot train in it ("" when it can); the API refuses a pick that has one
 
 
 class Registry(BaseModel):
@@ -130,7 +131,7 @@ def design_registry() -> Registry:
                       modules=[ModuleInfo(short=m.short, name=m.name, blurb=m.blurb, tip=design.module_tip(slot, m.short),
                                           fields=plain(registry.fields(m))) for m in registry.for_slot(slot)])
              for slot in TOWER_SLOTS]
-    precisions = [Precision(short=m.short, name=m.name, blurb=m.blurb) for m in registry.for_slot("precision")]
+    precisions = [Precision(short=m.short, name=m.name, blurb=m.blurb, reason=design.precision_unavailable(m.short)) for m in registry.for_slot("precision")]
     return Registry(precisions=precisions, part_slots=list(design.PART_SLOTS), block_slots=list(BLOCK_SLOTS), slots=slots, words=list(design.WORDS),
                     widths=list(design.WIDTHS), heads=list(design.HEADS))
 

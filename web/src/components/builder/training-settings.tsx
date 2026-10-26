@@ -106,13 +106,20 @@ export function TrainingSettings({ registry, cur, draft, onChange }: Props) {
             </SelectTrigger>
             <SelectContent>
               {precisions.map((p) => (
-                <SelectItem key={p.short} value={p.short} title={p.blurb}>
+                <SelectItem key={p.short} value={p.short} title={p.reason || p.blurb} disabled={Boolean(p.reason) && p.short !== draft.precision}>
                   {p.name}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground">{picked?.blurb ?? BUILDER.training_precision_help}</p>
+          {precisions
+            .filter((p) => p.reason)
+            .map((p) => (
+              <p key={p.short} className="text-xs text-muted-foreground" data-testid={`precision-unavailable-${p.short}`}>
+                {fill(BUILDER.training_precision_unavailable, { name: p.name, reason: p.reason })}
+              </p>
+            ))}
           {savedPrecision && draft.precision !== cur.precision && (
             <p className="text-xs text-muted-foreground">{fill(BUILDER.control_saved, { value: savedPrecision.name })}</p>
           )}

@@ -6538,6 +6538,8 @@ export interface components {
             blurb: string;
             /** Name */
             name: string;
+            /** Reason */
+            reason: string;
             /** Short */
             short: string;
         };

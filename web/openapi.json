@@ -6694,6 +6694,10 @@
             "title": "Name",
             "type": "string"
           },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
           "short": {
             "title": "Short",
             "type": "string"
@@ -6702,7 +6706,8 @@
         "required": [
           "short",
           "name",
-          "blurb"
+          "blurb",
+          "reason"
         ],
         "title": "Precision",
         "type": "object"

@@ -409,7 +409,16 @@ def write_spec(base, s, was=None):
         spec["dims"]["dropout"] = s["dropout"]
     if s.get("precision", was["precision"]) != was["precision"]:
         train["precision"] = {"id": s["precision"], "config": {}}
+        why = precision_unavailable(s["precision"], run.get("device", "auto"))
+        if why:
+            raise ValueError(why)
     return validate_spec(spec)
+
+
+def precision_unavailable(short, device="auto"):
+    """Why the precision module `short` cannot be picked for a run on `device` ("auto": where it will probably land), or ""."""
+    from studio_modules.precision.policy import likely_device, unavailable
+    return unavailable(registry.get("precision", short), likely_device(device))
 
 
 def tokenizer_config(short, spec):
@@ -480,6 +489,8 @@ def training_changes(cur, draft):
             a, b = cur[key], draft[key]
             both_whole = isinstance(a, int) and isinstance(b, int)
             out.append(f"{TRAINING_NAMES[key]} {a:,} → {b:,}" if both_whole else f"{TRAINING_NAMES[key]} {a} → {b}")
+            if key == "precision" and (tradeoff := registry.get("precision", b).tradeoff):
+                out.append(f"{b}: {tradeoff}")
     return out
 
 
