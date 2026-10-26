@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,10 +37,15 @@ export function LiveCheckpoints({ live, answering, busy, onPick }: { live: LiveC
 }
 
 function LiveRow({ live, now, chatting, busy, onPick }: { live: LiveCheckpoint; now: number; chatting: boolean; busy: boolean; onPick: (version: number) => void }) {
+  const poll = useRef<AbortController | null>(null);
+  useEffect(() => () => poll.current?.abort(), []); // leaving the page ends the wait and cancels the scoring job on the server
   const score = useMutation({
-    mutationFn: async (signal?: AbortSignal) => {
-      const initial = await unwrap(api.POST("/versions/{number}/score-live", { params: { path: { number: live.version } } }));
-      return liveScore(await awaitJob<unknown>(initial, signal ?? new AbortController().signal));
+    mutationFn: async () => {
+      poll.current?.abort();
+      const controller = new AbortController();
+      poll.current = controller;
+      const initial = await unwrap(api.POST("/versions/{number}/score-live", { params: { path: { number: live.version } }, signal: controller.signal }));
+      return liveScore(await awaitJob<unknown>(initial, controller.signal));
     },
   });
   const result = score.data;
@@ -51,7 +56,7 @@ function LiveRow({ live, now, chatting, busy, onPick }: { live: LiveCheckpoint; 
         <Badge variant="outline">still training</Badge>
         <span className="flex-1 text-muted-foreground">{liveLabel(live, now)}</span>
         <Button variant="outline" size="sm" aria-pressed={chatting} disabled={busy || chatting} onClick={() => onPick(live.version)}>{chatting ? "answering now" : T.liveChat}</Button>
-        <Button variant="outline" size="sm" disabled={score.isPending} onClick={() => score.mutate(undefined)}>{T.liveScoreNow}</Button>
+        <Button variant="outline" size="sm" disabled={score.isPending} onClick={() => score.mutate()}>{T.liveScoreNow}</Button>
       </div>
       {score.isPending && <p role="status" className="text-sm text-muted-foreground">{T.liveScoring}</p>}
       {score.isError && <p role="alert" className="text-sm">{T.liveScoreFailed}: {score.error.message}</p>}
