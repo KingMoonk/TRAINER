@@ -11,6 +11,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import studio_worker
 from studio_queue import Job, Plan, Runner
@@ -66,6 +67,29 @@ def ignores_stop_with_run(job, context, emit, stop, pause):
     out.mkdir(exist_ok=True)
     (out / "run.json").write_text(json.dumps({"status": "training", "step": 3}))
     (out / "corpus-abc.spool").write_bytes(b"rows")
+    emit({"type": "metric", "step": 1, "total": 10 ** 6})
+    (Path(context.root) / "stuck").write_text(str(os.getpid()))
+    time.sleep(120)
+
+
+def saves_then_hangs(job, context, emit, stop, pause):
+    """A periodic checkpoint save (saving, then saved), after which the worker is stuck outside its loop and ignores the stop."""
+    emit({"type": "metric", "step": 1, "total": 10 ** 6})
+    stop.wait(60)
+    emit({"type": "saving", "file": "last.npz"})
+    time.sleep(2.5)
+    (Path(context.root) / "saved").write_text("yes")
+    emit({"type": "saved", "file": "last.npz"})
+    (Path(context.root) / "stuck").write_text(str(os.getpid()))
+    time.sleep(120)
+
+
+def ignores_stop_with_tmp(job, context, emit, stop, pause):
+    """Stuck while the in-app coordinator of the run has last.tmp half written in the same folder."""
+    out = Path(context.root) / "out"
+    out.mkdir(exist_ok=True)
+    (out / "run.json").write_text(json.dumps({"status": "training", "step": 3}))
+    (out / "last.tmp").write_bytes(b"half")
     emit({"type": "metric", "step": 1, "total": 10 ** 6})
     (Path(context.root) / "stuck").write_text(str(os.getpid()))
     time.sleep(120)
@@ -263,6 +287,19 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual((record["status"], record["interrupted"]), ("stopped", True))  # without a queue restart
         self.assertFalse(list(out.glob("corpus-*.spool")))
 
+    def test_a_hard_kill_leaves_the_temporaries_a_live_coordinator_owns(self):
+        import studio_diloco
+        out = self.root / "out"
+        coordinator = mock.Mock(finished=False, stopped=False, directory=out)
+        with mock.patch.dict(studio_diloco.COORDINATORS, {"run": coordinator}):
+            runner, job, handle = self.start_and_remove(ignores_stop_with_tmp, grace=.5, output_dir=str(out))
+            self.assertTrue(wait(lambda: (self.root / "stuck").exists()))
+            runner.remove(job.id)
+            self.assertTrue(wait(lambda: job.status == "stopped", 30))
+            self.assertTrue(handle._killed)
+            self.assertTrue((out / "last.tmp").exists())
+            self.assertEqual(json.loads((out / "run.json").read_text())["status"], "stopped")
+
     def test_a_worker_that_stops_normally_keeps_its_files(self):
         out = self.root / "out"
         out.mkdir()
@@ -274,6 +311,24 @@ class WorkerTests(unittest.TestCase):
         self.assertFalse(handle._killed)
         self.assertTrue((out / "corpus-abc.spool").exists())  # the worker's own cleanup owns these, not the queue
         self.assertEqual(json.loads((out / "run.json").read_text())["status"], "training")
+
+    def test_saved_ends_the_wait_so_the_kill_comes_at_the_grace(self):
+        runner, job, handle = self.start_and_remove(saves_then_hangs, grace=.5)
+        runner.save_ceiling = 60
+        began = time.monotonic()
+        runner.remove(job.id)
+        self.assertTrue(wait(lambda: (self.root / "saved").exists(), 30))  # the save outlasted the grace and was not cut off
+        self.assertTrue(wait(lambda: job.status == "stopped", 30))
+        self.assertTrue(handle._killed)  # the worker hung after the save: it was ended
+        self.assertLess(time.monotonic() - began, 20)  # at the grace after "saved", not at the 60 s ceiling
+        self.assertIsNone(runner._saving_since)
+
+    def test_the_queue_state_says_saving_between_saving_and_saved(self):
+        runner, job, handle = self.start_and_remove(saves_slowly, grace=30)
+        self.assertFalse(runner.state().saving)
+        runner.remove(job.id)
+        self.assertTrue(wait(lambda: runner.state().saving, 30))
+        self.assertTrue(wait(lambda: job.status == "stopped", 30))
 
     def test_stop_now_waits_for_a_save_that_outlasts_the_grace(self):
         runner, job, handle = self.start_and_remove(saves_slowly, grace=.5)

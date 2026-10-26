@@ -2,6 +2,7 @@
 Start pressed, a pause or stop the person made holds, a dead run no longer says "training", and the dev loop does not restart the
 API under a running job."""
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -151,6 +152,33 @@ class ReapSweepsTemporaries(unittest.TestCase):
             for folder in (idle, elsewhere):
                 self.assertEqual(sorted(p.name for p in folder.iterdir()), ["last.npz"])
             self.assertEqual(sorted(p.name for p in busy.iterdir()), ["corpus-x.spool", "last.npz", "tokens.part"])
+
+    def test_reap_leaves_a_live_coordinators_folder_and_a_part_written_after_the_queue_started(self):
+        import studio_cleanup
+        import studio_diloco
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            root = Path(directory)
+            runner = Runner(root / "data" / "queue.json", {}, tick=.05)
+            self.addCleanup(runner.shutdown)
+            owned, pulled, stale = root / "out", root / "runs" / "queue_p", root / "runs" / "queue_s"
+            for folder in (owned, pulled, stale):
+                folder.mkdir(parents=True)
+            (owned / "last.tmp").write_bytes(b"x")
+            (stale / "tokens.part").write_bytes(b"old")
+            old = time.time() - 100
+            os.utime(stale / "tokens.part", (old, old))
+            runner.started_at = time.time() - 50  # the queue started after the stale file and before the new one
+            (pulled / "last_term2.npz.part").write_bytes(b"pull")
+            runner.jobs = [Job("pretrain_distributed", "d", id="d", status="stopped", params={"output_dir": str(owned)})]
+            coordinator = mock.Mock(finished=False, stopped=False, directory=owned)
+            with mock.patch.dict(studio_diloco.COORDINATORS, {"d": coordinator}):
+                runner._reap()
+            self.assertTrue((owned / "last.tmp").exists())  # a live coordinator owns it
+            self.assertTrue((pulled / "last_term2.npz.part").exists())  # written after the queue started
+            self.assertFalse((stale / "tokens.part").exists())  # a kill's leftover from before
+            with studio_cleanup.hold(pulled):
+                self.assertEqual(studio_cleanup.sweep_temporaries(pulled), 0)
+            self.assertEqual(studio_cleanup.sweep_temporaries(pulled), 1)
 
 
 class ReapGrace(unittest.TestCase):

@@ -7242,6 +7242,11 @@ export interface components {
             /** Prepare Phase */
             prepare_phase?: ("reading" | "tokenizer" | "tokenizing") | null;
             /**
+             * Saving
+             * @default false
+             */
+            saving: boolean;
+            /**
              * Step
              * @default 0
              */

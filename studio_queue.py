@@ -75,6 +75,7 @@ class QueueState:
     phase: str = ""                # warm-up | steady | cool-down, or "preparing" while the text is tokenized
     prepare: int | None = None     # percent of the text prepared, while phase == "preparing"
     prepare_phase: str | None = None  # what the preparation is doing: reading | tokenizer | tokenizing
+    saving: bool = False           # the running job is writing a checkpoint right now
     lr: float | None = None
     eta_s: float | None = None
     paused: bool = False           # by the user; persisted, so true when idle too ("Paused by you")
@@ -521,12 +522,13 @@ class Runner:
         with self.lock:
             p = self.progress
             return QueueState(
-                job=self.running, step=p.get("step", 0), total=p.get("total", 0), phase=p.get("phase", ""), prepare=p.get("prepare"), prepare_phase=p.get("prepare_phase"), lr=p.get("lr"),
+                job=self.running, step=p.get("step", 0), total=p.get("total", 0), phase=p.get("phase", ""), prepare=p.get("prepare"), prepare_phase=p.get("prepare_phase"), saving=self._saving_since is not None, lr=p.get("lr"),
                 eta_s=p.get("eta_s"), paused=self.user_paused, blocked=gate.reason, gate=gate, stopping=self.stopping,
                 up_next=self._queued(), plan=dataclasses.asdict(self.plan), notices=[dict(n) for n in self.notices],
                 failed=[j for j in self.jobs if j.status == "failed"][-FAILED_SHOWN:])
 
     def start(self):
+        self.started_at = time.time()  # the startup sweep leaves what is written after this to the work that wrote it
         self._writer = threading.Thread(target=self._write_loop, daemon=True, name="queue-save")
         self._writer.start()
         self.thread = threading.Thread(target=self._loop, daemon=True)
@@ -619,8 +621,14 @@ class Runner:
             for job in self.jobs:
                 folders.update(Path(folder) for folder in run_folders(self.root, job))
         for folder in folders:
-            if folder.resolve() not in busy:
-                studio_cleanup.sweep_temporaries(folder)
+            if folder.resolve() not in busy and not self._coordinated(folder):
+                studio_cleanup.sweep_temporaries(folder, before=getattr(self, "started_at", None))
+
+    @staticmethod
+    def _coordinated(folder):
+        """A live in-app coordinator of a distributed run writes last.tmp / best.tmp into `folder`: no sweep may take them."""
+        import studio_diloco
+        return studio_diloco.is_coordinating(folder)
 
     def _start(self, job, handler, emit, on_end=None):
         """Start `job` in a worker process; the handle is tracked until the process ends."""
@@ -847,8 +855,10 @@ class Runner:
         def emit(event):
             if event.get("type") in ("resumed", "resume_refused"):
                 self._resume_note(job, event)
-            if event.get("type") == "saving":  # the final checkpoint is being written: "Stop now" waits for it (up to save_ceiling)
+            if event.get("type") == "saving":  # a checkpoint is being written: "Stop now" waits for it (up to save_ceiling)
                 self._saving_since = time.monotonic()
+            elif event.get("type") == "saved":  # written: a later kill is not held back by a save that is over
+                self._saving_since = None
             if event.get("type") == "resumed":
                 earlier[:] = [event.get("earlier_tokens") or 0, event.get("earlier_seconds") or 0.]
             self._watch_event(job, event, resumed_at[0], earlier)
@@ -903,7 +913,8 @@ class Runner:
                 job.params.update(handle.params)
             for folder in run_folders(self.root, job):
                 reconcile_run(folder)
-                studio_cleanup.sweep_temporaries(folder)
+                if not self._coordinated(folder):  # the in-app coordinator of a distributed run may outlive its local member's kill
+                    studio_cleanup.sweep_temporaries(folder)
         with self.lock:
             if handle:
                 job.params.update(handle.params)
