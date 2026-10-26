@@ -77,7 +77,7 @@ class Registry(unittest.TestCase):
     def test_the_payload_round_trips(self):
         original = sc.own_info(status={"available": True, "kind": "cuda", "name": "GPU", "memory_bytes": 8 * GB}, version="1")
         body = original.payload()
-        self.assertEqual(set(body), {"hostname", "version", "device", "device_name", "memory_bytes", "busy", "dtypes", "speeds", "profile"})
+        self.assertEqual(set(body), {"hostname", "version", "device", "device_name", "memory_bytes", "busy", "dtypes", "speeds", "profile", "memory_share"})
         self.assertEqual(sc.info_from_payload("box", body), sc.NodeInfo(**{**body, "dtypes": tuple(body["dtypes"])}, address="box"))
 
     def test_a_peer_that_answers_is_online_with_its_capabilities(self):

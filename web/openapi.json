@@ -5985,6 +5985,17 @@
             "title": "Memory Bytes",
             "type": "integer"
           },
+          "memory_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Memory Share"
+          },
           "profile": {
             "anyOf": [
               {

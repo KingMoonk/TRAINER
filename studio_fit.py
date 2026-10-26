@@ -267,6 +267,16 @@ def _context_note(context, ctx, sizer):
                                    f"{sizer.pool_name} free, even one row at a time{' with the optimizer in RAM' if sizer.offload_ok else ''}.")
 
 
+def _split(b0, a0, micro):
+    """(batch, accumulation) for a machine whose largest batch is `micro` when the design declares `b0` x `a0`: the declared pair when it
+    fits, else a batch that divides the declared rows (if that costs under half the batch), so the rows per step stay exactly b0 * a0."""
+    effective = b0 * a0
+    micro = min(micro, b0)
+    if micro < b0:
+        micro = next((d for d in range(micro, max(0, micro // 2), -1) if effective % d == 0), micro)
+    return micro, a0 if micro == b0 else min(MAX_ACCUMULATION, math.ceil(effective / micro))
+
+
 def fit_solo(config, profile, *, share=1., pieces=None, chars_per_piece=4., token_budget=None, window_hours=DEFAULT_WINDOW_HOURS,
              speed=None, keep_mine=False, fixed_architecture=False, device=None, vocab=None):
     """Fit the solo pretraining run `config` (an engine config with its design in "architecture") to `profile`.
@@ -307,10 +317,7 @@ def fit_solo(config, profile, *, share=1., pieces=None, chars_per_piece=4., toke
     if micro < 1:
         _refuse_memory(out, cfg, sizer, fixed_architecture)
         return out
-    micro = min(micro, b0)
-    if micro < b0:  # a batch that divides the declared rows keeps the rows per step exactly, if that costs under half the batch
-        micro = next((d for d in range(micro, max(0, micro // 2), -1) if effective0 % d == 0), micro)
-    accumulation = a0 if micro == b0 else min(MAX_ACCUMULATION, math.ceil(effective0 / micro))
+    micro, accumulation = _split(b0, a0, micro)
     out.can_keep_mine = tight
     if tight and keep_mine:
         chosen, offload, micro, accumulation = cfg, False, b0, a0
@@ -481,20 +488,23 @@ def _refuse_memory(out, cfg, sizer, fixed_architecture):
 
 def fit_members(config, members, *, pieces=None, token_budget=None, window_hours=DEFAULT_WINDOW_HOURS):
     """Size a distributed run per member (the solo rules never apply to it). `members`: [{"name", "profile", "share", "speed"}], each its
-    own machine's profile, memory share and measured tokens/s for this design. Every member keeps the design and context (they share one
-    set of weights), so its own memory decides only its batch and accumulation (the same rows per step) and whether its optimizer is
-    offloaded; a member that cannot fit even one row with its optimizer offloaded is flagged `fits: False` with the reason, and the others
-    are left exactly as they would be alone. The run's token budget comes from the members' combined measured speed over the window, over
-    the members that fit. Returns {"members": [{"name", "fits", "batch_size", "accumulation", "offload", "notes", "refusal"}], "flagged":
-    [names], "tokens_per_second": combined | None, "token_budget": int | None, "note": str}."""
+    own machine's profile, memory share and the tokens/s it measured for THIS design (None when it has not: a speed from another design
+    is no evidence). Every member keeps the design and context (they share one set of weights), so its own memory decides only its batch
+    and accumulation (the same rows per step, by the divisor search of fit_solo; a note says so when no batch divides them) and whether
+    its optimizer is offloaded; a member that cannot fit even one row with its optimizer offloaded is flagged `fits: False` with the
+    reason, and the others are left exactly as they would be alone. The run's token budget comes from the combined measured speed of the
+    members that fit and have one, over the window. Returns {"members": [{"name", "fits", "batch_size", "accumulation", "offload",
+    "notes", "refusal", "measured"}] in the order given, "flagged": [names], "tokens_per_second": combined | None, "measured": how many
+    members that fit have a speed, "token_budget": int | None, "note": str}."""
     from studio_model import validate_config, vocabulary_guess
     cfg = validate_config(config)
-    out, combined = [], 0.
+    out, combined, measured = [], 0., 0
     b0, a0 = cfg["batch_size"], cfg["accumulation"]
     for member in members:
         profile = member["profile"]
-        sizer = _Sizer(profile, _device(cfg, profile, None), member.get("share", 1.), vocabulary_guess(cfg))
-        row = {"name": member["name"], "fits": True, "batch_size": b0, "accumulation": a0, "offload": False, "notes": [], "refusal": ""}
+        sizer = _Sizer(profile, _device(cfg, profile, None), member.get("share") or 1., vocabulary_guess(cfg))
+        row = {"name": member["name"], "fits": True, "batch_size": b0, "accumulation": a0, "offload": False, "notes": [], "refusal": "",
+               "measured": bool(member.get("speed"))}
         micro = sizer.largest_batch(cfg, False) if sizer.usable else 0
         if micro < 1 and sizer.usable and sizer.offload_ok and sizer.host_holds(cfg):
             row["offload"], micro = True, sizer.largest_batch(cfg, True)
@@ -506,10 +516,16 @@ def fit_members(config, members, *, pieces=None, token_budget=None, window_hours
                                            f"run and the design needs about {size_text(need)} even at one row.")
         else:
             if micro < b0:
-                row["batch_size"], row["accumulation"] = micro, min(MAX_ACCUMULATION, math.ceil(b0 * a0 / micro))
-                row["notes"].append(f"{member['name']}: batch {b0} -> {micro} x {row['accumulation']} accumulation to fit "
+                row["batch_size"], row["accumulation"] = _split(b0, a0, micro)
+                row["notes"].append(f"{member['name']}: batch {b0} -> {row['batch_size']} x {row['accumulation']} accumulation to fit "
                                     f"{size_text(sizer.usable)} of {sizer.pool_name}.")
-            combined += member.get("speed") or 0.
+                rows = row["batch_size"] * row["accumulation"]
+                if rows != b0 * a0:
+                    row["notes"].append(f"{member['name']}: {rows} rows a step instead of {b0 * a0}, because no batch near {micro} divides "
+                                        f"{b0 * a0} within the accumulation limit of {MAX_ACCUMULATION}.")
+            if member.get("speed"):
+                combined += member["speed"]
+                measured += 1
         out.append(row)
     tokens = int(window_hours * 3600 * combined) if combined else None
     wanted = min(x for x in (token_budget, pieces) if x) if (token_budget or pieces) else None
@@ -517,4 +533,4 @@ def fit_members(config, members, *, pieces=None, token_budget=None, window_hours
     note = (f"Token budget {count_text(wanted)} -> {count_text(tokens)} to finish in about {hours_text(window_hours)} at the {combined:,.0f} "
             "tokens/s the members that fit measure together.") if budget else ""
     return {"members": out, "flagged": [row["name"] for row in out if not row["fits"]], "tokens_per_second": combined or None,
-            "token_budget": budget, "note": note}
+            "measured": measured, "token_budget": budget, "note": note}
