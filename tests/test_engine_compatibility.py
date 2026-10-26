@@ -1,4 +1,4 @@
-"""Frozen-engine checkpoint and ModelSpec curriculum compatibility."""
+"""Frozen-engine checkpoint compatibility."""
 import hashlib
 import json
 import random
@@ -9,10 +9,8 @@ from pathlib import Path
 import numpy as np
 
 from studio_core import fingerprint
-from studio_curriculum import _stage_config
 from studio_model import (LocalModel, Tokenizer, batch_arrays, load_checkpoint, partition_examples,
                           samples_from, train, validate_config)
-from studio_spec import config_from_spec, default_spec
 from tests import legacy_gpt
 from tests.torchcheck import to_np
 
@@ -92,22 +90,6 @@ class LegacyCheckpoint(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "optimizer"):
                 train(dict(CONFIG, learning_rate=.004), EXAMPLES, root / "second",
                       resume=root / "first" / "last.npz")
-
-
-class CurriculumSpec(unittest.TestCase):
-    def test_stage_updates_model_spec_without_changing_original(self):
-        spec = default_spec()
-        state = {"base_config": config_from_spec(spec), "context": 32}
-        stage = {"name": "Language", "steps": 10, "learning_rate": .002, "objective": "all"}
-        cfg = _stage_config(state, stage, 0)
-        normalized = validate_config(cfg)
-        self.assertEqual(normalized["architecture"]["dims"]["n_ctx"], 32)
-        self.assertEqual(normalized["architecture"]["tokenizer"]["id"], "byte")
-        self.assertEqual(normalized["context"], 32)
-        self.assertEqual(normalized["learning_rate"], .002)
-        self.assertEqual(normalized["objective"], "all")
-        self.assertEqual(spec["dims"]["n_ctx"], 256)
-
 
 
 if __name__ == "__main__":

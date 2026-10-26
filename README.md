@@ -283,7 +283,7 @@ Entry points and engine services sit in the repository root; swappable model/tra
 | Learning engine | `studio_model.py`, `studio_backend.py` | Tokenizers, transformer, handwritten gradients, AdamW, training loop, checkpoints, inference, CPU/CUDA backend selection. |
 | Modular network engine | `studio_registry.py`, `studio_spec.py`, `studio_validate.py`, `studio_estimate.py`, `studio_compile.py`, `studio_modules/` | Registry-discovered modules, canonical ModelSpec, compatibility checks, module estimates and the compiler. |
 | Network editing | `studio_arch.py`, `studio_archdb.py` | Architecture editor services, per-block designs, and a versioned SQLite store of revisions and weight files. |
-| Curriculum and post-training | `studio_curriculum.py`, `studio_rlhf.py` | Stage-by-stage training across datasets; DPO/IPO preference training and the Ollama teacher client. |
+| Post-training | `studio_rlhf.py` | DPO/IPO preference training and the Ollama teacher client. |
 | Inspection and experiments | `studio_inspect.py`, `studio_summary.py`, `studio_experiments.py`, `studio_snapshot.py`, `studio_scene.py` | Probe, summary, experiment, snapshot/replay and renderer-independent scene services. |
 
 ### Dependency flow
@@ -293,7 +293,7 @@ app.py ──► studio_api ──► studio_ia.services ──► engine module
 train.py ─┐
           ├──► studio_model ──► studio_backend, studio_arch, studio_core, studio_planning
           │        ▲
-          │        └── studio_rlhf, studio_curriculum
+          │        └── studio_rlhf
           └──► studio_core, studio_backend
 ```
 

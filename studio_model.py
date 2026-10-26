@@ -2,7 +2,7 @@
 
 The transformer, tokenizer, checkpoint format and sampler are this repository's own; autograd supplies the gradients.
 
-Data-pipeline config keys (stable API, also used by the curriculum trainer):
+Data-pipeline config keys (stable API):
   tokenizer  "byte" | "character"   - byte is the default: 263 tokens, no unknown characters, so every
                                        dataset shares one vocabulary and the embedding stays tiny.
   context    32..2048                - tokens per window (default 256 so most chat turns fit prompt + answer).
@@ -88,7 +88,7 @@ def validate_config(config):
         cfg["architecture"] = spec
     if is_model_spec(spec):
         # A ModelSpec is authoritative for structure and for its optimizer and schedule settings; the display
-        # fields are derived from it. Values passed alongside it (a curriculum stage's learning rate) still win.
+        # fields are derived from it. Values passed alongside it (a post-training round's learning rate) still win.
         derived = config_from_spec(spec)
         spec = derived.pop("architecture")
         cfg.update({key: value for key, value in derived.items()

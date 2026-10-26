@@ -23,7 +23,7 @@ from pathlib import Path
 
 HELD_EVERY = 20  # one text in this many of every source is kept out of training and used to measure that source
 SAMPLE = 48  # held-out texts scored per source
-REPLAY = .2  # share of a round's shards drawn from the sources before the current one (forgetting guard, as studio_curriculum does)
+REPLAY = .2  # share of a round's shards drawn from the sources before the current one (forgetting guard)
 LEARNED = .02  # a new source whose held-out loss did not fall by this share while it was read was not learnable by this model
 JOURNAL = "stages.json"
 SUGGESTION = "To learn more, continue with a bigger design (a warm start keeps what it learned) or with more text."
