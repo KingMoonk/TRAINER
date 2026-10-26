@@ -1,5 +1,6 @@
 import { act, screen, waitFor } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { SLOW_MS } from "@/lib/busy";
 import { emit, mockApi } from "@/test/network";
 import { renderPage } from "@/test/render";
 import { BusyIndicator } from "./busy-indicator";
@@ -7,6 +8,8 @@ import { BusyIndicator } from "./busy-indicator";
 const busy = (...items: { id: string; label: string; done: number; total: number | null }[]) => act(() => emit("busy", { items }));
 
 describe("busy indicator", () => {
+  afterEach(() => vi.useRealTimers());
+
   test("shows nothing while idle", () => {
     renderPage(<BusyIndicator />);
     expect(screen.queryByTestId("busy-indicator")).toBeNull();
@@ -53,16 +56,35 @@ describe("busy indicator", () => {
   });
 
   test("a read still pending after a moment is shown, labelled from its query, and goes when it answers", async () => {
+    // Fake clock: the delay is stepped past explicitly, so a slow runner cannot change what the test sees.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"], shouldAdvanceTime: false });
     let answer = () => {};
     mockApi({ "GET /distributed/runs": () => new Promise((resolve) => { answer = () => resolve({ body: [] }); }) });
     const { client } = renderPage(<BusyIndicator />);
     void client.fetchQuery({ queryKey: ["distributed", "runs"], queryFn: () => fetch("/distributed/runs").then((r) => r.json()) });
+    await act(() => vi.advanceTimersByTimeAsync(SLOW_MS - 1));
     expect(screen.queryByTestId("busy-indicator")).toBeNull();  // not yet: fast reads never flash the bar
-    expect(await screen.findByRole("progressbar", { name: "Loading runs" }, { timeout: 5_000 })).toBeInTheDocument(); // shown after SLOW_MS: room for a loaded CI runner
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(screen.getByRole("progressbar", { name: "Loading runs" })).toBeInTheDocument();
     expect(screen.getByTestId("busy-indeterminate")).toBeInTheDocument();
     answer();
-    await waitFor(() => expect(screen.queryByTestId("busy-indicator")).toBeNull());
-  }, 15_000);  // longer than the 5 s search above, so a slow runner fails on what it found, not on the test's own clock
+    // The answer crosses the mocked fetch (real microtasks and macrotasks) before the query settles: step the fake clock until it has, then past the fade.
+    for (let step = 0; step < 50 && client.isFetching(); step++) await act(() => vi.advanceTimersByTimeAsync(10));
+    expect(client.isFetching()).toBe(0);
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(screen.queryByTestId("busy-indicator")).toBeNull();
+  });
+
+  test("a read is shown when its timer fires a millisecond before the clock has moved the full delay", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"], shouldAdvanceTime: false });
+    mockApi({ "GET /distributed/runs": () => new Promise(() => {}) });
+    const { client } = renderPage(<BusyIndicator />);
+    void client.fetchQuery({ queryKey: ["distributed", "runs"], queryFn: () => fetch("/distributed/runs").then((r) => r.json()) });
+    const start = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(start + SLOW_MS - 1);  // the clock is a millisecond behind when the timer fires
+    await act(() => vi.advanceTimersByTimeAsync(SLOW_MS));
+    expect(screen.getByRole("progressbar", { name: "Loading runs" })).toBeInTheDocument();
+  });
 
   test("a read that answers at once never shows", async () => {
     mockApi({ "GET /distributed/runs": { body: [] } });
