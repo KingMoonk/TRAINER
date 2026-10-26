@@ -53,6 +53,13 @@ def until_stopped(job, context, emit, stop, pause):
     (Path(context.root) / "stopped").write_text("yes")
 
 
+def ignores_stop(job, context, emit, stop, pause):
+    """Stuck outside the training loop (reading a dataset, a CUDA call): never looks at stop."""
+    emit({"type": "metric", "step": 1, "total": 10 ** 6})
+    (Path(context.root) / "stuck").write_text(str(os.getpid()))
+    time.sleep(120)
+
+
 def dies(job, context, emit, stop, pause):
     emit({"type": "metric", "step": 1, "total": 2})
     os._exit(7)
@@ -196,6 +203,44 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(wait(lambda: job.status == "stopped"))
         self.assertEqual((self.root / "stopped").read_text(), "yes")  # the handler saw the stop and returned: no kill
         self.assertEqual(job.error, "")
+
+    def start_and_remove(self, handler, grace, kind="quicktest"):
+        runner = Runner(self.root / "data" / "queue.json", {kind: handler}, tick=.05)
+        runner.set_plan(ANY)
+        runner.kill_grace = grace
+        self.addCleanup(runner.shutdown)
+        job = runner.enqueue(Job(kind, "t"))
+        runner.start()
+        self.assertTrue(wait(lambda: runner.handles and runner.progress.get("step")))
+        return runner, job, next(iter(runner.handles))
+
+    def test_stop_now_ends_a_worker_that_ignores_the_stop(self):
+        runner, job, handle = self.start_and_remove(ignores_stop, grace=.5)
+        self.assertTrue(wait(lambda: (self.root / "stuck").exists()))
+        began = time.monotonic()
+        runner.remove(job.id)
+        self.assertTrue(wait(lambda: job.status == "stopped", 30))
+        self.assertLess(time.monotonic() - began, 30)
+        self.assertEqual(job.error, "")  # a deliberate kill is not a crash
+        self.assertTrue(handle.done.is_set())
+        self.assertIsNotNone(handle.proc.poll())  # no process left behind
+
+    def test_stop_now_does_not_end_a_worker_that_stops_in_time(self):
+        runner, job, handle = self.start_and_remove(until_stopped, grace=30)
+        runner.remove(job.id)
+        self.assertTrue(wait(lambda: job.status == "stopped"))
+        self.assertFalse(handle._killed)
+        self.assertEqual((self.root / "stopped").read_text(), "yes")
+
+    def test_only_stop_now_ends_the_process(self):
+        runner, job, handle = self.start_and_remove(ignores_stop, grace=.2)
+        self.assertTrue(wait(lambda: (self.root / "stuck").exists()))
+        runner.stop_after_cooldown()  # graceful: a worker that ignores it is left alone
+        time.sleep(1.5)
+        self.assertIsNone(handle.proc.poll())
+        self.assertIsNone(runner._kill_at)
+        handle.kill()  # (cleanup of the stuck process)
+        self.assertTrue(wait(lambda: job.status != "running"))
 
     def test_the_worker_has_one_core_fewer_than_the_computer(self):
         job, _, _ = self.run_job(threads_seen)
