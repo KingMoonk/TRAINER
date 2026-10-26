@@ -1,6 +1,7 @@
 """Job handlers: (job, context, emit, stop, pause), run in a worker process (studio_worker). The context is a
 studio_worker.JobContext: root, run_dir, examples(params) and post_rows(kind). Anything else a job needs from the app, such as
 which checkpoint a round starts from, prepare() puts in job.params before the worker starts."""
+import errno
 import json
 import shutil
 import tempfile
@@ -184,6 +185,9 @@ def _plateau_end(job, out, watcher, record):
     return record
 
 
+DISK_ERRORS = (errno.ENOSPC, errno.EIO, errno.EDQUOT)  # a resume that fails like this fails the job; it is no refusal
+
+
 def _resume(job, cfg, out, init, options, context=None):
     """Continue from `params["resume"]`, a full checkpoint (`last.npz`: weights, optimizer, sampler and RNG) this node wrote, on the data
     it was written with (the `dataset.jsonl` beside it, so a changed dataset cannot refuse it) and for the `resume_steps` its attempt
@@ -223,6 +227,9 @@ def _resume(job, cfg, out, init, options, context=None):
             steps = int(job.params.get("resume_steps") or cfg["steps"])
         return studio_model.train(dict(cfg, steps=steps), examples, out, resume=path, rebase=rebase, **{**options, "emit": relay})
     except (OSError, ValueError, KeyError) as exc:
+        stopper = options.get("stop")
+        if isinstance(exc, InterruptedError) or (stopper is not None and stopper.is_set()) or getattr(exc, "errno", None) in DISK_ERRORS:
+            raise  # a Stop or a full or failing disk is not an incompatible checkpoint: never train fresh from it
         if started or (init is None and not job.params.get("resume_local")):  # (a local restart can always start fresh instead)
             raise
         if asked:

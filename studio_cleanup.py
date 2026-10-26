@@ -91,6 +91,64 @@ JOB_PATHS = ("output_dir", "resume", "init_from", "previous_best")  # folders a 
 UNFINISHED = 3600  # seconds: a half-written snapshot older than this is a crashed write
 
 
+TEMPORARY_FILES = ("corpus-*.spool", "*.part", "last.tmp", "best.tmp")  # what a run folder holds only while a worker is writing it
+LIVE_COPY = re.compile(r"^v(?P<number>\d+)-")  # data/live_checkpoints/v<number>-<mtime>.npz (studio_ia.services._live_snapshot)
+
+
+def sweep_temporaries(folder):
+    """Delete the spools and scratch files a hard kill left in a run `folder` (`TEMPORARY_FILES`; files only). Returns how many."""
+    removed = 0
+    for pattern in TEMPORARY_FILES:
+        for path in Path(folder).glob(pattern) if Path(folder).is_dir() else []:
+            if path.is_file():
+                try:
+                    path.unlink()
+                    removed += 1
+                except OSError:
+                    pass  # still open somewhere: the next sweep gets it
+    return removed
+
+
+def _busy(root, jobs):
+    """Run folders a running job writes right now: nothing in them is an orphan."""
+    root, folders = Path(root), set()
+    for job in jobs:
+        if job["status"] != "running":
+            continue
+        folders.update((root / "runs" / f"queue_{job['id']}", root / "runs" / f"compare_{job['id']}"))
+        if job["params"].get("output_dir"):
+            path = Path(job["params"]["output_dir"])
+            folders.add(path if path.is_absolute() else root / path)
+    return {folder.resolve() for folder in folders}
+
+
+def _orphans(root, jobs, now):
+    """[(path, name, why)] of temporaries nothing is writing: scratch in run folders no job is running in, shard scratch, and copies
+    of a training version's checkpoint for versions that are not training. Only what has stood still for UNFINISHED seconds."""
+    root, cutoff, busy, out = Path(root), now - UNFINISHED, _busy(root, jobs), []
+    runs = root / "runs"
+    for folder in sorted(runs.iterdir()) if runs.is_dir() else []:
+        if not folder.is_dir() or folder.name == snapshots.FOLDER or folder.resolve() in busy:
+            continue
+        for pattern in TEMPORARY_FILES:
+            out.extend((path, f"{folder.name}/{path.name}", "A run's scratch file left by a crash or a kill")
+                       for path in sorted(folder.glob(pattern)) if path.is_file())
+    shards = root / "data" / "shards"
+    taken = []
+    for path in sorted(shards.rglob("*.part")) if shards.is_dir() else []:
+        if not any(parent in taken for parent in path.parents):  # a .part folder goes whole
+            taken.append(path)
+            out.append((path, path.name, "Token cache scratch from a build that never finished"))
+    live = root / "data" / "live_checkpoints"
+    store = VersionStore(root)
+    training = {v.get("number") for v in store.versions() if v.get("status") == "training"} if store.path.exists() else set()
+    for path in sorted(live.iterdir()) if live.is_dir() else []:
+        found = LIVE_COPY.match(path.name)
+        if path.is_file() and (path.suffix == ".tmp" or found and int(found["number"]) not in training):
+            out.append((path, path.name, "A copy of a checkpoint no training run is writing"))
+    return [(path, name, why) for path, name, why in out if _newest(path) < cutoff]
+
+
 def _protected(root, jobs):
     """Names of the folders in runs/ nothing may be offered from: where a job that has not finished writes or continues from
     (the checkpoint a waiting job will resume is in an interrupted attempt's folder), and every run and best checkpoint a version
@@ -127,8 +185,9 @@ def _row(root, path, kind, name, belongs_to):
             "bytes": freed, "shared": sum(f.stat().st_size for f in _files(path)) - freed}
 
 
-def leftovers(root, jobs):
+def leftovers(root, jobs, now=None):
     """What can be removed without losing a result, as [{id, kind, name, belongs_to, bytes, shared}], largest first:
+    "temporary" a spool, scratch file or checkpoint copy a crash or kill left (older than UNFINISHED, none in a running job's folder);
     "interrupted" the folders of attempts the app moved aside when it restarted a job (queue_<id>-before-restart[-n]); "failed"
     the folder of a job that failed; "snapshot" a dataset snapshot no run folder links to any more. `bytes` is what removing it
     frees, `shared` what it holds that other runs still link to. `jobs` are {id, label, status, params} (the queue's); a running
@@ -151,6 +210,8 @@ def leftovers(root, jobs):
     for path in store.glob(".tmp-*") if store.is_dir() else []:
         if path.stat().st_mtime < cutoff:
             out.append(_row(root, path, "snapshot", "Unfinished write", "A dataset snapshot that was never completed"))
+    for path, name, why in _orphans(root, jobs, now if now is not None else time.time()):
+        out.append(_row(root, path, "temporary", name, why))
     return sorted(out, key=lambda row: -row["bytes"])
 
 

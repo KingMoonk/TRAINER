@@ -26,7 +26,7 @@ class FreeSpace(BaseModel):
 
 class Leftover(BaseModel):
     id: str = Field(description="what to send back to remove it; a path under the workspace")
-    kind: Literal["interrupted", "failed", "snapshot"]
+    kind: Literal["interrupted", "failed", "snapshot", "temporary"]
     name: str
     belongs_to: str = Field(description="the job it came from, or why nothing needs it")
     bytes: int = Field(description="what removing it frees")
