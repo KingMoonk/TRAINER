@@ -5622,7 +5622,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "interrupted" | "failed" | "snapshot";
+            kind: "interrupted" | "failed" | "snapshot" | "temporary";
             /** Name */
             name: string;
             /**

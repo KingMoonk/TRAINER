@@ -131,6 +131,28 @@ class DeadRunRecord(unittest.TestCase):
             self.assertFalse(reconcile_run(folder))
 
 
+class ReapSweepsTemporaries(unittest.TestCase):
+    def test_reap_deletes_spools_and_part_files_of_runs_that_are_not_running_and_leaves_a_running_job_alone(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            root = Path(directory)
+            runner = Runner(root / "data" / "queue.json", {}, tick=.05)
+            self.addCleanup(runner.shutdown)
+            idle, busy, elsewhere = root / "runs" / "queue_a", root / "runs" / "queue_b", root / "out"
+            for folder in (idle, busy, elsewhere):
+                folder.mkdir(parents=True)
+                (folder / "corpus-x.spool").write_bytes(b"rows")
+                (folder / "tokens.part").write_bytes(b"half")
+                (folder / "last.npz").write_bytes(b"keep")
+            runner.jobs = [Job("quicktest", "idle", id="a", status="stopped", params={"output_dir": str(idle)}),
+                           Job("quicktest", "waiting", id="c", params={"output_dir": str(elsewhere)})]
+            runner.running = Job("quicktest", "busy", id="b", status="running", params={"output_dir": str(busy)})
+            runner.jobs.append(runner.running)
+            runner._reap()
+            for folder in (idle, elsewhere):
+                self.assertEqual(sorted(p.name for p in folder.iterdir()), ["last.npz"])
+            self.assertEqual(sorted(p.name for p in busy.iterdir()), ["corpus-x.spool", "last.npz", "tokens.part"])
+
+
 class ReapGrace(unittest.TestCase):
     def test_a_worker_that_leaves_by_itself_is_not_killed(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:

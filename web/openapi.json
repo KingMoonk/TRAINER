@@ -4365,7 +4365,8 @@
             "enum": [
               "interrupted",
               "failed",
-              "snapshot"
+              "snapshot",
+              "temporary"
             ],
             "title": "Kind",
             "type": "string"
