@@ -105,7 +105,7 @@ class RecommendedCollection(unittest.TestCase):
         self.assertEqual(self.svc.collection_ids("text"), ["fineweb_edu_00", "fineweb_edu_01", "fineweb_edu_02", "fineweb_edu_03", "cosmopedia_khan", "cosmopedia_v2"])
         self.assertEqual(self.svc.collection_ids("problems"), [])
         self.assertNotIn("winogrande_check", self.svc.collection_ids("problems"))
-        self.assertEqual(set(self.svc.collection_ids("conversations")), {"mmlu_auxiliary", "gsm8k", "smol_smoltalk", "toolace"})
+        self.assertEqual(set(self.svc.collection_ids("conversations")), {"mmlu_auxiliary", "gsm8k", "smol_smoltalk", "everyday_conversations", "smoltalk_systemchats", "toolace"})
         self.assertTrue(all(stage[catalog_id] != "language" for catalog_id in self.svc.collection_ids("conversations")))
 
         def fetch(url, path, stop=None, emit=None, maximum=None, range_bytes=None):
@@ -410,6 +410,18 @@ class WorkspaceRows(unittest.TestCase):
         self.assertTrue(all(p["rule"] and p["prompt"] for p in train + held))
         convs = self.svc.post_rows("conversations")
         self.assertTrue(0 < len(convs) <= 30)
+
+    def test_post_rows_leave_out_drafts_and_have_held_back_conversations(self):
+        drafts = self.ws.create_dataset("drafts")
+        self.ws.add(drafts, [{"user": f"draft q{i}", "assistant": f"draft a{i}", "synthetic": True, "quality": "Review"} for i in range(60)])
+        self.ws.add(drafts, [{"user": f"good q{i}", "assistant": f"good a{i}", "synthetic": True, "quality": "Good"} for i in range(60)])
+        everything = self.svc.post_rows("conversations") + self.svc.post_rows("heldout_conversations")
+        self.assertFalse([e for e in everything if e["user"].startswith("draft")])
+        self.assertTrue([e for e in everything if e["user"].startswith("good")])
+        held = self.svc.post_rows("heldout_conversations")
+        self.assertTrue(held)
+        self.assertTrue(all(e["holdout"] for e in held))
+        self.assertFalse(any(e["holdout"] for e in self.svc.post_rows("conversations")))
 
     def test_corrections_and_pairs_are_saved_for_rounds_3_and_4(self):
         messages = [{"role": "user", "content": "Largest planet?"}]

@@ -1,11 +1,13 @@
 """studio_api.routers.post_training over FakeServices: every route answers and the events its methods emit reach /events."""
 import hashlib
+import json
 import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
 from unittest import mock
 
+import numpy as np
 from fastapi.testclient import TestClient
 
 import studio_import
@@ -67,7 +69,7 @@ class PostTrainingApiTest(unittest.TestCase):
         self.assertEqual(self.client.post("/post-training/status", json={"version": 9}).status_code, 404)
 
     def test_rows_are_a_job_and_nan_becomes_null(self):
-        for kind in ("conversations", "problems", "pairs", "corrections", "heldout_docs", "heldout_problems"):
+        for kind in ("conversations", "problems", "pairs", "corrections", "heldout_docs", "heldout_conversations", "heldout_problems"):
             job, _ = finished(self.tap, self.client.post("/post-training/rows", json={"kind": kind}))
             self.assertEqual(job["status"], "done", job)
             self.assertEqual(job["result"], [{"kind": kind, "bpc": None}])
@@ -88,6 +90,23 @@ class PostTrainingApiTest(unittest.TestCase):
         self.assertEqual([t["number"] for t in options["teachers"]], [first.number])
         self.assertEqual(options["default_teacher"], first.number)
         self.assertEqual(self.client.get("/post-training/options", params={"version": 99}).status_code, 404)
+
+    def test_teachers_are_filtered_by_the_serialized_tokenizer_the_job_will_compare(self):
+        from studio_api.routers.post_training import teacher_options
+        student, same, other, unreadable = (trained(self.services) for _ in range(4))
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+
+        def write(version, tokenizer):
+            path = Path(tmp.name) / f"v{version.number}.npz"
+            np.savez(path, metadata=np.array(json.dumps({"tokenizer": tokenizer})))
+            version.best_checkpoint = str(path)
+        write(student, {"id": "bytes", "merges": [[1, 2]]})
+        write(same, {"id": "bytes", "merges": [[1, 2]]})
+        write(other, {"id": "bytes", "merges": [[3, 4]]})   # the same spec entry, a different serialized tokenizer
+        unreadable.best_checkpoint = str(Path(tmp.name) / "missing.npz")
+        listed =[v.number for v in teacher_options(self.services.versions(), student)]
+        self.assertEqual(listed, [same.number, unreadable.number])   # the unreadable one falls back to the spec entry, equal here
 
     def test_a_round_is_queued_with_the_pages_parameters(self):
         version = trained(self.services)
