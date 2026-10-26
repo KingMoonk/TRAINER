@@ -589,6 +589,17 @@ def _check_coordinator(address, chosen, peers, own):
         raise HTTPException(409, f"{name} cannot coordinate the run: it runs app version {peer.version}; this computer runs {own.version}.")
 
 
+def _check_coordinator_kept(address, peers, left_out):
+    """After machines are left out (not answering, or unfit with `leave_out_unfit`), the coordinator must still be among the peers the run
+    invites: a left-out machine gets no member invite, so members pointing at it would never find their coordinator. 409 naming it and why."""
+    if not address or any(peer.address == address for peer in peers):
+        return
+    row = next((r for r in left_out if r.get("address") == address), None)
+    name = row["node"] if row is not None else address
+    reason = row["reason"] if row is not None else f"{name} is not among the machines that join."
+    raise HTTPException(409, f"{name} cannot coordinate the run: it would be left out. {reason} Choose another coordinator or leave the coordinator as this computer.")
+
+
 def _chosen_peers(body, services, own):
     """(chosen addresses, the peers surveyed) for the machines a start names; 400 for one that is not on the Machines tab."""
     listed = studio_cluster.configured_nodes({"studioConfig": {"nodes": services.setting("nodes", [])}})
@@ -708,6 +719,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     left_out = []
     if body.all_machines:
         peers, left_out = _answering(peers, own)
+        _check_coordinator_kept(body.coordinator, peers, left_out)
     if body.receiver_grants:
         mismatched = next((peer for peer in peers if peer.version and own.version and peer.version != own.version), None)
         if mismatched is not None:
@@ -725,6 +737,7 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
         left_out = [*left_out, *({"node": peer.hostname or peer.address, "address": peer.address, "reason": out[peer.address]}
                                  for peer in peers if peer.address in out)]
         peers = [peer for peer in peers if peer.address not in out]
+        _check_coordinator_kept(body.coordinator, peers, left_out)
     rounds = sizing.rounds if sizing is not None else body.rounds
     if rounds != body.rounds:
         settings = replace(settings, rounds=rounds)
