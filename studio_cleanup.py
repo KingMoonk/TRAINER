@@ -62,6 +62,8 @@ def clean(workspace, days=None, data=False, now=None):
     freed = size(paths)
     for p in paths:
         shutil.rmtree(p) if p.is_dir() else p.unlink()
+        if p.suffix == snapshots.SUFFIX:
+            snapshots.forget(p)
     store = VersionStore(root)
     if store.path.exists():  # versions survive an age-based clean; they forget runs and checkpoints that are gone
         def there(p):
@@ -93,7 +95,7 @@ JOB_PATHS = ("output_dir", "resume", "init_from", "previous_best")  # folders a 
 UNFINISHED = 3600  # seconds: a half-written snapshot older than this is a crashed write
 
 
-TEMPORARY_FILES = ("corpus-*.spool", "*.part", "last.tmp", "best.tmp")  # what a run folder holds only while a worker is writing it
+TEMPORARY_FILES = ("corpus-*.spool", "*.part", "last.tmp", "best.tmp", "dataset.jsonl.tmp-*")  # what a run folder holds only while a worker is writing it
 LIVE_COPY = re.compile(r"^v(?P<number>\d+)-")  # data/live_checkpoints/v<number>-<mtime>.npz (studio_ia.services._live_snapshot)
 
 
@@ -256,4 +258,6 @@ def remove_leftovers(root, ids, jobs):
     for row in chosen:
         path = root / row["id"]
         shutil.rmtree(path) if path.is_dir() else path.unlink(missing_ok=True)
+        if row["kind"] == "snapshot" and path.suffix == snapshots.SUFFIX:
+            snapshots.forget(path)
     return len(chosen), sum(row["bytes"] for row in chosen)
