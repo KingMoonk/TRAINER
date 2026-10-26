@@ -97,6 +97,11 @@ describe("preparing the text", () => {
     expect(progressLine(state)).toBe("Preparing text: 42%");
     expect(jobFraction(state)).toBe(0.42);
   });
+  it("names what the preparation is doing when the worker says", () => {
+    expect(progressLine(queue({ phase: "preparing", prepare: 12, prepare_phase: "reading" }))).toBe("Preparing text, reading and fingerprinting the rows: 12%");
+    expect(progressLine(queue({ phase: "preparing", prepare: 40, prepare_phase: "tokenizer" }))).toBe("Preparing text, fitting the tokenizer: 40%");
+    expect(progressLine(queue({ phase: "preparing", prepare: 70, prepare_phase: "tokenizing" }))).toBe("Preparing text, tokenizing: 70%");
+  });
   it("goes back to the steps once the phase moves on", () => {
     const state = queue({ step: 5, total: 10, phase: "steady", prepare: null });
     expect(progressLine(state)).toContain("step 5 of 10");

@@ -7005,6 +7005,8 @@ export interface components {
             plan: components["schemas"]["PlanModel"];
             /** Prepare */
             prepare?: number | null;
+            /** Prepare Phase */
+            prepare_phase?: ("reading" | "tokenizer" | "tokenizing") | null;
             /**
              * Step
              * @default 0

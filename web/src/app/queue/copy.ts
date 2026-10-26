@@ -15,6 +15,12 @@ export const T = {
   trainingLink: "Train on several machines at once",
   trainingTip: "A run that spreads over machines is started and watched on the Cluster page.",
   preparingText: "Preparing text: {percent}%",
+  preparingPhaseText: "Preparing text, {phase}: {percent}%",
+  preparingPhases: {
+    reading: "reading and fingerprinting the rows",
+    tokenizer: "fitting the tokenizer",
+    tokenizing: "tokenizing",
+  } as Record<string, string>,
   sizingBar: "Size check progress",
   sizingText: "Working out the size of the text: {percent}%",
   stopAfterCooldown: "Stop after a short cool-down",

@@ -37,6 +37,7 @@ for _variable in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "OMP_NUM_THREADS"):
 import numpy as np
 import torch
 
+import studio_corpus
 import studio_shards
 import studio_dataset_snapshot
 from studio_arch import parameter_breakdown, validate_spec
@@ -408,6 +409,24 @@ def shard_key(tokenizer, cfg, split_hash):
 ENCODE_WEIGHT = 20  # progress counts an encoded character this many times a character cut from the cache: a slow tokenizer takes about 20x as long to encode as the cut takes (estimate)
 
 
+class _ListRows:
+    """A list of examples seen as shard_windows reads rows: meta() gives each row's (fingerprint, characters), rows[i] the example."""
+
+    def __init__(self, examples, fingerprint_of):
+        self.examples = examples if isinstance(examples, (list, tuple)) else list(examples)  # (a caller may count the rows as they are read)
+        self.keys = [fingerprint_of(e) for e in self.examples]
+        self.weights = [characters_in([e]) for e in self.examples]
+
+    def __len__(self):
+        return len(self.examples)
+
+    def __getitem__(self, position):
+        return self.examples[position]
+
+    def meta(self):
+        return zip(self.keys, self.weights)
+
+
 def shard_windows(training, validation, tokenizer, cfg, split_hash, root, progress=None, fingerprint_of=None):
     """(train windows, validation windows, reused) read from token shards under root, tokenizing into them first when this data,
     tokenizer and windowing have none yet. The key is the data split (split_hash) with the tokenizer and the cut.
@@ -415,7 +434,10 @@ def shard_windows(training, validation, tokenizer, cfg, split_hash, root, progre
     The shards of a split nobody has seen are cut from the TokenCache beside them (tokens-<key> under root): examples are cached
     by fingerprint under the tokenizer, so only the examples no earlier run encoded are tokenized, however the split or the data
     around them changed. The windows are the ones samples_from() cuts. progress(done, total) is told as the work goes (it is
-    weighted by characters, encoding counting ENCODE_WEIGHT times); fingerprint_of(example) is the caller's fingerprint when it has one."""
+    weighted by characters, encoding counting ENCODE_WEIGHT times); fingerprint_of(example) is the caller's fingerprint when it has one.
+
+    training and validation are lists of examples, or rows of a corpus on disk (studio_corpus.Rows: meta() and indexing, no list):
+    then no example is held beyond the one being encoded."""
     say = progress or (lambda done, total: None)
     key = shard_key(tokenizer, cfg, split_hash)
     found = studio_shards.load(root, key, tokenizer.vocab_size)
@@ -428,31 +450,41 @@ def shard_windows(training, validation, tokenizer, cfg, split_hash, root, progre
             assistant_only = cfg["objective"] == "assistant"
             cache = studio_shards.TokenCache(root, _tokenizer_hash(tokenizer), tokenizer.vocab_size, assistant_only)
             try:
-                items = {name: [(fp(e), e, characters_in([e])) for e in examples] for name, examples in (("train", training), ("val", validation))}
-                missing = {}
-                for name in items:
-                    for fingerprint_, example, weight in items[name]:
-                        if fingerprint_ not in cache:
-                            missing.setdefault(fingerprint_, (fingerprint_, example, weight * ENCODE_WEIGHT))
-                total = sum(w for _, _, w in missing.values()) + sum(w for rows in items.values() for _, _, w in rows)
+                views = {name: rows if hasattr(rows, "meta") else _ListRows(rows, fp) for name, rows in (("train", training), ("val", validation))}
+                total, counted = 0, set()
+                for view in views.values():
+                    for fingerprint_, weight in view.meta():
+                        total += weight
+                        if fingerprint_ not in cache and fingerprint_ not in counted:
+                            counted.add(fingerprint_)
+                            total += weight * ENCODE_WEIGHT
+                counted.clear()
                 done = [0]
 
                 def advance(weight):
                     done[0] += weight
                     say(done[0], total)
                 say(0, total)
-                cache.add(missing.values(), lambda e: _encode_arrays(e, tokenizer, assistant_only), advance)
-                missing.clear()
-                cache.touch()
-                info = {id(e): (f, w) for rows in items.values() for f, e, w in rows}  # an example's fingerprint and characters
 
-                def cached(example):
-                    f, w = info[id(example)]
-                    arrays = cache.get(f)
-                    advance(w)
-                    return arrays
-                for name in items:
-                    cut_windows([e for _, e, _ in items[name]], tokenizer, cfg, writers[name], cached)
+                def missing(view):  # the rows no earlier run encoded, read one at a time
+                    for position, (fingerprint_, weight) in enumerate(view.meta()):
+                        if fingerprint_ not in cache:
+                            yield fingerprint_, view[position], weight * ENCODE_WEIGHT
+                cache.add((item for view in views.values() for item in missing(view)), lambda e: _encode_arrays(e, tokenizer, assistant_only), advance)
+                cache.touch()
+                for name, view in views.items():
+                    current = [0]
+
+                    def fingerprints_of(view=view, current=current):  # cut_windows is handed each row's fingerprint, and cached() its encoding
+                        for fingerprint_, weight in view.meta():
+                            current[0] = weight
+                            yield fingerprint_
+
+                    def cached(fingerprint_, current=current):
+                        arrays = cache.get(fingerprint_)
+                        advance(current[0])
+                        return arrays
+                    cut_windows(fingerprints_of(), tokenizer, cfg, writers[name], cached)
             finally:
                 cache.close()
         found = studio_shards.build(root, key, tokenizer.vocab_size, fill)
@@ -584,17 +616,27 @@ def _tuples(value):
     return tuple(_tuples(item) for item in value) if isinstance(value, list) else value
 
 
-def partition_examples(examples, fraction, sampler, grouped=True):
-    """Keep source conversations, documents, and their synthetic descendants together.
+def row_identities(example):
+    """The (kind, id) pairs that tie a row to its source row, group and the rows it was made from (what partition_examples keeps together)."""
+    provenance = example.get("provenance")
+    provenance = provenance if isinstance(provenance, dict) else {}
+    identities = [("row", str(example["id"]))] if example.get("id") else []
+    if example.get("groupId"):
+        identities.append(("group", str(example["groupId"])))
+    for key, kind in (("source_ids", "row"), ("group_ids", "group")):
+        values = provenance.get(key, [])
+        if isinstance(values, (list, tuple)):
+            identities.extend((kind, str(value)) for value in values if isinstance(value, (str, int)) and value)
+    return identities
 
-    A union-find index is linear in rows plus lineage references; it never builds
-    pairwise similarity graphs. Ordinary examples retain the original seeded
-    row split. Grouped splits approximate the desired fraction with whole groups.
-    """
-    indices = list(range(len(examples)))
+
+def partition_indices(count, identities_of, fraction, sampler, grouped=True):
+    """(training indices, validation indices, report) for `count` rows; identities_of(index) is that row's row_identities().
+    partition_examples is this over a list; a corpus on disk (studio_corpus) calls it with only the identities in memory."""
+    indices = list(range(count))
     sampler.shuffle(indices)
-    target = min(len(examples) - 1, max(1, round(len(examples) * fraction))) if fraction and len(examples) > 1 else 0
-    parents = list(range(len(examples)))
+    target = min(count - 1, max(1, round(count * fraction))) if fraction and count > 1 else 0
+    parents = list(range(count))
 
     def root(index):
         while parents[index] != index:
@@ -604,17 +646,8 @@ def partition_examples(examples, fraction, sampler, grouped=True):
 
     if grouped:
         anchors = {}
-        for index, example in enumerate(examples):
-            provenance = example.get("provenance")
-            provenance = provenance if isinstance(provenance, dict) else {}
-            identities = [("row", str(example["id"]))] if example.get("id") else []
-            if example.get("groupId"):
-                identities.append(("group", str(example["groupId"])))
-            for key, kind in (("source_ids", "row"), ("group_ids", "group")):
-                values = provenance.get(key, [])
-                if isinstance(values, (list, tuple)):
-                    identities.extend((kind, str(value)) for value in values if isinstance(value, (str, int)) and value)
-            for identity in identities:
+        for index in range(count):
+            for identity in identities_of(index):
                 if identity in anchors:
                     left, right = root(index), root(anchors[identity])
                     parents[max(left, right)] = min(left, right)
@@ -624,33 +657,44 @@ def partition_examples(examples, fraction, sampler, grouped=True):
     for index in indices:
         groups.setdefault(root(index), []).append(index)
     note = ""
-    if len(groups) == len(examples):
+    if len(groups) == count:
         validation_ids = set(indices[:target])
     elif target and len(groups) > 1:
         selected_groups = []
-        count = 0
+        taken = 0
         for key, members in groups.items():
             if len(selected_groups) == len(groups) - 1:
                 break
-            if abs(target - count - len(members)) < abs(target - count):
+            if abs(target - taken - len(members)) < abs(target - taken):
                 selected_groups.append(key)
-                count += len(members)
+                taken += len(members)
         if not selected_groups:
             selected_groups = [min(groups, key=lambda key: len(groups[key]))]
         validation_ids = {index for key in selected_groups for index in groups[key]}
-        if fraction <= .5 and len(validation_ids) > len(examples) / 2:
+        if fraction <= .5 and len(validation_ids) > count / 2:
             validation_ids = set(indices) - validation_ids
         note = "Validation uses whole source groups; its size may differ from the requested fraction."
     else:
         validation_ids = set()
         if target:
             note = "Validation is disabled: all examples share one source lineage. Add independent sources for a held-out evaluation."
-    training = [examples[index] for index in indices if index not in validation_ids]
-    validation = [examples[index] for index in indices if index in validation_ids]
+    training = [index for index in indices if index not in validation_ids]
+    validation = [index for index in indices if index in validation_ids]
     report = {"strategy": "lineage-v1" if grouped else "rows-v1", "groups": len(groups),
               "training_groups": len({root(index) for index in indices if index not in validation_ids}),
               "validation_groups": len({root(index) for index in validation_ids}), "note": note}
     return training, validation, report
+
+
+def partition_examples(examples, fraction, sampler, grouped=True):
+    """Keep source conversations, documents, and their synthetic descendants together.
+
+    A union-find index is linear in rows plus lineage references; it never builds
+    pairwise similarity graphs. Ordinary examples retain the original seeded
+    row split. Grouped splits approximate the desired fraction with whole groups.
+    """
+    training, validation, report = partition_indices(len(examples), lambda index: row_identities(examples[index]), fraction, sampler, grouped)
+    return [examples[index] for index in training], [examples[index] for index in validation], report
 
 
 def _piece(tokenizer, index):
@@ -708,6 +752,22 @@ def _initialize_from(model, tokenizer, path):
     return transplant(old, model)
 
 
+def _prepare_reporter(emit, stop, phase, low, high):
+    """progress(done, total) that tells the queue a `prepare` event (the phase, and a percent of the whole preparation between low and
+    high), once for each percent, and ends the preparation when stop is set. A total of None means the size is not known (percent low)."""
+    reported = [-1]
+
+    def progress(done, total):
+        if stop.is_set():
+            raise InterruptedError("Training preparation cancelled.")
+        fraction = 0. if total is None else 1. if done >= total else done / total
+        percent = high if fraction >= 1 else int(low + (high - low) * fraction)
+        if percent != reported[0]:
+            reported[0] = percent
+            emit({"type": "prepare", "phase": phase, "percent": percent, "done": int(done), "of": int(total or 0)})
+    return progress
+
+
 def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume=None, init_from=None, telemetry_every=5,
           snapshot_every=0, snapshot_keep=20, token_budget=None, wall_seconds=None, shard_dir=None, stream_chars=STREAM_CHARS,
           schedule_window=None, offload_optimizer=False, distributed=None, rebase=False, snapshot_dir=None):
@@ -720,6 +780,10 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     rebase=True (with resume) continues a checkpoint on different data: the weights, tokenizer, optimizer state and step carry over,
     and cfg["steps"] is the number of steps to add. The dataset, split, seed, learning rate and batch size may differ from the
     checkpoint's; the sampler, the best score and its best.npz start fresh.
+
+    examples is a list, or an iterator for a big text (the worker passes one): then the rows are read one at a time into a spool on disk
+    (studio_corpus), reading stops once the unique text covers token_budget, and memory holds a few hundred bytes per row, not the text.
+    Under stream_chars characters the rows are gathered into a list and everything runs as it does for a list.
 
     The run folder keeps the deduplicated examples as dataset.jsonl, which a resume rebuilds the split from. The bytes are stored
     once under their hash in snapshot_dir (default: .snapshots in the `runs` folder holding the run; elsewhere none) and the folder holds a hard link to them,
@@ -757,34 +821,50 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         tokenizer, train_samples, val_samples, sampler, checkpoint = distributed.tokenizer, distributed.train, distributed.val, distributed.sampler, None
         examples, training, validation, digest, split_hash = [], [], [], "", ""
         split, streamed, reused = {"strategy": "federated", "note": ""}, False, False
+        corpus = None
     else:
-        unique, copied = {}, set()
-        for example in examples:
-            if stop.is_set():
-                raise InterruptedError("Training preparation cancelled.")
-            content_hash = fingerprint(example)
-            if content_hash in unique:
-                if content_hash not in copied:  # the caller's row is copied only when a duplicate's lineage is merged into it
-                    unique[content_hash] = dict(unique[content_hash])
-                    copied.add(content_hash)
-                merge_duplicate_lineage(unique[content_hash], example)
-            else:
-                unique[content_hash] = example
-        examples = list(unique.values())
-        if not examples:
-            raise ValueError("The dataset is empty.")
-        fingerprints = {id(e): h for h, e in unique.items()}  # each row is fingerprinted once, here
-        digest = hashlib.sha256("".join(unique).encode()).hexdigest()
-        del unique, copied
+        corpus = None
+        if not isinstance(examples, (list, tuple)):  # an iterator: a big text is read as a stream (studio_corpus), never held whole
+            reading = _prepare_reporter(emit, stop, "reading", 0, 40)
+            examples, corpus = studio_corpus.collect(
+                examples, directory, stream_chars, None if resume and not rebase else studio_corpus.budget_chars(token_budget), stop, reading)
+        if corpus is None:
+            unique, copied = {}, set()
+            for example in examples:
+                if stop.is_set():
+                    raise InterruptedError("Training preparation cancelled.")
+                content_hash = fingerprint(example)
+                if content_hash in unique:
+                    if content_hash not in copied:  # the caller's row is copied only when a duplicate's lineage is merged into it
+                        unique[content_hash] = dict(unique[content_hash])
+                        copied.add(content_hash)
+                    merge_duplicate_lineage(unique[content_hash], example)
+                else:
+                    unique[content_hash] = example
+            examples = list(unique.values())
+            if not examples:
+                raise ValueError("The dataset is empty.")
+            fingerprints = {id(e): h for h, e in unique.items()}  # each row is fingerprinted once, here
+            digest = hashlib.sha256("".join(unique).encode()).hexdigest()
+            del unique, copied
+        else:
+            if not len(corpus):
+                corpus.discard()
+                raise ValueError("The dataset is empty.")
+            digest, fingerprints = corpus.digest.hexdigest(), None
         sampler = random.Random(cfg["seed"])
         checkpoint = load_checkpoint(resume) if resume else None
         if checkpoint and checkpoint["config"].get("lora"):  # a LoRA run resumes from the frozen base plus its adapters, not the merged weights
             checkpoint["model"] = load_checkpoint(resume, weights_only=True, merged=False)["model"]
         # Older checkpoints must resume with their original row-based partition.
         grouped = not checkpoint or rebase or checkpoint.get("split_strategy") == "lineage-v1"
-        training, validation, split = partition_examples(examples, cfg["validation"], sampler, grouped)
-        split_hash = hashlib.sha256(("".join(fingerprints[id(e)] for e in training) + "|" +
-                                     "".join(fingerprints[id(e)] for e in validation)).encode()).hexdigest()
+        if corpus is None:
+            training, validation, split = partition_examples(examples, cfg["validation"], sampler, grouped)
+            split_hash = hashlib.sha256(("".join(fingerprints[id(e)] for e in training) + "|" +
+                                         "".join(fingerprints[id(e)] for e in validation)).encode()).hexdigest()
+        else:
+            training, validation, split, split_hash = corpus.partition(cfg["validation"], sampler, grouped)
+            examples = corpus.snapshot_rows()  # the run's dataset.jsonl is written from the spool, one row at a time
         if checkpoint:
             if not rebase and checkpoint["data_hash"] != digest:
                 raise ValueError("Resume requires the original dataset snapshot.")
@@ -814,22 +894,16 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             tokenizer = Tokenizer.restore(checkpoint["tokenizer"])
         else:
             module, module_cfg = module_of("tokenizer", effective_spec(cfg)["tokenizer"])
+            if corpus is not None:
+                _prepare_reporter(emit, stop, "tokenizer", 40, 45)(0, 1)
             tokenizer = module.fit(module_cfg, training)
         streamed = reused = False
-        if characters_in(training) + characters_in(validation) >= stream_chars:
+        if corpus is not None or characters_in(training) + characters_in(validation) >= stream_chars:
             # Big data: tokenize once into shards on disk and read windows from there, so the windows take no memory and the next run
             # on the same data and tokenizer starts at once. Under the threshold the windows are built in memory as always.
-            reported = [-1]
-
-            def preparing(done, total):  # tells the queue how far the text is along (a percent), once for each percent
-                if stop.is_set():
-                    raise InterruptedError("Training preparation cancelled.")
-                percent = 100 if done >= total else int(100 * done / total)
-                if percent != reported[0]:
-                    reported[0] = percent
-                    emit({"type": "prepare", "percent": percent, "done": int(done), "of": int(total)})
+            preparing = _prepare_reporter(emit, stop, "tokenizing", 45 if corpus is not None else 0, 100)
             train_samples, val_samples, reused = shard_windows(training, validation, tokenizer, cfg, split_hash, shard_dir or ROOT / "data" / "shards",
-                                                               preparing, lambda e: fingerprints[id(e)])
+                                                               preparing, None if corpus is not None else lambda e: fingerprints[id(e)])
             streamed = True
         else:
             train_samples, val_samples = samples_from(training, tokenizer, cfg), samples_from(validation, tokenizer, cfg)
@@ -877,7 +951,11 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     if distributed is None:
         shared = snapshot_dir if snapshot_dir is not None else studio_dataset_snapshot.folder_for(directory)
         emit({"type": "info", "text": "Saving the dataset snapshot"})
-        snapshot, created, _ = studio_dataset_snapshot.adopt(examples, shared, directory / "dataset.jsonl")
+        try:
+            snapshot, created, _ = studio_dataset_snapshot.adopt(examples, shared, directory / "dataset.jsonl")
+        finally:
+            if corpus is not None:
+                corpus.discard()
         if shared is not None:
             emit({"type": "info", "text": f"Dataset snapshot {snapshot.stem[:12]} ({snapshot.stat().st_size / 1024 ** 2:,.0f} MB): "
                                           + ("written" if created else "already stored, linked")})

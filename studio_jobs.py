@@ -101,6 +101,15 @@ def _examples(job, context):
     return p["examples"] if "examples" in p else context.examples(p)
 
 
+def _example_source(job, context):
+    """The job's text as an iterator when the context can stream it (the worker's can: a text of billions of characters is read a row at
+    a time, studio_corpus), else what _examples gives."""
+    p = job.params
+    if "examples" not in p and hasattr(context, "example_stream"):
+        return context.example_stream(p)
+    return _examples(job, context)
+
+
 def pretrain(job, context, emit, stop, pause):
     import studio_memory
     import studio_model
@@ -127,7 +136,7 @@ def pretrain(job, context, emit, stop, pause):
         resumed = _resume(job, cfg, out, init, options, context)
         if resumed is not None:
             return _plateau_end(job, out, watcher, resumed)
-    return _plateau_end(job, out, watcher, studio_model.train(_weights_only_steps(job, cfg), _examples(job, context), out, init_from=init, **options))
+    return _plateau_end(job, out, watcher, studio_model.train(_weights_only_steps(job, cfg), _example_source(job, context), out, init_from=init, **options))
 
 
 def _weights_only_steps(job, cfg):
@@ -185,6 +194,7 @@ def _resume(job, cfg, out, init, options, context=None):
     A run the person asked to continue (`params["continue_from"]`, studio_ia.continue_run) resumes the same way, but says so in plain
     info lines: the "resumed" and "resume_refused" events make the queue write "the app stopped while this ran". With `resume_rebase`
     the data is the job's own text and training rebases the checkpoint onto it, adding `cfg["steps"]` steps."""
+    import studio_dataset_snapshot
     import studio_model
     path = Path(job.params["resume"])
     emit, started = options["emit"], []
@@ -206,9 +216,9 @@ def _resume(job, cfg, out, init, options, context=None):
         emit(event)
     try:
         if rebase:
-            examples, steps = _examples(job, context), cfg["steps"]
+            examples, steps = _example_source(job, context), cfg["steps"]
         else:
-            examples = [json.loads(line) for line in (path.parent / "dataset.jsonl").read_text(encoding="utf-8").split("\n") if line.strip()]
+            examples = studio_dataset_snapshot.read(path.parent / "dataset.jsonl")  # one row at a time: a big snapshot is never held whole
             steps = int(job.params.get("resume_steps") or cfg["steps"])
         return studio_model.train(dict(cfg, steps=steps), examples, out, resume=path, rebase=rebase, **{**options, "emit": relay})
     except (OSError, ValueError, KeyError) as exc:
