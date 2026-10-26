@@ -62,7 +62,10 @@ class ResumeJob(unittest.TestCase):
             self.assertTrue(0 < step < TINY["steps"], step)
             events = []
             out = run_job(root, "second", events, resume=str(last), resume_steps=TINY["steps"], resume_base=100)
-            self.assertEqual([e for e in events if e["type"] == "resumed"], [{"type": "resumed", "base": 100, "step": step}])
+            saved = studio_model.load_checkpoint(last)
+            self.assertGreater(saved["trained_tokens"], 0)
+            self.assertEqual([e for e in events if e["type"] == "resumed"],
+                             [{"type": "resumed", "base": 100, "step": step, "earlier_tokens": saved["trained_tokens"], "earlier_seconds": saved["elapsed_seconds"]}])
             self.assertFalse([e for e in events if e["type"] == "resume_refused"])
             resumed = losses(events)
             self.assertEqual(min(resumed), step + 1)  # it goes on from the checkpoint, not from zero

@@ -25,33 +25,50 @@ CHOICE_LINE = re.compile(r"([A-J])\) (.+)")
 SCORE_DEVICE = "cpu"  # score_docs reads a checkpoint path on this device, so held-back scores do not depend on the machine that scores
 SCORE_METHOD = "stride-half-2"  # how score_docs reads a document; scores stored under another value are stale
 MIN_DOCS = 20  # fewest held-back documents paired_gain will judge on; a percentile bootstrap over fewer undercovers
+HELDOUT_MAX_DOCS = 20_000  # most documents the held-back file holds, however big the corpus
+HELDOUT_MAX_CHARS = 20_000_000  # most characters the held-back file holds
 BOOTSTRAP_ELEMENTS = 2_000_000  # most resampled indices one bootstrap pass holds
 
 
-def heldout_split(docs, fraction=.1, seed=0):
-    """(train, held_back): exact duplicates removed first, then whole documents split by a seeded shuffle."""
+def heldout_split(docs, fraction=.1, seed=0, max_docs=None, max_chars=None):
+    """(train, held_back): exact duplicates removed first, then whole documents split by a seeded shuffle. The held side stops at
+    `max_docs` documents and `max_chars` characters; a shuffled document past the cap is training text."""
+    max_docs, max_chars = max_docs or HELDOUT_MAX_DOCS, max_chars or HELDOUT_MAX_CHARS
     unique = list(dict.fromkeys(docs))
     random.Random(seed).shuffle(unique)
     held = min(len(unique) - 1, max(1, round(len(unique) * fraction))) if len(unique) > 1 else 0
+    held, characters = min(held, max_docs), 0
+    for i in range(held):
+        characters += len(unique[i])
+        if characters > max_chars:
+            held = i
+            break
     return unique[held:], unique[:held]
 
 
-def streamed_heldout_split(texts, index, fraction=.1, seed=0):
+def streamed_heldout_split(texts, index, fraction=.1, seed=0, max_docs=None, max_chars=None):
     """The held-back texts of an iterator of texts, read once and never held whole (heldout_split's streaming sibling for a big catalogue).
 
     A text is held back when a seeded hash of it falls under `fraction`, so a duplicate shares its fate and the split needs no other
     text in memory. Every other text goes straight into `index` (a studio_decontam.Index, which bounds itself). Returns the held-back
-    texts, exact duplicates removed, in reading order."""
+    texts, exact duplicates removed, in reading order. The held side stops at `max_docs` documents and `max_chars` characters (a
+    corpus far past the cap keeps its first held texts); a text that would pass the cap goes into `index` like training text."""
     import hashlib
-    held, seen = [], set()
+    max_docs, max_chars = max_docs or HELDOUT_MAX_DOCS, max_chars or HELDOUT_MAX_CHARS
+    held, seen, characters = [], set(), 0
     cutoff, salt = int(fraction * 2 ** 64), str(seed).encode()
     for text in texts:
         digest = hashlib.sha256(salt + text.encode("utf-8", "surrogatepass")).digest()
         if int.from_bytes(digest[:8], "big") >= cutoff:
             index.add(text)
-        elif digest not in seen:
+        elif digest in seen:
+            continue
+        elif len(held) >= max_docs or characters + len(text) > max_chars:
+            index.add(text)
+        else:
             seen.add(digest)
             held.append(text)
+            characters += len(text)
     return held
 
 

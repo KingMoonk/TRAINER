@@ -917,6 +917,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     trainable = attach_lora(model, cfg["lora"]) if cfg["lora"] else model  # LoRA: the base is frozen; the optimizer sees only the adapters
     optimizer, schedule = build_optimizer(trainable, offload=offload_optimizer)
     step, best, history = 0, float("inf"), []
+    earlier_tokens, earlier_seconds = 0, 0.  # what the attempts before a resume already trained and took: a budget is for the whole run
     if checkpoint:
         model.load_weights(checkpoint["model"])
         for state in optimizer.states:
@@ -933,6 +934,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         best = checkpoint["best"] if checkpoint["best"] is not None and not rebase else float("inf")
         optimizer.steps = checkpoint["optimizer_steps"]
         history = checkpoint.get("history", [])
+        if not rebase:  # (a rebase starts a round of its own on new text, with its own budget)
+            earlier_tokens, earlier_seconds = int(checkpoint.get("trained_tokens") or 0), float(checkpoint.get("elapsed_seconds") or 0.)
         if rebase:
             cfg["steps"] += step  # the steps to add, on top of the ones already taken
         else:
@@ -1002,6 +1005,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         metadata = {"architecture": "groundwork_numpy_decoder", "format_version": 1, "config": cfg,
                     "tokenizer": tokenizer.serialize(), "step": step, "best": best if math.isfinite(best) else None,
                     "optimizer_steps": optimizer.steps, "history": [], "data_hash": digest,  # history lives in metrics.jsonl
+                    "trained_tokens": trained_tokens, "elapsed_seconds": earlier_seconds + time.monotonic() - started,
                     "sampler_state": prefetcher.state(), "model_rng": model.rng.bit_generator.state,
                     "device": model.backend.device, "split_strategy": split["strategy"], "split_hash": split_hash}
         arrays = {"metadata": np.array(json.dumps(metadata))}
@@ -1043,7 +1047,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         emit({"type": "metric", **row, "total": cfg["steps"]})
 
     started = time.monotonic()
-    trained_tokens = 0
+    trained_tokens = earlier_tokens  # counts the whole run, so a token budget holds across a resume
     budget_reason = None
     detector_state = set()
     rate = cfg["learning_rate"]
@@ -1063,7 +1067,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             if token_budget is not None and trained_tokens >= token_budget:
                 budget_reason = "tokens"
                 break
-            if wall_seconds is not None and time.monotonic() - started >= wall_seconds:
+            if wall_seconds is not None and earlier_seconds + time.monotonic() - started >= wall_seconds:
                 budget_reason = "wall-clock"
                 break
             while pause.is_set() and not stop.is_set():
@@ -1077,9 +1081,9 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 # the measured pace (the run's elapsed time or tokens per step so far) so the schedule's cool-down ends exactly there.
                 left = [cfg["steps"] - step]
                 if wall_seconds is not None:
-                    left.append((wall_seconds - (tick - started)) * (step - first_step) / max(1e-9, tick - started))
+                    left.append((wall_seconds - earlier_seconds - (tick - started)) * (step - first_step) / max(1e-9, tick - started))
                 if token_budget is not None:
-                    left.append((token_budget - trained_tokens) * (step - first_step) / max(1, trained_tokens))
+                    left.append((token_budget - trained_tokens) * (step - first_step) / max(1, trained_tokens - earlier_tokens))
                 planned = step + max(1, int(min(left)))
             snapshot_due = bool(snapshot_every) and (next_step == 1 or next_step % snapshot_every == 0)
             if distributed is not None:
@@ -1136,7 +1140,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             if due:
                 last_report = time.monotonic()
                 report({"step": step, "loss": loss, "val_loss": validation_loss, "tokens_per_second": speed, "lr": rate, "grad_norm": norm,
-                        "trained_tokens": trained_tokens, "elapsed_seconds": time.monotonic() - started})
+                        "trained_tokens": trained_tokens, "elapsed_seconds": earlier_seconds + time.monotonic() - started})
             if payload:
                 emit({"type": "telemetry", "step": step, "total": cfg["steps"], "loss": loss, "lr": rate, **payload})
             if step % cfg["eval_every"] == 0 or step >= planned:
@@ -1163,9 +1167,9 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
             if final_loss is not None:
                 report({"step": step, "loss": final_loss, "val_loss": final_validation, "tokens_per_second": 0.,
                         "lr": rate if step else cfg["learning_rate"], "grad_norm": 0., "trained_tokens": trained_tokens,
-                        "elapsed_seconds": time.monotonic() - started})
+                        "elapsed_seconds": earlier_seconds + time.monotonic() - started})
         save("last.npz")
-        record.update({"status": "stopped" if stop.is_set() else "completed", "step": step, "duration_seconds": time.monotonic() - started,
+        record.update({"status": "stopped" if stop.is_set() else "completed", "step": step, "duration_seconds": earlier_seconds + time.monotonic() - started,
                        "trained_tokens": trained_tokens, "budget_reached": budget_reason, "finishedAt": now()})
         atomic_json(directory / "run.json", record)
         emit({"type": "done", "run": record, "directory": str(directory)})

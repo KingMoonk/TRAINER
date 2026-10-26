@@ -363,6 +363,31 @@ class WorkspaceRows(unittest.TestCase):
         self.assertNotIn(victim, written)
         self.assertEqual(written, held - {victim})
 
+    def test_the_held_back_side_stops_at_the_cap_however_big_the_corpus(self):
+        import json
+        import studio_eval
+        rows = [{"text": f"{n} " + "x" * 98} for n in range(2000)]  # 200 thousand characters, 5% held would be 100 documents
+        with mock.patch("studio_data_kinds.pretraining_examples", return_value=iter(rows)), mock.patch("studio_model.STREAM_CHARS", 100),                 mock.patch.object(studio_eval, "HELDOUT_MAX_DOCS", 30):
+            self.svc._fix_heldout({"datasets": [self.text], "heldout_fraction": .05})
+        written = json.loads((self.svc.root / "data" / "heldout.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(written), 30)
+        held = studio_eval.streamed_heldout_split((r["text"] for r in rows), __import__("studio_decontam").Index(), .5, max_chars=1000)
+        self.assertTrue(0 < sum(map(len, held)) <= 1000)
+        train, held = studio_eval.heldout_split([r["text"] for r in rows], .5, max_chars=1000)
+        self.assertTrue(0 < sum(map(len, held)) <= 1000)
+        self.assertEqual(len(held) + len(train), 2000)
+
+    def test_two_example_streams_read_the_held_back_file_once(self):
+        import json
+        self.svc.example_stream({"datasets": [self.text], "heldout_fraction": .2})
+        self.svc._heldout_hit = (None,)
+        loads = mock.Mock(wraps=json.loads)
+        with mock.patch("studio_ia.services.json.loads", loads):
+            first = list(self.svc.example_stream({"datasets": [self.text]}))
+            second = list(self.svc.example_stream({"datasets": [self.text]}))
+        self.assertEqual(first, second)
+        self.assertEqual(loads.call_count, 1)
+
     def test_the_first_split_of_a_big_text_holds_the_held_back_side_not_the_text(self):
         import json
         import tracemalloc
