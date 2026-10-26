@@ -1,6 +1,7 @@
 // The Run view's rules, apart from the page so a test can check them without a browser.
 import type { Series } from "@/components/series-chart";
 import type { Round, Run } from "@/app/cluster/training/logic";
+import type { Queue } from "@/app/queue/logic";
 import { T, fill } from "./copy";
 
 /** The part of GET /pretraining/jobs/{id}/curve this page reads: series of [step, value]. */
@@ -161,4 +162,10 @@ export function clock(seconds: number): string {
   const m = Math.floor(s / 60);
   const ss = String(s % 60).padStart(2, "0");
   return m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+}
+
+/** What the running job reports while it goes (halved batch, low disk or RAM, a projected overrun), newest first; none for a job that is not running. */
+export type Notice = Queue["notices"][number];
+export function soloNotices(queue: Pick<Queue, "notices">, running: boolean): Notice[] {
+  return running ? [...(queue.notices ?? [])].sort((a, b) => b.at - a.at) : [];
 }
