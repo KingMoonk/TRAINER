@@ -215,7 +215,7 @@ class Services:
         best_checkpoint."""
         return []
 
-    def score_live(self, version):
+    def score_live(self, version, stop=None):
         """Held-out bits per character of a run in progress's newest checkpoint, for the caller only (nothing is stored): {version,
         step, saved_at, bpc, documents}. NoCheckpoint while it has not saved one, ValueError without held-back text."""
         raise NoCheckpoint(version if isinstance(version, int) else None)
@@ -1304,7 +1304,7 @@ class FakeServices(Services):
     def live_checkpoints(self):
         return [dict(c) for c in self.live]
 
-    def score_live(self, version):
+    def score_live(self, version, stop=None):
         live = next((c for c in self.live_checkpoints() if c["version"] == version), None)
         if live is None:
             raise NoCheckpoint(version, f"Version {version} has no checkpoint from a run in progress to score.")
@@ -3737,6 +3737,17 @@ class WorkspaceServices(Services):
                     old.unlink()
                 except OSError:
                     pass
+        with self._chat_lock:  # the files are gone: so are the chat models loaded from them
+            self._evict_live_models(number)
+
+    def _evict_live_models(self, number, keep=None):
+        """Drop the chat models loaded from version `number`'s live snapshots, except the one at `keep` (the chat lock is held). Each
+        snapshot is keyed by its own path, so without this a new save adds a model beside the stale ones."""
+        folder = str(self.root / "data" / "live_checkpoints")
+        for ckpt in [c for c in self._models if c != keep and os.path.dirname(c) == folder and os.path.basename(c).startswith(f"v{number}-")]:
+            del self._models[ckpt]
+            self._using.pop(ckpt, None)
+            self.ledger.release(ckpt)
 
     def live_checkpoints(self):
         out = []
@@ -3755,7 +3766,8 @@ class WorkspaceServices(Services):
                         "file": source.name})
         return out
 
-    def score_live(self, version):
+    def score_live(self, version, stop=None):
+        """The base class's contract, ending early when `stop` (a threading.Event) is set: the result is then None and the job is cancelled."""
         import studio_eval
         v = self._as_version(version)
         number = v.number if v else None
@@ -3767,7 +3779,10 @@ class WorkspaceServices(Services):
             raise ValueError("No held-back text yet, so there is nothing to score the checkpoint on.")
         from studio_backend import cap_threads
         cap_threads()  # leave cores for training
-        scores = np.array(studio_eval.score_docs(str(snapshot), docs), dtype=np.float64)  # not _held_scores: nothing is kept on disk
+        try:
+            scores = np.array(studio_eval.score_docs(str(snapshot), docs, stop=stop), dtype=np.float64)  # not _held_scores: nothing is kept on disk
+        except studio_eval.Stopped:
+            return None
         return {"version": number, "step": self._live_meta(snapshot).get("step"), "saved_at": snapshot.stat().st_mtime,
                 "bpc": studio_eval.corpus_bpc(scores), "documents": len(docs)}
 
@@ -3778,6 +3793,9 @@ class WorkspaceServices(Services):
         with self._chat_lock:
             model = self._models.pop(ckpt, None)
             if model is None:
+                live = self._as_version(version)
+                if live is not None and not live.best_checkpoint:
+                    self._evict_live_models(live.number, keep=ckpt)  # a newer snapshot replaces the older one in the cache
                 device = self._chat_device()
                 with self.busy("Loading the model for chat", total=2) as task:
                     data = load_checkpoint(ckpt, weights_only=True)  # the file read, then the model built from it

@@ -1,6 +1,7 @@
 """Issue #735: chat and score the newest checkpoint of a run that is still training, through a copy, without touching the version."""
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -97,6 +98,15 @@ class LiveCheckpoint(unittest.TestCase):
         self.assertEqual(self.svc.store.get(self.number), before)  # best_checkpoint, scorecard and status unchanged
         self.assertFalse((self.svc.root / "data" / "held_back_scores").exists())
 
+    def test_a_stop_ends_score_now_early_without_a_result(self):
+        import studio_eval
+        save_checkpoint(self.run / "last.npz", 12)
+        stop = threading.Event()
+        stop.set()
+        with mock.patch.object(self.svc, "_heldout", return_value=["abc"]),                 mock.patch("studio_eval.score_docs", side_effect=studio_eval.Stopped("stopped")) as scored:
+            self.assertIsNone(self.svc.score_live(self.number, stop=stop))
+        self.assertIs(scored.call_args.kwargs["stop"], stop)
+
     def test_score_now_without_held_back_text_says_so(self):
         save_checkpoint(self.run / "last.npz", 12)
         with mock.patch.object(self.svc, "_heldout", return_value=[]), self.assertRaises(ValueError):
@@ -107,6 +117,41 @@ class LiveCheckpoint(unittest.TestCase):
         self.svc.store.set_best_checkpoint(self.number, self.run / "last.npz")
         self.assertEqual(self.svc.live_checkpoints(), [])
         self.assertEqual(self.svc._checkpoint(self.number, live=True), self.version().best_checkpoint)
+
+    def chat_once(self, loaded):
+        class Model:
+            device, model = "cpu", mock.Mock(p={})
+
+            def __init__(self, path, device, data=None):
+                loaded.append(str(path))
+
+            def generate(self, *args, **kwargs):
+                return "hi"
+        with mock.patch("studio_model.LocalModel", Model), mock.patch("studio_model.load_checkpoint", return_value={}),                 mock.patch("studio_memory.weight_bytes", return_value=1):
+            self.svc.chat(self.number, [], None, None)
+
+    def test_the_cache_keeps_one_live_model_per_version(self):
+        loaded = []
+        save_checkpoint(self.run / "last.npz", 10)
+        self.chat_once(loaded)
+        save_checkpoint(self.run / "last.npz", 20)
+        os_utime = (self.run / "last.npz").stat().st_mtime_ns + 1_000_000_000
+        import os
+        os.utime(self.run / "last.npz", ns=(os_utime, os_utime))  # a distinct mtime, so a distinct snapshot
+        self.chat_once(loaded)
+        self.assertEqual(len(loaded), 2)
+        self.assertNotEqual(loaded[0], loaded[1])
+        self.assertEqual(list(self.svc._models), [loaded[1]])  # the older snapshot's model is gone
+        self.assertEqual(list(self.svc._using), [loaded[1]])
+
+    def test_the_end_of_the_run_drops_the_cached_model_too(self):
+        loaded = []
+        save_checkpoint(self.run / "last.npz", 10)
+        self.chat_once(loaded)
+        self.assertEqual(len(self.svc._models), 1)
+        self.svc._drop_live(self.number)
+        self.assertEqual(self.svc._models, {})
+        self.assertEqual(self.svc._using, {})
 
     def test_the_end_of_the_run_drops_the_copy(self):
         save_checkpoint(self.run / "last.npz", 12)

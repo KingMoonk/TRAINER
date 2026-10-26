@@ -2,15 +2,17 @@ import json
 import math
 import random
 import tempfile
+import threading
 import unittest
 from collections import Counter
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import torch
 
 from studio_compile import CompiledModel
-from studio_eval import (LN2, MIN_DOCS, band_from_scores, bits_per_char, corpus_bpc, heldout_split, memorise_one_batch, noise_band, paired_gain,
+from studio_eval import (LN2, Stopped, MIN_DOCS, band_from_scores, bits_per_char, corpus_bpc, heldout_split, memorise_one_batch, noise_band, paired_gain,
                          run_status, sanity_checks, score_docs, score_windows, smooth, training_saved, uniform_bpc, unigram_bpc)
 from studio_model import LocalModel, Tokenizer
 from studio_registry import for_slot
@@ -190,6 +192,37 @@ class Vectorised(unittest.TestCase):
                     self.assertAlmostEqual(a, b, delta=1e-5 * max(1., abs(b)))  # float32 logits: batch shape moves the last bits
                 if tokenizer == "character":
                     self.assertIn(UNK, local.tokenizer.encode(held[4]))  # the unknown-character path ran
+
+
+class StopScoring(unittest.TestCase):
+    """Issue #755: score_docs checks its stop event between documents and batches."""
+
+    def stub(self, on_forward=None):
+        tok = Tokenizer("byte")
+        local = mock.Mock(spec=LocalModel)
+        local.tokenizer, local.config = tok, {"context": 8}
+        local.model = mock.Mock()
+        local.model.forward.side_effect = lambda x: (on_forward and on_forward(), torch.zeros(*x.shape, tok.vocab_size))[1]
+        return local
+
+    def test_a_stop_set_before_the_first_document_scores_nothing(self):
+        stop, local = threading.Event(), self.stub()
+        stop.set()
+        with self.assertRaises(Stopped):
+            score_docs(local, ["abc", "def"], stop=stop)
+        local.model.forward.assert_not_called()
+
+    def test_a_stop_set_mid_run_ends_before_the_remaining_documents(self):
+        stop = threading.Event()
+        local = self.stub(on_forward=stop.set)
+        with self.assertRaises(Stopped):
+            score_docs(local, ["a"] * 2000, stop=stop)
+        self.assertGreater(local.model.forward.call_count, 0)
+        self.assertLess(local.model.forward.call_count, 50)  # a few batches of the first pass, not all 2000 documents
+
+    def test_without_a_stop_every_document_is_scored(self):
+        rows = score_docs(self.stub(), ["a", "bc"], stop=threading.Event())
+        self.assertEqual([c for _, c in rows], [1, 2])
 
 
 class Strided(unittest.TestCase):
