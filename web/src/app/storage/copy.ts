@@ -23,10 +23,10 @@ export const STORAGE = {
 export const LEFTOVERS = {
   kicker: "LEFTOVERS",
   desc:
-    "Attempts the app moved aside when it restarted a job, runs that failed, and copies of training data no run uses. " +
+    "Attempts the app moved aside when it restarted a job, runs that failed, copies of training data no run uses, and temporary files a crash left. " +
     "A running job, the checkpoint a waiting job will continue from and every saved version are never listed.",
   none: "Nothing left over.",
-  kinds: { interrupted: "Interrupted attempt", failed: "Failed run", snapshot: "Unused training data" },
+  kinds: { interrupted: "Interrupted attempt", failed: "Failed run", snapshot: "Unused training data", temporary: "Leftover temporary file" },
   shared: "{size} is shared with other runs and stays",
   select: "Select {name}",
   remove: "Remove selected…",

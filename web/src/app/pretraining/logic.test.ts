@@ -253,16 +253,28 @@ describe("the fitted-to-this-computer card", () => {
   it("is nothing without a profile", () => expect(scalingView(plan())).toBeNull());
   it("leads with what happened and keeps the server's notes in order", () => {
     const notes = [{ kind: "batch", reason: "vram", text: "Batch 16 -> 3 x 6", advisory: false }];
-    const view = scalingView(plan({ scaling: { notes, scaled: true, can_keep_mine: false, kept_mine: false, hardware }, reason: "" }));
+    const view = scalingView(plan({ scaling: { notes, scaled: true, can_keep_mine: false, kept_mine: false, refusal: "", hardware }, reason: "" }));
     expect(view).toMatchObject({ lead: T.scalingScaled, notes, canKeep: false, refused: "" });
   });
   it("says so when the run fits, when it has only a note, and when it is refused", () => {
-    const base = { can_keep_mine: false, kept_mine: false, hardware };
+    const base = { can_keep_mine: false, kept_mine: false, refusal: "", hardware };
     expect(scalingView(plan({ scaling: { ...base, notes: [], scaled: false } }))?.lead).toBe(T.scalingFits);
     const slow = [{ kind: "slow", reason: "time", text: "slow", advisory: true }];
     expect(scalingView(plan({ scaling: { ...base, notes: slow, scaled: false, can_keep_mine: true } }))).toMatchObject({ lead: T.scalingHeadsUp, canKeep: true });
     const blocker = { resource: "vram", needed: 2, available: 1 };
-    expect(scalingView(plan({ scaling: { ...base, notes: [], scaled: false, blocker }, reason: "Not enough GPU memory" }))).toMatchObject({ lead: T.scalingRefused, refused: "Not enough GPU memory" });
+    expect(scalingView(plan({ scaling: { ...base, notes: [], scaled: false, blocker, refusal: "Not enough GPU memory" }, reason: "Not enough GPU memory" }))).toMatchObject({ lead: T.scalingRefused, refused: "Not enough GPU memory" });
+  });
+  it("shows a refusal that has no blocker and never says the run fits", () => {
+    const base = { can_keep_mine: false, kept_mine: false, hardware, notes: [], scaled: false, refusal: "This run is set to use the CUDA, but this computer has no CUDA GPU." };
+    const view = scalingView(plan({ scaling: base, reason: base.refusal }));
+    expect(view).toMatchObject({ lead: T.scalingRefused, refused: base.refusal });
+    expect(view?.lead).not.toBe(T.scalingFits);
+  });
+  it("sends the chosen hours as the window", () => {
+    const base = { version: 1, datasetIds: ["a"], mode: "from_scratch" as const, rows: "16", hold: "5%" as const, length: "Medium" as const };
+    expect(planBody(base)).toMatchObject({ hours: 4, window_hours: 4 });
+    expect(planBody({ ...base, hours: "1 h" })).toMatchObject({ hours: 1, window_hours: 1 });
+    expect(planBody({ ...base, hours: "3 days" })).toMatchObject({ hours: 72, window_hours: 72 });
   });
   it("sends the override with the plan request", () => {
     const base = { version: 1, datasetIds: ["a"], mode: "from_scratch" as const, rows: "16", hold: "5%" as const, length: "Medium" as const };

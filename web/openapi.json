@@ -4365,7 +4365,8 @@
             "enum": [
               "interrupted",
               "failed",
-              "snapshot"
+              "snapshot",
+              "temporary"
             ],
             "title": "Kind",
             "type": "string"
@@ -6084,6 +6085,36 @@
           "state"
         ],
         "title": "NotebookRow",
+        "type": "object"
+      },
+      "NoticeModel": {
+        "description": "One thing the running job reports while it goes (studio_run_watch): its batch halved after running out of memory, free disk or RAM\nbelow what it needs, or a projected end past the time window.",
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "number"
+          },
+          "kind": {
+            "enum": [
+              "oom",
+              "disk",
+              "ram",
+              "overrun"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "text",
+          "at"
+        ],
+        "title": "NoticeModel",
         "type": "object"
       },
       "Option": {
@@ -8082,6 +8113,14 @@
               }
             ],
             "title": "Lr"
+          },
+          "notices": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/NoticeModel"
+            },
+            "title": "Notices",
+            "type": "array"
           },
           "paused": {
             "default": false,
@@ -10668,6 +10707,11 @@
             "default": false,
             "title": "Offload",
             "type": "boolean"
+          },
+          "refusal": {
+            "default": "",
+            "title": "Refusal",
+            "type": "string"
           },
           "scaled": {
             "title": "Scaled",

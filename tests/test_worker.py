@@ -71,6 +71,23 @@ def ignores_stop_with_run(job, context, emit, stop, pause):
     time.sleep(120)
 
 
+def saves_slowly(job, context, emit, stop, pause):
+    """Leaves its loop on stop, says it is saving, and takes a few seconds to finish the save."""
+    emit({"type": "metric", "step": 1, "total": 10 ** 6})
+    stop.wait(60)
+    emit({"type": "saving"})
+    time.sleep(2.5)
+    (Path(context.root) / "saved").write_text("yes")
+
+
+def saves_forever(job, context, emit, stop, pause):
+    """Says it is saving and never finishes."""
+    emit({"type": "metric", "step": 1, "total": 10 ** 6})
+    stop.wait(60)
+    emit({"type": "saving"})
+    time.sleep(120)
+
+
 def dies(job, context, emit, stop, pause):
     emit({"type": "metric", "step": 1, "total": 2})
     os._exit(7)
@@ -249,14 +266,30 @@ class WorkerTests(unittest.TestCase):
     def test_a_worker_that_stops_normally_keeps_its_files(self):
         out = self.root / "out"
         out.mkdir()
-        (out / "run.json").write_text(json.dumps({"status": "training"}))
-        (out / "corpus-abc.spool").write_bytes(b"rows")
         runner, job, handle = self.start_and_remove(until_stopped, grace=30, output_dir=str(out))
+        (out / "run.json").write_text(json.dumps({"status": "training"}))  # written while it runs: the start-up sweep is over
+        (out / "corpus-abc.spool").write_bytes(b"rows")
         runner.remove(job.id)
         self.assertTrue(wait(lambda: job.status == "stopped"))
         self.assertFalse(handle._killed)
         self.assertTrue((out / "corpus-abc.spool").exists())  # the worker's own cleanup owns these, not the queue
         self.assertEqual(json.loads((out / "run.json").read_text())["status"], "training")
+
+    def test_stop_now_waits_for_a_save_that_outlasts_the_grace(self):
+        runner, job, handle = self.start_and_remove(saves_slowly, grace=.5)
+        runner.save_ceiling = 30
+        runner.remove(job.id)
+        self.assertTrue(wait(lambda: job.status == "stopped", 30))
+        self.assertFalse(handle._killed)
+        self.assertEqual((self.root / "saved").read_text(), "yes")  # the save finished: nothing ended it halfway
+
+    def test_a_save_that_hangs_is_ended_at_the_ceiling(self):
+        runner, job, handle = self.start_and_remove(saves_forever, grace=.3)
+        runner.save_ceiling = 1.5
+        runner.remove(job.id)
+        self.assertTrue(wait(lambda: job.status == "stopped", 30))
+        self.assertTrue(handle._killed)
+        self.assertIsNotNone(handle.proc.poll())
 
     def test_stop_now_does_not_end_a_worker_that_stops_in_time(self):
         runner, job, handle = self.start_and_remove(until_stopped, grace=30)
