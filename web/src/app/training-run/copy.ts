@@ -20,6 +20,7 @@ export const T = {
   lrAuto: "learning rate: auto",
   left: "left",
   coolingDown: "cooling down, then stopping",
+  saving: "Saving checkpoint",
   waiting: "waiting:",
   errorTraining: "error on training text, smoothed",
   errorHeldBack: "error on held-back text",

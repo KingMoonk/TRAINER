@@ -18,6 +18,7 @@ function server(start: { running?: boolean; reason?: string | null; supported?: 
     job: start.running === false ? null : (job("run1", "Version 3 pretraining", { status: "running", eta_s: null }) as Job | null),
     step: start.preparing == null ? 100 : 0,
     prepare: start.preparing ?? (null as number | null),
+    saving: false,
     paused: false,
     stopping: false,
     plan: { ...PLAN } as Record<string, unknown>,
@@ -30,6 +31,7 @@ function server(start: { running?: boolean; reason?: string | null; supported?: 
     job: state.job,
     step: state.step,
     prepare: state.prepare,
+    saving: state.saving,
     total: state.job && state.prepare == null ? 1000 : 0,
     phase: !state.job ? "" : state.prepare == null ? "steady" : "preparing",
     lr: state.job ? 0.0003 : null,
@@ -119,6 +121,19 @@ describe("Queue page", () => {
     emit("queue", {});
     await waitFor(() => expect(screen.getByTestId("progress-line")).toHaveTextContent("step 7 of 1,000"));
     expect(screen.getByTestId("progress-line")).not.toHaveTextContent("Preparing text");
+  });
+
+  test("says Saving checkpoint while the running job writes one", async () => {
+    const { state } = server();
+    renderPage(<QueuePage />);
+    await waitFor(() => expect(screen.getByTestId("progress-line")).toHaveTextContent("step 100 of 1,000"));
+    expect(screen.getByTestId("progress-line")).not.toHaveTextContent("Saving checkpoint");
+    state.saving = true;
+    emit("train", { type: "saving" });
+    await waitFor(() => expect(screen.getByTestId("progress-line")).toHaveTextContent("Saving checkpoint"));
+    state.saving = false;
+    emit("train", { type: "saved" });
+    await waitFor(() => expect(screen.getByTestId("progress-line")).not.toHaveTextContent("Saving checkpoint"));
   });
 
   test("shows the running job, the jobs up next in order and the plan", async () => {

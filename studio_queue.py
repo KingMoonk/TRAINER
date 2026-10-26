@@ -75,6 +75,7 @@ class QueueState:
     phase: str = ""                # warm-up | steady | cool-down, or "preparing" while the text is tokenized
     prepare: int | None = None     # percent of the text prepared, while phase == "preparing"
     prepare_phase: str | None = None  # what the preparation is doing: reading | tokenizer | tokenizing
+    saving: bool = False           # the running job is writing a checkpoint right now
     lr: float | None = None
     eta_s: float | None = None
     paused: bool = False           # by the user; persisted, so true when idle too ("Paused by you")
@@ -521,7 +522,7 @@ class Runner:
         with self.lock:
             p = self.progress
             return QueueState(
-                job=self.running, step=p.get("step", 0), total=p.get("total", 0), phase=p.get("phase", ""), prepare=p.get("prepare"), prepare_phase=p.get("prepare_phase"), lr=p.get("lr"),
+                job=self.running, step=p.get("step", 0), total=p.get("total", 0), phase=p.get("phase", ""), prepare=p.get("prepare"), prepare_phase=p.get("prepare_phase"), saving=self._saving_since is not None, lr=p.get("lr"),
                 eta_s=p.get("eta_s"), paused=self.user_paused, blocked=gate.reason, gate=gate, stopping=self.stopping,
                 up_next=self._queued(), plan=dataclasses.asdict(self.plan), notices=[dict(n) for n in self.notices],
                 failed=[j for j in self.jobs if j.status == "failed"][-FAILED_SHOWN:])
@@ -845,8 +846,10 @@ class Runner:
         def emit(event):
             if event.get("type") in ("resumed", "resume_refused"):
                 self._resume_note(job, event)
-            if event.get("type") == "saving":  # the final checkpoint is being written: "Stop now" waits for it (up to save_ceiling)
+            if event.get("type") == "saving":  # a checkpoint is being written: "Stop now" waits for it (up to save_ceiling)
                 self._saving_since = time.monotonic()
+            elif event.get("type") == "saved":  # written: a later kill is not held back by a save that is over
+                self._saving_since = None
             self._watch_event(job, event, resumed_at[0])
             if event.get("type") == "prepare":  # the text is being tokenized: no step yet, only how far along it is
                 self.progress.update(phase="preparing", prepare=event.get("percent", 0), prepare_phase=event.get("phase"))

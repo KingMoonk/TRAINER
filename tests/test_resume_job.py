@@ -38,14 +38,19 @@ def interrupted(root, after=3):
 
 
 class ResumeJob(unittest.TestCase):
-    def test_train_says_it_is_saving_before_it_writes_the_final_checkpoint(self):
+    def test_train_says_it_is_saving_and_saved_around_every_checkpoint_write(self):
         with tempfile.TemporaryDirectory() as directory:
             events = []
             studio_model.train(TINY, EXAMPLES, Path(directory) / "run", events.append)
+            marks = [(e["type"], e["file"]) for e in events if e["type"] in ("saving", "saved")]
+            self.assertEqual(len(marks) % 2, 0)
+            self.assertEqual(marks[0::2], [("saving", name) for _, name in marks[1::2]])  # each saving is followed by its saved
+            self.assertEqual(marks[1::2], [("saved", name) for _, name in marks[1::2]])
+            self.assertGreater(len(marks) // 2, 1)  # the evals along the way, not only the end
             kinds = [e["type"] for e in events]
-            self.assertEqual(kinds.count("saving"), 1)
-            self.assertLess(kinds.index("saving"), kinds.index("done"))
-            self.assertGreater(kinds.index("saving"), max(i for i, kind in enumerate(kinds) if kind == "metric"))
+            last = len(kinds) - 1 - kinds[::-1].index("saving")
+            self.assertGreater(last, max(i for i, kind in enumerate(kinds) if kind == "metric"))  # the final save follows the last step
+            self.assertLess(kinds.index("saved", last), kinds.index("done"))
 
     def test_a_resumed_job_continues_with_its_optimizer_and_has_no_restart_spike(self):
         with tempfile.TemporaryDirectory() as directory:

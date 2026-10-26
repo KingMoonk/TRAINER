@@ -69,6 +69,7 @@ class QueueState:
     phase: str = ""  # warm-up | steady | cool-down | preparing
     prepare: int | None = None  # percent of the text prepared, while phase == "preparing"
     prepare_phase: str | None = None  # reading | tokenizer | tokenizing
+    saving: bool = False  # the running job is writing a checkpoint
     lr: float | None = None
     eta_s: float | None = None
     paused: bool = False  # by the user; stays true with no job running ("Paused by you")

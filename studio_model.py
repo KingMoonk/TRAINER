@@ -993,6 +993,12 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     emit({"type": "info", "text": f"Evaluation uses up to {cfg['eval_windows']} fixed windows per split at every evaluation."})
 
     def save(filename):
+        """Write a checkpoint, saying so: a "Stop now" in progress waits for a save instead of killing the worker halfway through it."""
+        emit({"type": "saving", "file": filename})
+        write(filename)
+        emit({"type": "saved", "file": filename})
+
+    def write(filename):
         metadata = {"architecture": "groundwork_numpy_decoder", "format_version": 1, "config": cfg,
                     "tokenizer": tokenizer.serialize(), "step": step, "best": best if math.isfinite(best) else None,
                     "optimizer_steps": optimizer.steps, "history": [], "data_hash": digest,  # history lives in metrics.jsonl
@@ -1158,7 +1164,6 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                 report({"step": step, "loss": final_loss, "val_loss": final_validation, "tokens_per_second": 0.,
                         "lr": rate if step else cfg["learning_rate"], "grad_norm": 0., "trained_tokens": trained_tokens,
                         "elapsed_seconds": time.monotonic() - started})
-        emit({"type": "saving"})  # a "Stop now" in progress waits for this save instead of killing the worker halfway through it
         save("last.npz")
         record.update({"status": "stopped" if stop.is_set() else "completed", "step": step, "duration_seconds": time.monotonic() - started,
                        "trained_tokens": trained_tokens, "budget_reached": budget_reason, "finishedAt": now()})
@@ -1169,7 +1174,6 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         record.update(status="stopped" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "failed", error=str(exc), step=step)
         if step:  # keep what the run learned since its last checkpoint, so it can resume; a failing save must not hide `exc`
             try:
-                emit({"type": "saving"})
                 save("last.npz")
                 record["checkpoint"] = "last.npz"
             except Exception:

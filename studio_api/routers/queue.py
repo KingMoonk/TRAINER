@@ -95,6 +95,7 @@ class QueueStateModel(Model):
     phase: str = ""
     prepare: int | None = None  # percent of the text prepared while phase is "preparing"
     prepare_phase: Literal["reading", "tokenizer", "tokenizing"] | None = None  # what the preparation is doing now
+    saving: bool = False  # the running job is writing a checkpoint right now
     lr: float | None = None
     eta_s: float | None = None
     paused: bool = False

@@ -91,6 +91,13 @@ describe("progressLine", () => {
   it("omits the phase and the time left when unknown", () => expect(progressLine(queue({ step: 1, total: 2, lr: 0.5 }))).toBe("step 1 of 2 · learning rate: auto (0.5)"));
 });
 
+describe("saving a checkpoint", () => {
+  it("says so at the end of the progress line while the job writes one", () => {
+    expect(progressLine(queue({ step: 5, total: 10, saving: true }))).toBe("step 5 of 10 · learning rate: auto · Saving checkpoint");
+    expect(progressLine(queue({ step: 5, total: 10, saving: false }))).not.toContain("Saving");
+  });
+});
+
 describe("preparing the text", () => {
   it("shows the percent of text prepared instead of a step line", () => {
     const state = queue({ phase: "preparing", prepare: 42 });
