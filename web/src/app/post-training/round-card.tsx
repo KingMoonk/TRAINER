@@ -14,7 +14,7 @@ export type Choices = {
   lora: boolean | null; // null = follow the version's own setting
   rank: number;
   teacher: "version" | "correction";
-  teacherVersion: number | null; // null = the previous best
+  teacherVersion: number | null; // null = the API's default (best passing Round 1), or none
   leash: "Close" | "Medium" | "Far";
 };
 
@@ -228,14 +228,23 @@ function Round3({ live, options, choices, set }: RoundProps) {
         {choices.teacher === "version"
           ? chosen != null
             ? fill(T.previousDesc, { version: `Version ${chosen}` })
-            : T.noPrevious
+            : teachers.length > 0
+              ? T.noDefaultTeacher
+              : T.noPrevious
           : T.correctionDesc}
       </p>
-      {choices.teacher === "version" && teachers.length > 1 && chosen != null && (
+      {choices.teacher === "version" && (teachers.length > 1 || (teachers.length > 0 && chosen == null)) && (
         <Choice
           label={T.whichVersion}
-          value={String(chosen)}
-          items={teachers.map((t) => ({ value: String(t.number), label: `Version ${t.number}` }))}
+          value={chosen != null ? String(chosen) : ""}
+          items={teachers.map((t) => ({
+            value: String(t.number),
+            label: `Version ${t.number} · ${
+              t.chat_passed == null || t.chat_loss == null
+                ? T.teacherNoChat
+                : fill(t.chat_passed ? T.teacherChatPassed : T.teacherChatFailed, { loss: t.chat_loss.toFixed(3) })
+            }`,
+          }))}
           onChange={(v) => set({ teacherVersion: Number(v) })}
         />
       )}

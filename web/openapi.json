@@ -13078,6 +13078,28 @@
       },
       "TeacherOut": {
         "properties": {
+          "chat_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Loss"
+          },
+          "chat_passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Passed"
+          },
           "name": {
             "title": "Name",
             "type": "string"
