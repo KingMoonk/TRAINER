@@ -36,6 +36,25 @@ def heldout_split(docs, fraction=.1, seed=0):
     return unique[held:], unique[:held]
 
 
+def streamed_heldout_split(texts, index, fraction=.1, seed=0):
+    """The held-back texts of an iterator of texts, read once and never held whole (heldout_split's streaming sibling for a big catalogue).
+
+    A text is held back when a seeded hash of it falls under `fraction`, so a duplicate shares its fate and the split needs no other
+    text in memory. Every other text goes straight into `index` (a studio_decontam.Index, which bounds itself). Returns the held-back
+    texts, exact duplicates removed, in reading order."""
+    import hashlib
+    held, seen = [], set()
+    cutoff, salt = int(fraction * 2 ** 64), str(seed).encode()
+    for text in texts:
+        digest = hashlib.sha256(salt + text.encode("utf-8", "surrogatepass")).digest()
+        if int.from_bytes(digest[:8], "big") >= cutoff:
+            index.add(text)
+        elif digest not in seen:
+            seen.add(digest)
+            held.append(text)
+    return held
+
+
 def _ids(tokenizer, text):
     """Token ids of text as an int64 array (tokenizers without encode_array build it from the list)."""
     return tokenizer.encode_array(text) if hasattr(tokenizer, "encode_array") else np.asarray(tokenizer.encode(text), dtype=np.int64)
