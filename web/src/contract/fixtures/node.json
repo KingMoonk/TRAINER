@@ -8,6 +8,7 @@
     ],
     "hostname": "this-computer",
     "memory_bytes": 17179869184,
+    "memory_share": 1.0,
     "profile": null,
     "speeds": {},
     "version": "v0.0.0"

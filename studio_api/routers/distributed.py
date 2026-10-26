@@ -20,6 +20,7 @@ import studio_diloco
 import studio_fit
 import studio_facts
 import studio_membership
+import studio_memory
 import studio_model
 import studio_peer
 import studio_stages
@@ -598,37 +599,51 @@ def _chosen_peers(body, services, own):
     return chosen, studio_cluster.survey({"studioConfig": {"nodes": chosen}}, own)[1:]
 
 
+def _design_shape(config):
+    """The design shape of `config` (studio_probe.shape_key: what nodes report their measured speeds under), or None when it cannot be told."""
+    try:
+        return studio_memory.shape_of(studio_memory.validated(config))
+    except Exception:  # noqa: BLE001 - a design we cannot describe has no measured speed
+        return None
+
+
 def _sizing(body, services, version, peers, own):
-    """RunSizing for a run of `version` over this computer and `peers` (studio_fit.fit_members, each member from its own profile), or
-    None when this computer cannot read its own hardware (no scaling then, as for a solo run). A machine without a profile is `sized:
-    false`. The rounds are cut when the members that fit cannot train them within `window_hours` at their measured speed."""
+    """RunSizing for a run of `version` over this computer and `peers` (studio_fit.fit_members, each member from its own profile and its
+    own share), or None when this computer cannot read its own hardware (no scaling then, as for a solo run). A machine without a profile
+    is `sized: false`. The rounds are cut when the members that fit cannot train them within `window_hours` at their speed measured for
+    THIS design (never the newest probe of any design); a member without one does not count in the cut, and with none measured the rounds
+    are not cut and the note says so."""
     local = services.hardware_profile()
     if local is None:
         return None
-    members = [{"name": own.hostname, "address": studio_cluster.LOCAL, "profile": local, "share": services.memory_share(), "speed": local.tokens_per_second}]
+    config = plan.pretrain_config(version.spec, body.rounds * body.inner_steps, ROWS, HOLD)
+    shape = _design_shape(config)
+    members = [{"name": own.hostname, "address": studio_cluster.LOCAL, "profile": local, "share": services.memory_share(),
+                "speed": own.tokens_per_second_for(shape)}]
     for peer in peers:
         if peer.online and peer.profile:
             members.append({"name": peer.hostname or peer.address, "address": peer.address, "profile": studio_fit.Profile.from_dict(peer.profile),
-                            "share": 1., "speed": peer.profile.get("tokens_per_second")})
-    config = plan.pretrain_config(version.spec, body.rounds * body.inner_steps, ROWS, HOLD)
+                            "share": peer.memory_share or 1., "speed": peer.tokens_per_second_for(shape)})
     window = body.window_hours or studio_fit.DEFAULT_WINDOW_HOURS
     first = studio_fit.fit_members(config, members, window_hours=window)
-    fits = [m for m in first["members"] if m["fits"]]
     per_round = body.inner_steps * ROWS * config["context"]  # tokens one member trains in a round (a batch of ROWS rows, however it is split)
-    found = studio_fit.fit_members(config, members, token_budget=body.rounds * per_round * len(fits), window_hours=window)
+    counted = first["measured"]  # the members that fit and have a speed for this design: only they set the cut
+    found = studio_fit.fit_members(config, members, token_budget=body.rounds * per_round * counted, window_hours=window) if counted else first
     rounds, budget = body.rounds, found["token_budget"]
-    if budget and fits:
-        rounds = max(1, min(body.rounds, budget // (per_round * len(fits))))
-    sized = {m["name"]: m for m in found["members"]}
-    rows = []
-    for member in members:
-        row = sized[member["name"]]
-        rows.append(MemberSizing(name=row["name"], address=member["address"], sized=True, fits=row["fits"], batch_size=row["batch_size"],
-                                 accumulation=row["accumulation"], offload=row["offload"], notes=row["notes"], refusal=row["refusal"]))
-    named = {m.name for m in rows}
-    rows += [MemberSizing(name=peer.hostname or peer.address, address=peer.address, sized=False) for peer in peers
-             if (peer.hostname or peer.address) not in named]
+    if budget and counted:
+        rounds = max(1, min(body.rounds, budget // (per_round * counted)))
+    rows = [MemberSizing(name=row["name"], address=member["address"], sized=True, fits=row["fits"], batch_size=row["batch_size"],
+                         accumulation=row["accumulation"], offload=row["offload"], notes=row["notes"], refusal=row["refusal"])
+            for member, row in zip(members, found["members"])]  # in the order given: two machines with one hostname are two rows
+    sized = {m["address"] for m in members}
+    rows += [MemberSizing(name=peer.hostname or peer.address, address=peer.address, sized=False) for peer in peers if peer.address not in sized]
     note = f"{found['note']} Rounds {body.rounds} -> {rounds}." if found["note"] and rounds < body.rounds else found["note"]
+    unmeasured = [row["name"] for row in first["members"] if row["fits"] and not row["measured"]]
+    if not counted and unmeasured:
+        note = " ".join(x for x in (note, f"Rounds are not cut to the {studio_fit.hours_text(window)} window: no machine has a speed measured for this design yet.") if x)
+    elif unmeasured:
+        note = " ".join(x for x in (note, f"{', '.join(unmeasured)} {'has' if len(unmeasured) == 1 else 'have'} no speed measured for this design, "
+                                          "so the window cut does not count " + ("it." if len(unmeasured) == 1 else "them.")) if x)
     return RunSizing(members=rows, flagged=found["flagged"], tokens_per_second=found["tokens_per_second"], token_budget=budget, rounds=rounds,
                      rounds_cut=rounds < body.rounds, note=note)
 
@@ -702,18 +717,18 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     sizing = _sizing(body, services, version, peers, own)
     if sizing is not None and sizing.flagged:
         refusals = [m.refusal for m in sizing.members if not m.fits]
-        if own.hostname in sizing.flagged:
+        if any(m.address == studio_cluster.LOCAL and not m.fits for m in sizing.members):
             raise HTTPException(409, " ".join([*refusals, "This computer is a member of every run it starts, so the run cannot start."]))
         if not body.leave_out_unfit:
             raise HTTPException(409, " ".join([*refusals, "Start without " + ("it" if len(refusals) == 1 else "them") + " (leave out the machines that cannot fit) or choose a smaller design."]))
-        out = {m.name: m.refusal for m in sizing.members if not m.fits}
-        left_out = [*left_out, *({"node": peer.hostname or peer.address, "address": peer.address, "reason": out[peer.hostname or peer.address]}
-                                 for peer in peers if (peer.hostname or peer.address) in out)]
-        peers = [peer for peer in peers if (peer.hostname or peer.address) not in out]
+        out = {m.address: m.refusal for m in sizing.members if not m.fits}  # by address: two machines may share a hostname
+        left_out = [*left_out, *({"node": peer.hostname or peer.address, "address": peer.address, "reason": out[peer.address]}
+                                 for peer in peers if peer.address in out)]
+        peers = [peer for peer in peers if peer.address not in out]
     rounds = sizing.rounds if sizing is not None else body.rounds
     if rounds != body.rounds:
         settings = replace(settings, rounds=rounds)
-    fit_of = {m.name: {"batch_size": m.batch_size, "accumulation": m.accumulation, "offload_optimizer": m.offload}
+    fit_of = {m.address: {"batch_size": m.batch_size, "accumulation": m.accumulation, "offload_optimizer": m.offload}
               for m in (sizing.members if sizing is not None else ()) if m.sized and m.fits}
     machines = [{"node": own.hostname, "address": studio_cluster.LOCAL, "device": own.device, "device_name": own.device_name},
                 *({"node": peer.hostname or peer.address, "address": peer.address, "device": peer.device if peer.online else "",

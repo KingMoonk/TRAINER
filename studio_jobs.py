@@ -249,7 +249,7 @@ def _member(job, context, emit, stop, pause, name):
     from studio_peer import PeerClient
     p = job.params
     node = p.get("node") or socket.gethostname()
-    fit = p.get("fit") or (p.get("member_fit") or {}).get(node)  # this member's own batch, accumulation and optimizer placement (studio_fit.fit_members), from the run's coordinator
+    fit = p.get("fit") or (p.get("member_fit") or {}).get("local")  # the owner's own batch, accumulation and optimizer placement (studio_fit.fit_members), from the run's coordinator
     folder = Path(p["output_dir"]) / "member" if p.get("output_dir") else Path(context.run_dir) / f"{name}_{job.id}"
     studio_diloco.run_member(PeerClient(p["coordinator_url"]), p["run"], node, int(p.get("epoch", 0)),
                              context.root, folder, emit, stop, **{"locate": studio_diloco.file_locator(context.root), "pause": pause,

@@ -49,6 +49,7 @@ class NodeInfo:
     error: str = ""
     speeds: dict = field(default_factory=dict)  # design shape (studio_probe.shape_key) -> {device, seconds: {device: s}, tokens, age_s}: what this node measured
     profile: dict | None = None  # studio_fit.Profile.to_dict(): the memory free now, disk and measured speed; None from a node that does not report it
+    memory_share: float | None = None  # the part of its memory the node's queue plan lets a job take (studio_queue.MEMORY); None from a node that does not report it
 
     def seconds_for(self, shape):
         """(device, seconds per step) this node measured for the design `shape`, or None when it has not (or reports none). The device
@@ -57,6 +58,12 @@ class NodeInfo:
         if not hit:
             return None
         return hit["device"], hit["seconds"][hit["device"]]
+
+    def tokens_per_second_for(self, shape):
+        """Tokens a second this node measured for the design `shape` (on the device its own auto picks), or None when it has not."""
+        hit = self.speeds.get(shape) if shape else None
+        found = self.seconds_for(shape)
+        return hit["tokens"] / found[1] if hit and found and hit.get("tokens") else None
 
     @property
     def free(self):
@@ -81,7 +88,12 @@ def info_from_payload(address, payload):
                     device_name=str(payload.get("device_name", "")), memory_bytes=memory if isinstance(memory, int) and memory > 0 else 0,
                     busy=bool(payload.get("busy", False)),
                     dtypes=tuple(str(d) for d in dtypes) if isinstance(dtypes, list) and dtypes else ("float32",),
-                    speeds=clean_speeds(payload.get("speeds")), profile=clean_profile(payload.get("profile")))
+                    speeds=clean_speeds(payload.get("speeds")), profile=clean_profile(payload.get("profile")), memory_share=clean_share(payload.get("memory_share")))
+
+
+def clean_share(value):
+    """The `memory_share` of a peer's report, or None when it is missing or not a fraction in (0, 1]."""
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 < value <= 1 else None
 
 
 def clean_profile(value):
@@ -229,10 +241,11 @@ def funnel_token(state):
     return token
 
 
-def own_info(busy=False, version="", status=None, memory=None, speeds=None, profile=None):
+def own_info(busy=False, version="", status=None, memory=None, speeds=None, profile=None, memory_share=None):
     """This machine's NodeInfo. `status` is `studio_backend.gpu_status()` and `memory` the computer's memory in bytes; both are
     probed when not given. `speeds` is `studio_probe.reported(status)`, read from the cache when not given. `busy` is whether the queue is running a job; the caller knows, this module does not. `profile` is this machine's
-    studio_fit.Profile (or its dict) for a peer that sizes a distributed run per member; it is not read here, so most callers leave it out."""
+    studio_fit.Profile (or its dict) for a peer that sizes a distributed run per member; it is not read here, so most callers leave it out. `memory_share` is the queue plan's
+    share of memory for a job, told with it."""
     if status is None:
         try:
             from studio_backend import gpu_status
@@ -255,7 +268,7 @@ def own_info(busy=False, version="", status=None, memory=None, speeds=None, prof
             speeds = {}
     return NodeInfo(address=LOCAL, hostname=socket.gethostname(), version=version, device=kind, device_name=status.get("name") or "",
                     memory_bytes=size, busy=bool(busy), dtypes=DTYPES[kind], speeds=speeds,
-                    profile=profile.to_dict() if hasattr(profile, "to_dict") else profile)
+                    profile=profile.to_dict() if hasattr(profile, "to_dict") else profile, memory_share=memory_share)
 
 
 def fetch_json(url, timeout=POLL_TIMEOUT):

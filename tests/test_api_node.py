@@ -32,7 +32,7 @@ class NodeApiTest(unittest.TestCase):
 
     def test_the_payload_is_what_a_peer_polls(self):
         body = self.client.get("/node").json()
-        self.assertEqual(body, studio_cluster.own_info(busy=False, version=app_version()).payload())
+        self.assertEqual(body, studio_cluster.own_info(busy=False, version=app_version(), memory_share=1.).payload())
         self.assertEqual((body["device"], body["device_name"], body["memory_bytes"], body["dtypes"]),
                          ("cuda", "Test GPU", 8 * 2 ** 30, ["float32", "bfloat16", "float16"]))
         self.assertEqual(body["version"], app_version())

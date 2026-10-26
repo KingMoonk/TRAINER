@@ -394,7 +394,7 @@ def invite(job, client_for=PeerClient, only=None, wait=INVITE_WAIT):
         body = {"kind": "diloco_member", "label": f"{job.label} (member)",
                 "params": {"coordinator_url": url, "run": job.id, "node": machine.node, "epoch": 0,
                            **({"member_options": p["member_options"]} if p.get("member_options") else {}),
-                           **({"fit": p["member_fit"][machine.node]} if (p.get("member_fit") or {}).get(machine.node) else {}),
+                           **({"fit": p["member_fit"][machine.address]} if (p.get("member_fit") or {}).get(machine.address) else {}),
                            **({"ignore_plan": True} if p.get("ignore_plan") else {})}}
         try:
             machine.peer_job = take(machine, client_for(machine.address, timeout=ASK_TIMEOUT, retries=ASK_RETRIES), body)

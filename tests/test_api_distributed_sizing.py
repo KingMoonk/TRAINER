@@ -14,8 +14,10 @@ import studio_distributed as runs
 import studio_diloco
 import studio_fit
 from studio_api import app as api_app
+from studio_api.routers import distributed
 from studio_api.app import create_app
 from studio_api.hosts import ANY
+from studio_ia import pretraining_plan as plan
 from studio_ia.services import FakeServices
 from studio_spec import default_spec
 from tests import diloco_support as support
@@ -29,9 +31,15 @@ def machine(vram, free, speed=None):
                               ram_free=48 * G, disk_free=500 * G, cpu_cores=16, tokens_per_second=speed)
 
 
-def peer(address, profile, **kw):
-    return studio_cluster.NodeInfo(address=address, hostname=address, version="1.0.0", device="cuda", device_name="RTX",
-                                   profile=profile.to_dict() if profile is not None else None, **kw)
+def speed_of(shape, tokens_per_second):
+    """The `speeds` a node reports for one design shape: `tokens_per_second` measured for it on its GPU."""
+    return {shape: {"device": "cuda", "seconds": {"cuda": 1.}, "tokens": int(tokens_per_second), "age_s": 0.}}
+
+
+def peer(address, profile, shape=None, speed=None, hostname=None, **kw):
+    """A surveyed machine; `speed` (tokens/s) is its measured speed for the design `shape`, none when left out."""
+    return studio_cluster.NodeInfo(address=address, hostname=hostname or address, version="1.0.0", device="cuda", device_name="RTX",
+                                   profile=profile.to_dict() if profile is not None else None, speeds=speed_of(shape, speed) if speed else {}, **kw)
 
 
 def big_design():
@@ -56,12 +64,16 @@ class SizingTests(unittest.TestCase):
         self.services = FakeServices(step_seconds=.005)
         self.services.save_version(big_design(), "big")
         self.services.pause()  # the job stays in Up next to be read; nobody is invited
-        self.services.hardware = machine(80, 78, speed=30000.)
+        self.services.hardware = machine(80, 78)
+        config = plan.pretrain_config(self.services.current_version().spec, 6, distributed.ROWS, distributed.HOLD)
+        self.shape = distributed._design_shape(config)
+        self.local_speeds = speed_of(self.shape, 30000.)
+        self.enterContext(mock.patch("studio_probe.reported", lambda *a, **k: self.local_speeds))  # this computer's measured speeds, as GET /node reports them
         with mock.patch.object(api_app, "WEB_OUT", Path(tempfile.gettempdir()) / "no-such-web-out"):
             self.client = self.enterContext(TestClient(create_app(self.services, open=True, hosts=ANY)))
         self.addCleanup(runs.RUNS.clear)
         self.addCleanup(studio_diloco.COORDINATORS.clear)
-        self.peers = {"laptop": peer("laptop", machine(6, 5, speed=8000.)), "tiny": peer("tiny", machine(1, .2, speed=500.)),
+        self.peers = {"laptop": peer("laptop", machine(6, 5), self.shape, 8000.), "tiny": peer("tiny", machine(1, .2), self.shape, 500.),
                       "old": peer("old", None)}
         self.services.set_setting("nodes", list(self.peers))
         self.enterContext(mock.patch("studio_api.routers.distributed.app_version", return_value="1.0.0"))
@@ -130,14 +142,14 @@ class SizingTests(unittest.TestCase):
     def test_each_member_s_sizing_is_kept_on_the_job_and_told_in_its_note(self):
         started = self.start(machines=["laptop"])
         job = self.job(started.json())
-        local, laptop = job.params["member_fit"][job.params["owner"]], job.params["member_fit"]["laptop"]
+        local, laptop = job.params["member_fit"]["local"], job.params["member_fit"]["laptop"]
         self.assertEqual((local["batch_size"], local["accumulation"], local["offload_optimizer"]), (16, 1, False))
         self.assertLess(laptop["batch_size"], 16)
         self.assertIn("Sized per machine:", job.note)
         self.assertIn("laptop", job.note)
 
     def test_a_member_whose_optimizer_must_move_to_ram_is_told_to(self):
-        self.peers["laptop"] = peer("laptop", machine(1.7, 1.2, speed=8000.))
+        self.peers["laptop"] = peer("laptop", machine(1.7, 1.2), self.shape, 8000.)
         laptop = self.sizing(machines=["laptop"])["members"][1]
         self.assertEqual((laptop["fits"], laptop["offload"], laptop["batch_size"], laptop["accumulation"]), (True, True, 2, 8))
         self.assertTrue(any("optimizer" in note for note in laptop["notes"]))
@@ -152,6 +164,60 @@ class SizingTests(unittest.TestCase):
         self.assertEqual(started.status_code, 201, started.text)
         self.assertEqual(self.job(started.json()).params["rounds"], found["rounds"])
 
+    def context(self):
+        return plan.pretrain_config(self.services.current_version().spec, 6, distributed.ROWS, distributed.HOLD)["context"]
+
+    def test_an_unmeasured_member_does_not_count_in_the_window_cut(self):
+        self.peers["laptop"] = peer("laptop", machine(6, 5), self.shape, None)  # fits, but has measured nothing for this design
+        found = self.sizing(machines=["laptop"], rounds=10_000, inner_steps=1000, window_hours=1)
+        per_round = 1000 * distributed.ROWS * self.context()
+        self.assertEqual(found["tokens_per_second"], 30000.)  # this computer alone
+        self.assertEqual(found["token_budget"], 3600 * 30000)
+        self.assertEqual(found["rounds"], 3600 * 30000 // per_round)  # divided by one member, not two
+        self.assertTrue(found["rounds_cut"])
+        self.assertIn("laptop has no speed measured for this design", found["note"])
+
+    def test_a_profile_speed_from_another_design_does_not_drive_the_cut(self):
+        self.local_speeds = {}  # nothing measured for this design here ...
+        self.services.hardware = machine(80, 78, speed=30000.)  # ... though the newest probe, of some other design, was fast
+        self.peers["laptop"] = peer("laptop", machine(6, 5, speed=8000.))
+        found = self.sizing(machines=["laptop"], rounds=10_000, inner_steps=1000, window_hours=1)
+        self.assertEqual((found["rounds"], found["rounds_cut"], found["token_budget"], found["tokens_per_second"]), (10_000, False, None, None))
+        self.assertIn("no machine has a speed measured for this design", found["note"])
+
+    def test_a_speed_measured_for_a_different_shape_is_not_this_design_s(self):
+        self.peers["laptop"] = peer("laptop", machine(6, 5), "someothershape", 8000.)
+        found = self.sizing(machines=["laptop"], rounds=10_000, inner_steps=1000, window_hours=1)
+        self.assertEqual(found["token_budget"], 3600 * 30000)  # this computer's only
+        self.assertIn("laptop has no speed measured", found["note"])
+
+    def test_each_fitting_member_keeps_the_rows_a_step(self):
+        for member in self.sizing(machines=["laptop"])["members"]:
+            self.assertEqual(member["batch_size"] * member["accumulation"], distributed.ROWS, member)
+
+    def test_a_peer_is_sized_against_its_own_share_of_memory(self):
+        full = self.sizing(machines=["laptop"])["members"][1]
+        self.peers["laptop"] = peer("laptop", machine(6, 5), self.shape, 8000., memory_share=.5)
+        halved = self.sizing(machines=["laptop"])["members"][1]
+        self.assertLess(halved["batch_size"], full["batch_size"])
+
+    def test_two_peers_with_one_hostname_get_separate_rows_and_separate_fits(self):
+        self.peers = {"10.0.0.2": peer("10.0.0.2", machine(6, 5), self.shape, 8000., hostname="box"),
+                      "10.0.0.3": peer("10.0.0.3", machine(1, .2), self.shape, 500., hostname="box")}
+        self.services.set_setting("nodes", list(self.peers))
+        found = self.sizing(machines=list(self.peers))
+        rows = {m["address"]: m for m in found["members"]}
+        self.assertEqual(sorted(rows), ["10.0.0.2", "10.0.0.3", "local"])
+        self.assertTrue(rows["10.0.0.2"]["fits"])
+        self.assertFalse(rows["10.0.0.3"]["fits"])  # the small box is not hidden behind the big one of its name
+        self.assertEqual(rows["10.0.0.2"]["batch_size"] * rows["10.0.0.2"]["accumulation"], distributed.ROWS)
+        started = self.start(machines=list(self.peers), leave_out_unfit=True)
+        self.assertEqual(started.status_code, 201, started.text)
+        params = self.job(started.json()).params
+        self.assertEqual([m["address"] for m in params["machines"]], ["local", "10.0.0.2"])
+        self.assertEqual([row["address"] for row in params["left_out"]], ["10.0.0.3"])
+        self.assertEqual(sorted(params["member_fit"]), ["10.0.0.2", "local"])
+
     def test_a_run_that_fits_the_window_keeps_its_rounds(self):
         found = self.sizing(machines=["laptop"])
         self.assertEqual((found["rounds"], found["rounds_cut"], found["token_budget"]), (3, False, None))
@@ -163,7 +229,7 @@ class MemberSizingReachesTheMember(unittest.TestCase):
         self.addCleanup(runs.RUNS.clear)
 
     def test_an_invited_member_gets_its_own_sizing(self):
-        sizing = {"box": {"batch_size": 4, "accumulation": 4, "offload_optimizer": False}, "mac": {"batch_size": 16, "accumulation": 1, "offload_optimizer": False}}
+        sizing = {"box": {"batch_size": 4, "accumulation": 4, "offload_optimizer": False}, "local": {"batch_size": 16, "accumulation": 1, "offload_optimizer": False}}
         machines = [{"node": "mac", "address": "local", "device": "mps", "device_name": "M3"},
                     {"node": "box", "address": "box", "device": "cuda", "device_name": "RTX"}]
         runs.invite(owner_job(machines, member_fit=sizing), clients())
