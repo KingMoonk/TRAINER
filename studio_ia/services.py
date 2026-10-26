@@ -1620,7 +1620,6 @@ class WorkspaceServices(Services):
         self._models, self._cache = {}, {}
         self.ledger = studio_memory.Ledger()  # the bytes of the chat models in _models
         self._chat_lock = threading.RLock()  # _models, _using, _job_running and where each model is
-        self._live_lock = threading.Lock()  # one copy of a run's newest checkpoint at a time (_live_snapshot)
         self._using, self._job_running = {}, False  # per model, the lock a reply holds so the model is not moved under it
         import studio_voice
         self._voice = studio_voice.Voice(busy=lambda label: self.busy(label))  # voice mode's engines, loaded on first use
@@ -3606,6 +3605,8 @@ class WorkspaceServices(Services):
                 "prompt": samples[-1]["prompt"] if samples else cfg.get("sample_prompt")}
 
     # chat / inspect ---------------------------------------------------------
+    _live_lock = threading.Lock()  # one copy of a run's newest checkpoint at a time (_live_snapshot); on the class so a bare instance has it
+
     def _checkpoint(self, version, live=False):
         """The version's final checkpoint. With `live`, a version whose first run is still going answers from a copy of that run's
         newest save instead (never recorded as its best_checkpoint)."""
