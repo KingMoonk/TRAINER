@@ -238,6 +238,50 @@ def offload_wanted(cfg, share, device=None, ram=None, gpu=None, vocab=None):
     return fixed + per_sample > budget(device, share, ram, gpu)
 
 
+def weights_of(cfg, vocab=None):
+    """What the validated config's weights alone hold, in the weights' dtype (a checkpoint's copy of them is this big)."""
+    from studio_estimate import estimate
+    from studio_model import effective_spec, vocabulary_guess
+    from studio_spec import module_of
+    spec = effective_spec(cfg)
+    precision, precision_cfg = module_of("precision", spec["train"]["precision"])
+    return estimate(spec, vocabulary_guess(cfg) if vocab is None else vocab)["total"] * _element_size(precision.build(precision_cfg, None, None))
+
+
+def _element_size(dtype):
+    return torch.empty(0, dtype=dtype).element_size()
+
+
+def lora_params(spec, vocab, settings):
+    """How many parameters the LoRA adapters of `settings` add to the design `spec`: rank x (in + out) for each targeted 2-D weight of
+    a mixer or channel layer, and the special-token rows' correction (studio_lora.attach_lora picks the same weights). Read from the
+    shapes the layers declare when built on the meta device, so no weight is allocated. None when a layer cannot be built that way."""
+    import dataclasses
+    from studio_lora import lora_settings
+    from studio_slots import OFFSET
+    from studio_spec import block_at, dims_of, module_of
+    settings = lora_settings(settings)
+    wanted, rank = set(settings["targets"]), settings["rank"]
+    dims = dataclasses.replace(dims_of(spec, vocab), device="meta")
+    count = 0
+    try:
+        for slot, entry, layer in [("embedding", spec["embedding"], 0)] + [
+                (slot, block_at(spec, i)[slot], i) for i in range(spec["dims"]["n_layer"]) for slot in ("mixer", "channel")]:
+            module, cfg = module_of(slot, entry)
+            if module.skip:
+                continue
+            built = module.build(cfg, dataclasses.replace(dims, layer=layer), None)
+            for name, value in built.params.items():
+                if slot == "embedding":
+                    if name == "token" and value.ndim == 2 and value.shape[0] > OFFSET:
+                        count += OFFSET * value.shape[1]
+                elif name.endswith(".w") and name[:-2] in wanted and value.ndim == 2:
+                    count += rank * (value.shape[0] + value.shape[1])
+    except Exception:  # noqa: BLE001 - a layer that will not build on the meta device: the caller falls back to charging every weight
+        return None
+    return count
+
+
 def _training_bytes(cfg, vocab, offload):
     from studio_estimate import estimate
     from studio_model import effective_spec, vocabulary_guess
@@ -246,15 +290,19 @@ def _training_bytes(cfg, vocab, offload):
     vocab = vocabulary_guess(cfg) if vocab is None else vocab
     result = estimate(spec, vocab)
     precision, precision_cfg = module_of("precision", spec["train"]["precision"])
-    weight_bytes = torch.empty(0, dtype=precision.build(precision_cfg, None, None)).element_size()
+    weight_bytes = _element_size(precision.build(precision_cfg, None, None))
     compute_bytes = torch.empty(0, dtype=getattr(torch, result["compute_dtype"])).element_size()
-    fixed = result["total"] * weight_bytes * ADAMW_COPIES
+    adapters = lora_params(spec, vocab, cfg["lora"]) if cfg.get("lora") else None
+    if adapters is None:
+        trained, held = result["total"], result["total"] * weight_bytes * ADAMW_COPIES  # the weight, its gradient and AdamW's two moments
+    else:  # LoRA: the frozen base is its weights plus the gradient buffers the model keeps for them; only the adapters carry AdamW's state
+        trained, held = adapters, result["total"] * weight_bytes * 2 + adapters * weight_bytes * ADAMW_COPIES
     per_sample = (result["activation_bytes_per_token"] + 2 * vocab * compute_bytes) * spec["dims"]["n_ctx"]
     if not offload:
-        return fixed, per_sample, 0
+        return held, per_sample, 0
     largest = max((row["params"] for row in result["rows"]), default=0)  # one parameter is never bigger than its module's
-    moments = result["total"] * weight_bytes * STATE_COPIES
-    return fixed - moments + min(moments, largest * weight_bytes * STATE_COPIES), per_sample, moments
+    moments = trained * weight_bytes * STATE_COPIES
+    return held - moments + min(moments, largest * weight_bytes * STATE_COPIES), per_sample, moments
 
 
 def batch_cap(config, share, device=None, ram=None, gpu=None, offload=False):

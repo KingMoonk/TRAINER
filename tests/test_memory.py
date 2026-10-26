@@ -8,7 +8,7 @@ import torch
 import studio_backend
 import studio_jobs
 from studio_estimate import estimate
-from studio_memory import ADAMW_COPIES, batch_cap, budget, training_bytes
+from studio_memory import ADAMW_COPIES, batch_cap, budget, host_bytes, training_bytes
 from studio_model import effective_spec, validate_config
 
 GB = 2 ** 30
@@ -54,6 +54,48 @@ class TrainingBytesChecks(unittest.TestCase):
         bf16 = validate_config(dict(CONFIG, architecture=spec))
         self.assertEqual(training_bytes(fp32, vocab=263)[0], training_bytes(bf16, vocab=263)[0])
         self.assertLess(training_bytes(bf16, vocab=263)[1], training_bytes(fp32, vocab=263)[1])
+
+
+class LoraBytesChecks(unittest.TestCase):
+    """LoRA trains only its adapters, so AdamW's state (and a gradient for each) is charged on them and not on the whole model."""
+
+    def test_the_estimate_is_below_a_full_fine_tune_by_the_optimizer_state_difference(self):
+        from studio_memory import lora_params
+        plain = validate_config(CONFIG)
+        lora = validate_config(dict(CONFIG, lora={"rank": 4}))
+        spec = effective_spec(lora)
+        total = estimate(spec, 263)["total"]
+        adapters = lora_params(spec, 263, lora["lora"])
+        self.assertGreater(adapters, 0)
+        self.assertLess(adapters, total)
+        full, light = training_bytes(plain, vocab=263), training_bytes(lora, vocab=263)
+        self.assertEqual(light[1], full[1])  # the activations are the same: the backward pass still runs through the frozen base
+        # weights and the base's gradient buffers stay; AdamW's two moments and the trained gradient shrink to the adapters
+        self.assertEqual(full[0] - light[0], 4 * (2 * total - ADAMW_COPIES * adapters))
+        self.assertEqual(light[0], 4 * (2 * total + ADAMW_COPIES * adapters))
+        self.assertLess(light[0], full[0])
+
+    def test_adapters_follow_the_rank_and_the_targets(self):
+        from studio_memory import lora_params
+        spec = effective_spec(validate_config(CONFIG))
+        small, big = lora_params(spec, 263, {"rank": 2}), lora_params(spec, 263, {"rank": 8})
+        self.assertGreater(big, small)
+        only_proj = lora_params(spec, 263, {"rank": 4, "targets": ["proj"]})
+        both = lora_params(spec, 263, {"rank": 4})
+        self.assertLess(only_proj, both)
+        # 2 layers x (qkv 32 -> 96, proj 32 -> 32) at rank 4, plus the 7 special-token rows
+        self.assertEqual(both, 2 * 4 * ((32 + 96) + (32 + 32)) + 7 * 32)
+
+    def test_offloaded_lora_moves_only_the_adapters_moments(self):
+        lora = validate_config(dict(CONFIG, lora={"rank": 4}))
+        plain = validate_config(CONFIG)
+        self.assertLess(host_bytes(lora, vocab=263), host_bytes(plain, vocab=263))
+        self.assertLessEqual(training_bytes(lora, 263, True)[0], training_bytes(lora, 263)[0])
+
+    def test_a_layer_that_cannot_be_sized_falls_back_to_charging_every_weight(self):
+        lora = validate_config(dict(CONFIG, lora={"rank": 4}))
+        with mock.patch("studio_memory.lora_params", return_value=None):
+            self.assertEqual(training_bytes(lora, vocab=263), training_bytes(validate_config(CONFIG), vocab=263))
 
 
 class BatchCapChecks(unittest.TestCase):
