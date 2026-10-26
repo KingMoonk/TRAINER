@@ -275,10 +275,12 @@ def plateau_line(rule):
             f"{rule['window_steps']:,} steps (not before step {rule['min_steps']:,}).")
 
 
-def job_params(v, parent, chosen, mode, rows, hold, steps, pieces, own_text, plateau=None, source=None):
+def job_params(v, parent, chosen, mode, rows, hold, steps, pieces, own_text, plateau=None, source=None, chat_share=0., chat_datasets=()):
     """(label, params) of the pretrain job "Add to the queue" adds for version `v` (see Job in studio_ia.services). A catch-up starts
     from `source`'s best checkpoint (default `parent`; `v` itself trains further from its own), and `mode` is forced to from_scratch when that is not valid; `hold` is the
-    held-back fraction, `pieces` the size preview's; `plateau` the rule that ends the run when its validation loss goes flat (plateau_rule)."""
+    held-back fraction, `pieces` the size preview's; `plateau` the rule that ends the run when its validation loss goes flat (plateau_rule).
+    `chat_share` above 0 mixes the conversations of `chat_datasets` into the text as that share of its characters (Services.example_stream);
+    the job records both, and the label says it."""
     cfg = pretrain_config(v.spec, steps, rows, hold)
     start = source or parent
     mode = forced_mode(v, start, mode)
@@ -286,9 +288,12 @@ def job_params(v, parent, chosen, mode, rows, hold, steps, pieces, own_text, pla
     label = f"Version {v.number} {'catch-up' if mode == 'catch_up' else 'from scratch'}"
     if mode == "catch_up" and start is not parent and start is not v:
         label += f" from version {start.number}"
+    chat = {"chat_share": chat_share, "chat_datasets": list(chat_datasets)} if chat_share > 0 and chat_datasets else {}
+    if chat:
+        label += f", {chat_share:.0%} chat"
     token_limit = (v.spec.get("train", {}).get("run", {}) or {}).get("token_limit_millions", 0)
     return label, {"config": cfg, "datasets": list(chosen), "mode": mode, "init_from": init, "output_dir": None,
                    "user_text": own_text, "previous_best": parent.best_checkpoint if parent else None,
                    "version": v.number, "heldout_fraction": cfg["validation"], "pieces_per_pass": pieces,
                    **({"token_budget": token_limit * 1_000_000} if token_limit else {}),
-                   **({"plateau": plateau} if plateau else {})}
+                   **({"plateau": plateau} if plateau else {}), **chat}

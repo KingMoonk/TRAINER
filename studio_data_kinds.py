@@ -12,12 +12,14 @@ from array import array
 from dataclasses import dataclass, field, replace
 
 import studio_core
+import studio_corpus
 from studio_rules import LABELS
 
 KINDS = ("text", "conversations", "problems")
 USED_BY = {"text": "used by Pretraining", "conversations": "used by Post-training, round 1",
            "problems": "used by Post-training, round 2"}
 HELD_BACK_EVERY = 20          # about 5% of text documents / conversations, chosen by a hash of the content
+CHAT_SHARE_MAX = 0.10         # the most conversations a pretraining mix may hold, as a share of its characters
 NEAR_DUPLICATE = 0.8
 SKETCH = 128                  # bottom-k hashes kept per document for the exact-ish Jaccard check
 PERMS = [(2 * i * 2654435761 + 1, 40503 * i + 7) for i in range(1, 17)]   # 16 min-hashes, 8 bands of 2
@@ -51,20 +53,42 @@ def pretraining_examples(workspace, dataset_ids):
                 yield example
 
 
-def interleaved_examples(workspace, dataset_ids, shares):
+def chat_examples(workspace, dataset_id, characters, good_only=False):
+    """Conversations of one set that may go into a pretraining mix, in storage order, until `characters` of them have been given (the
+    row that crosses the line is given too). Drafts and the held-back conversations (they measure Round 1) are left out, and with
+    `good_only` so is everything not marked Good."""
+    given = 0
+    for example in workspace.iter_kind(dataset_id, "conversations"):
+        if given >= characters:
+            return
+        if is_draft(example) or stamp(example)["holdout"] or (good_only and example.get("quality") != "Good"):
+            continue
+        size = studio_corpus.characters_of(example)
+        if size:
+            given += size
+            yield example
+
+
+def interleaved_examples(workspace, dataset_ids, shares, chat=None, good_only=False):
     """pretraining_examples of several sets mixed in proportion to `shares` (a text-character count per dataset id) instead of one
     set after another, so a reader that stops early (a token budget smaller than the selection) still gets every set's share.
     Each step takes the next row of the set that has given the least text relative to its share; a set that runs out drops out.
-    The order is deterministic."""
+    The order is deterministic. `chat` ({conversation set id: characters of conversations to give}) mixes conversations in as well:
+    each such set is read with chat_examples and stops after its characters, so the chat is that share of the mix and no more."""
     streams = {i: pretraining_examples(workspace, [i]) for i in dataset_ids if shares.get(i, 0) > 0}
+    weights = dict(shares)
+    for i, characters in (chat or {}).items():
+        if characters > 0:
+            streams[("chat", i)] = chat_examples(workspace, i, characters, good_only=good_only)
+            weights[("chat", i)] = characters
     given = dict.fromkeys(streams, 0)
     while streams:
-        pick = min(streams, key=lambda i: given[i] / shares[i])
+        pick = min(streams, key=lambda i: given[i] / weights[i])
         example = next(streams[pick], None)
         if example is None:
             del streams[pick]
             continue
-        given[pick] += len(example.get("text") or "")
+        given[pick] += studio_corpus.characters_of(example)
         yield example
 
 

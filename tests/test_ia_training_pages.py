@@ -322,6 +322,58 @@ class WorkspaceRows(unittest.TestCase):
         roomy = [e["text"] for e in self.svc.example_stream({"datasets": ids, "token_budget": 10 ** 9})]
         self.assertEqual(roomy, in_order)  # a budget the text does not exceed changes nothing
 
+    def chat_set(self, count=400):
+        chat = self.ws.create_dataset("chat mix")
+        self.ws.add(chat, [{"user": f"question number {i} " * 3, "assistant": f"answer number {i} " * 3} for i in range(count)])
+        return chat
+
+    def test_a_chat_share_of_zero_leaves_the_stream_as_it_was(self):
+        ids = self.three_sets()
+        chat = self.chat_set()
+        plain = list(self.svc.example_stream({"datasets": ids}))
+        self.assertEqual(list(self.svc.example_stream({"datasets": ids, "chat_share": 0, "chat_datasets": [chat]})), plain)
+        self.assertEqual(list(self.svc.example_stream({"datasets": ids, "chat_datasets": [chat]})), plain)
+        self.assertFalse((self.svc.root / "data" / "chat_mix.json").exists())
+
+    def test_a_chat_share_mixes_conversations_in_as_that_share_of_the_characters(self):
+        import studio_corpus
+        ids = self.three_sets()
+        chat = self.chat_set()
+        stream = self.svc.example_stream({"datasets": ids, "chat_share": .05, "chat_datasets": [chat]})
+        rows = list(stream)
+        chat_rows = [e for e in rows if not e.get("text")]
+        chars = sum(map(studio_corpus.characters_of, chat_rows))
+        text = sum(len(e["text"]) for e in rows if e.get("text"))
+        self.assertEqual(text, sum(len(e["text"]) for e in self.svc.example_stream({"datasets": ids})))  # all the text is still read
+        self.assertAlmostEqual(chars / (chars + text), .05, delta=.01)
+        self.assertEqual(stream.expected_characters, chars + text)
+        first = next(i for i, e in enumerate(rows) if not e.get("text"))
+        last = max(i for i, e in enumerate(rows) if not e.get("text"))
+        self.assertLess(first, len(rows) // 4)   # spread through the text, not all at one end
+        self.assertGreater(last, len(rows) // 2)
+
+    def test_conversations_in_the_mix_never_reach_round_1_and_held_back_ones_never_enter_the_mix(self):
+        ids = self.three_sets()
+        chat = self.chat_set()
+        before = {e["id"] for e in self.svc.post_rows("conversations")}
+        held = {e["id"] for e in self.svc.post_rows("heldout_conversations")}
+        used = {e["id"] for e in self.svc.example_stream({"datasets": ids, "chat_share": .05, "chat_datasets": [chat]}) if not e.get("text")}
+        self.assertTrue(used)
+        self.assertFalse(used & held)   # the held-back conversations still measure Round 1
+        after = {e["id"] for e in self.svc.post_rows("conversations")}
+        self.assertFalse(used & after)
+        self.assertEqual(after, before - used)
+        self.assertEqual({e["id"] for e in self.svc.post_rows("heldout_conversations")}, held)
+
+    def test_a_chat_share_is_capped_and_needs_a_set_that_exists(self):
+        ids = self.three_sets()
+        chat = self.chat_set()
+        capped = list(self.svc.example_stream({"datasets": ids, "chat_share": .9, "chat_datasets": [chat]}))
+        import studio_corpus
+        chars = sum(studio_corpus.characters_of(e) for e in capped if not e.get("text"))
+        self.assertLess(chars / sum(studio_corpus.characters_of(e) for e in capped), .12)
+        self.assertEqual(list(self.svc.example_stream({"datasets": ids, "chat_share": .05, "chat_datasets": ["gone"]})), list(self.svc.example_stream({"datasets": ids})))
+
     @staticmethod
     def _words(seed, count=40):
         import random

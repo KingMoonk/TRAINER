@@ -6599,6 +6599,11 @@ export interface components {
          */
         PlanRequest: {
             /**
+             * Chat Share
+             * @default 0
+             */
+            chat_share: number;
+            /**
              * Dataset Ids
              * @default []
              */

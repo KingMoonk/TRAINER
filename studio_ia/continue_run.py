@@ -26,7 +26,8 @@ def source_note(out, params):
     if params.get("datasets") is None:
         return
     Path(out).mkdir(parents=True, exist_ok=True)
-    (Path(out) / "source.json").write_text(json.dumps({"datasets": list(params["datasets"]), "version": params.get("version")}), encoding="utf-8")
+    chat = {"chat_share": params["chat_share"], "chat_datasets": list(params.get("chat_datasets") or [])} if params.get("chat_share") else {}
+    (Path(out) / "source.json").write_text(json.dumps({"datasets": list(params["datasets"]), "version": params.get("version"), **chat}), encoding="utf-8")
 
 
 def run_of(run_dir):

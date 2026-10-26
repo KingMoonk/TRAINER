@@ -6706,6 +6706,13 @@
       "PlanRequest": {
         "description": "The answers on the Pretraining page. The browser keeps them (the draft choices); every call sends them whole.",
         "properties": {
+          "chat_share": {
+            "default": 0.0,
+            "maximum": 0.1,
+            "minimum": 0.0,
+            "title": "Chat Share",
+            "type": "number"
+          },
           "dataset_ids": {
             "default": [],
             "items": {
