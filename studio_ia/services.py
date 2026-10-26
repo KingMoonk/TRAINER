@@ -209,6 +209,17 @@ class Services:
         """Training step at which the version's best checkpoint was saved, or None when unknown."""
         return None
 
+    def live_checkpoints(self):
+        """The newest saved checkpoint of every run in progress whose version has no final weights yet, for chat and Score now:
+        [{version, step, total, saved_at, file}] (saved_at is epoch seconds, total the run's planned steps or 0). Never a version's
+        best_checkpoint."""
+        return []
+
+    def score_live(self, version):
+        """Held-out bits per character of a run in progress's newest checkpoint, for the caller only (nothing is stored): {version,
+        step, saved_at, bpc, documents}. NoCheckpoint while it has not saved one, ValueError without held-back text."""
+        raise NoCheckpoint(version if isinstance(version, int) else None)
+
     def run_facts(self, number):
         """What version `number`'s training run did, to tell whether two versions are a fair comparison:
         {data, steps, tokens, start, lr, extra} (a fact the files do not give is left out), or {} when the run is not on this computer."""
@@ -755,6 +766,7 @@ class FakeServices(Services):
         self._versions: list[Version] = []
         self._queue = QueueState()
         self.heldout_docs: list = []  # the held-back text
+        self.live: list[dict] = []  # a test's runs in progress: [{version, step, total, saved_at, file}]
         self.reviewed_text = True  # whether the text sets hold an example marked Good
         self.conversations_in_text = 40  # how many conversations a cluster run's teacher can answer are in the data
 
@@ -1266,7 +1278,22 @@ class FakeServices(Services):
         return []
 
     def chat(self, version, messages, on_text, stop, ablate=None):
+        v = next((x for x in self._versions if x.number == version), None)
+        if v is not None and not v.best_checkpoint and v.status == "training" and not any(c["version"] == version for c in self.live_checkpoints()):
+            raise NoCheckpoint(version, f"Version {version} is still on its first run and has not saved a checkpoint yet. "
+                                        "The first one arrives at the run's first evaluation; try again then.")
         return f"[reply with {len(ablate)} heads off]" if ablate else "[reply]"
+
+    def live_checkpoints(self):
+        return [dict(c) for c in self.live]
+
+    def score_live(self, version):
+        live = next((c for c in self.live_checkpoints() if c["version"] == version), None)
+        if live is None:
+            raise NoCheckpoint(version, f"Version {version} has no checkpoint from a run in progress to score.")
+        if not self.heldout_docs:
+            raise ValueError("No held-back text yet, so there is nothing to score the checkpoint on.")
+        return {"version": version, "step": live["step"], "saved_at": live["saved_at"], "bpc": 2.5, "documents": len(self.heldout_docs)}
 
     def voice_status(self):
         return [{"engine": "stt", "label": "Speech to text", "model": "sherpa-onnx-zipformer-small-en-2023-06-26", "installed": True, "loaded": False,
@@ -2669,6 +2696,7 @@ class WorkspaceServices(Services):
             import studio_eval
             self.store.add_run(number, out)
             self.store.set_best_checkpoint(number, ckpt)
+            self._drop_live(number)  # chat reads the final checkpoint from here on
             scores = self._held_scores(self._abs(ckpt))  # per document, so Chat's paired test later reads it from disk
             if scores is not None:
                 card = {**(self.store.get(number).get("scorecard") or {}), "bpc": studio_eval.corpus_bpc(scores),
@@ -3577,16 +3605,121 @@ class WorkspaceServices(Services):
                 "prompt": samples[-1]["prompt"] if samples else cfg.get("sample_prompt")}
 
     # chat / inspect ---------------------------------------------------------
-    def _checkpoint(self, version):
+    _live_lock = threading.Lock()  # one copy of a run's newest checkpoint at a time (_live_snapshot); on the class so a bare instance has it
+
+    def _checkpoint(self, version, live=False):
+        """The version's final checkpoint. With `live`, a version whose first run is still going answers from a copy of that run's
+        newest save instead (never recorded as its best_checkpoint)."""
         v = self._as_version(version)
-        if v is None or not v.best_checkpoint:
-            raise NoCheckpoint(getattr(v, "number", None) or (version if isinstance(version, int) else None))
-        return v.best_checkpoint
+        if v is not None and v.best_checkpoint:
+            return v.best_checkpoint
+        if live and v is not None and v.status == "training":
+            snapshot = self._live_snapshot(v.number)
+            if snapshot is None:
+                raise NoCheckpoint(v.number, f"Version {v.number} is still on its first run and has not saved a checkpoint yet. "
+                                             "The first one arrives at the run's first evaluation; try again then.")
+            return str(snapshot)
+        raise NoCheckpoint(getattr(v, "number", None) or (version if isinstance(version, int) else None))
+
+    # a run in progress: its newest save, read through a copy ------------------------------------------------------
+    def _live_source(self, number):
+        """best.npz, else last.npz, in the output folder of the running pretrain job of version `number`, or None."""
+        job = next((j for j in self.runner.jobs if j.status == "running" and j.kind == "pretrain" and j.params.get("version") == number), None)
+        out = Path(job.params.get("output_dir") or "") if job else None
+        if out is None or not out.name:
+            return None
+        return next((p for p in (out / "best.npz", out / "last.npz") if p.is_file()), None)
+
+    @staticmethod
+    def _live_meta(path):
+        """A checkpoint file's metadata (its step); ValueError when it is not a whole checkpoint (a save in progress, a truncated copy)."""
+        import zipfile
+        try:
+            with open(path, "rb") as stream, np.load(stream, allow_pickle=False) as data:  # our own handle: np.load leaks its own on a bad zip
+                return json.loads(str(data["metadata"]))
+        except (OSError, EOFError, KeyError, ValueError, zipfile.BadZipFile) as error:
+            raise ValueError(f"unreadable checkpoint: {error}") from error
+
+    def _live_snapshot(self, number):
+        """A private copy of the running job's newest checkpoint (data/live_checkpoints/v<number>-<mtime>.npz), checked to open as a
+        whole file, or None before the first save. A save replaces the file atomically, but the copy is what is read, so even a
+        file caught half-written fails here with a sentence instead of yielding a corrupt load."""
+        source = self._live_source(number)
+        if source is None:
+            return None
+        folder = self.root / "data" / "live_checkpoints"
+        with self._live_lock:
+            try:
+                snapshot = folder / f"v{number}-{source.stat().st_mtime_ns}.npz"
+                if snapshot.is_file():
+                    return snapshot
+                import shutil
+                folder.mkdir(parents=True, exist_ok=True)
+                partial = snapshot.with_suffix(".tmp")
+                shutil.copyfile(source, partial)
+                try:
+                    self._live_meta(partial)
+                except ValueError:
+                    partial.unlink(missing_ok=True)
+                    raise
+                partial.replace(snapshot)
+            except (OSError, ValueError) as error:
+                if isinstance(error, FileNotFoundError) and not source.exists():
+                    return None
+                raise RuntimeError(f"Version {number}'s run is saving its checkpoint right now ({error}). Try again in a moment.") from error
+            for old in folder.glob(f"v{number}-*.npz"):
+                if old != snapshot:
+                    try:
+                        old.unlink()
+                    except OSError:
+                        pass  # a reader still has it open: the next copy removes it
+        return snapshot
+
+    def _drop_live(self, number):
+        with self._live_lock:
+            for old in (self.root / "data" / "live_checkpoints").glob(f"v{number}-*.npz"):
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+
+    def live_checkpoints(self):
+        out = []
+        for v in self.versions():
+            if v.status != "training" or v.best_checkpoint:
+                continue
+            source = self._live_source(v.number)
+            if source is None:
+                continue
+            try:
+                stat = source.stat()
+                step = self._cached(("live-step", str(source), stat.st_mtime_ns), lambda: self._live_meta(source).get("step"))
+            except (OSError, ValueError):
+                continue  # being replaced just now: the next poll sees it
+            out.append({"version": v.number, "step": step, "total": self._phases(source.parent, [])[1] or 0, "saved_at": stat.st_mtime,
+                        "file": source.name})
+        return out
+
+    def score_live(self, version):
+        import studio_eval
+        v = self._as_version(version)
+        number = v.number if v else None
+        snapshot = self._live_snapshot(number) if number is not None and not v.best_checkpoint else None
+        if snapshot is None:
+            raise NoCheckpoint(number, f"Version {number} has no checkpoint from a run in progress to score." if number else None)
+        docs = self._heldout()
+        if not docs:
+            raise ValueError("No held-back text yet, so there is nothing to score the checkpoint on.")
+        from studio_backend import cap_threads
+        cap_threads()  # leave cores for training
+        scores = np.array(studio_eval.score_docs(str(snapshot), docs), dtype=np.float64)  # not _held_scores: nothing is kept on disk
+        return {"version": number, "step": self._live_meta(snapshot).get("step"), "saved_at": snapshot.stat().st_mtime,
+                "bpc": studio_eval.corpus_bpc(scores), "documents": len(docs)}
 
     def chat(self, version, messages, on_text, stop, ablate=None):
         from studio_model import LocalModel, load_checkpoint
         import studio_memory
-        ckpt = self._checkpoint(version)
+        ckpt = self._checkpoint(version, live=True)
         with self._chat_lock:
             model = self._models.pop(ckpt, None)
             if model is None:

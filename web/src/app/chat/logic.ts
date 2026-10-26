@@ -132,3 +132,34 @@ export function changesCheckpoints(event: ApiEvent): boolean {
   return event.kind === "job" && typeof event.payload.job === "string" && !("id" in event.payload) &&
     ["done", "failed", "stopped", "cancelled"].includes(String(event.payload.status));
 }
+
+export type LiveCheckpoint = components["schemas"]["LiveCheckpoint"];
+
+/** "just now", "3 min ago", "2 h ago" for a save `seconds` old. */
+export function ageText(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return T.justNow;
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  return `${Math.round(s / 3600)} h ago`;
+}
+
+/** Which step a live checkpoint answers from and how old it is: "step 12,000 of 50,000 · saved 3 min ago". */
+export function liveLabel(live: LiveCheckpoint, nowSeconds: number): string {
+  const step = live.step === null || live.step === undefined ? T.liveStepUnknown : `step ${live.step.toLocaleString()}${live.total ? ` of ${live.total.toLocaleString()}` : ""}`;
+  return `${step} · saved ${ageText(nowSeconds - live.saved_at)}`;
+}
+
+/** The live checkpoints of versions that have no trained checkpoint of their own, oldest version first. */
+export function liveOnly(live: LiveCheckpoint[], trained: Version[]): LiveCheckpoint[] {
+  const have = new Set(trained.map((v) => v.number));
+  return live.filter((l) => !have.has(l.version)).sort((a, b) => a.version - b.version);
+}
+
+export type LiveScore = { version: number; step: number | null; bpc: number; documents: number };
+
+export function liveScore(value: unknown): LiveScore {
+  if (!record(value) || !count(value.version) || !finite(value.bpc) || !count(value.documents) || (value.step !== null && !count(value.step))) {
+    throw new Error(T.invalidLiveScore);
+  }
+  return { version: value.version, step: value.step as number | null, bpc: value.bpc, documents: value.documents };
+}

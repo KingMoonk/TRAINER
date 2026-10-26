@@ -82,6 +82,17 @@ class VersionsApiTest(unittest.TestCase):
                 self.assertEqual((job["kind"], job["status"], job["result"]), (kind, "done", result))
         self.tap.wait_for(lambda: len([p for p in self.tap.of("job") if p["status"] == "done"]) == 4, "four finished jobs")
 
+    def test_live_checkpoints_list_and_score_now_is_a_job(self):
+        self.save()
+        self.assertEqual(self.client.get("/versions/live").json(), [])
+        self.services.live = [{"version": 1, "step": 12000, "total": 50000, "saved_at": 1.5, "file": "best.npz"}]
+        self.services.heldout_docs = ["held back"]
+        self.assertEqual(self.client.get("/versions/live").json(), self.services.live)
+        job = self.job(self.client.post("/versions/1/score-live"))
+        self.assertEqual((job["kind"], job["status"]), ("versions.score_live", "done"))
+        self.assertEqual((job["result"]["version"], job["result"]["step"], job["result"]["bpc"]), (1, 12000, 2.5))
+        self.assertEqual(self.client.post("/versions/9/score-live").status_code, 404)
+
     def test_the_best_version_is_the_job_result(self):
         self.save()
         self.services._versions[0].best_checkpoint = "best.npz"

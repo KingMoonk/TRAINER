@@ -9,12 +9,16 @@ import {
   fewShotNote,
   fewShotResult,
   fewShotRows,
+  liveLabel,
+  liveOnly,
+  liveScore,
   otherVersion,
   scoreRows,
   trainedVersions,
   unfinished,
   verdictView,
   versionName,
+  type LiveCheckpoint,
   type Version,
 } from "./logic";
 
@@ -23,6 +27,22 @@ const version = (number: number, extra: Record<string, unknown> = {}) => ({ numb
 const table = (correct: number, heldBack = true) => ({
   items: 20, tasks: 2, held_back: heldBack, chance: 0.25,
   rows: [{ shots: 0, used: 0, correct, accuracy: correct / 20 }, { shots: 4, used: 2.5, correct, accuracy: correct / 20 }],
+});
+
+describe("live checkpoints", () => {
+  const live = (extra: Record<string, unknown> = {}) => ({ version: 2, step: 12000, total: 50000, saved_at: 1000, file: "best.npz", ...extra }) as unknown as LiveCheckpoint;
+  it("labels the step and the age of the save", () => {
+    expect(liveLabel(live(), 1000 + 180)).toBe("step 12,000 of 50,000 · saved 3 min ago");
+    expect(liveLabel(live({ total: 0 }), 1000 + 5)).toBe("step 12,000 · saved just now");
+    expect(liveLabel(live({ step: null }), 1000 + 7200)).toBe("step not recorded · saved 2 h ago");
+  });
+  it("keeps only versions without a trained checkpoint", () => {
+    expect(liveOnly([live({ version: 3 }), live({ version: 1 }), live({ version: 2 })], [version(1)]).map((l) => l.version)).toEqual([2, 3]);
+  });
+  it("reads a score and refuses a malformed one", () => {
+    expect(liveScore({ version: 2, step: 5, bpc: 2.5, documents: 4 })).toEqual({ version: 2, step: 5, bpc: 2.5, documents: 4 });
+    expect(() => liveScore({ version: 2, step: 5, bpc: "x", documents: 4 })).toThrow(T.invalidLiveScore);
+  });
 });
 
 describe("versionName", () => {

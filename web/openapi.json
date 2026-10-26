@@ -4615,6 +4615,50 @@
         "title": "Listing",
         "type": "object"
       },
+      "LiveCheckpoint": {
+        "description": "The newest checkpoint a run in progress has saved, for a version that has no final weights yet.",
+        "properties": {
+          "file": {
+            "description": "best.npz or last.npz in the running job's folder",
+            "title": "File",
+            "type": "string"
+          },
+          "saved_at": {
+            "description": "when the file was written, epoch seconds",
+            "title": "Saved At",
+            "type": "number"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "the training step it was saved at",
+            "title": "Step"
+          },
+          "total": {
+            "default": 0,
+            "description": "the run's planned steps, 0 when unknown",
+            "title": "Total",
+            "type": "integer"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "saved_at",
+          "file"
+        ],
+        "title": "LiveCheckpoint",
+        "type": "object"
+      },
       "LoopCheckOut": {
         "properties": {
           "detail": {
@@ -21935,6 +21979,32 @@
         ]
       }
     },
+    "/versions/live": {
+      "get": {
+        "description": "The runs in progress that have saved a checkpoint chat can answer from. A version appears here only while it trains and has no\nfinal weights; the run's end removes it and Chat uses the final checkpoint.",
+        "operationId": "live_checkpoints_versions_live_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LiveCheckpoint"
+                  },
+                  "title": "Response Live Checkpoints Versions Live Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Live Checkpoints",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
     "/versions/published": {
       "get": {
         "description": "The versions in the version store, newest first. 409 with a sentence on what to set up when no store is configured, or on what\nto do when it cannot be reached.",
@@ -22287,6 +22357,49 @@
           }
         },
         "summary": "Run Speed",
+        "tags": [
+          "versions"
+        ]
+      }
+    },
+    "/versions/{number}/score-live": {
+      "post": {
+        "description": "Held-out bits per character of the version's run-in-progress checkpoint. The job's result is {version, step, saved_at, bpc,\ndocuments}, for the caller only: nothing is stored, and the version's checkpoint, scorecard and status do not change.",
+        "operationId": "score_live_versions__number__score_live_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/studio_api__routers__versions__JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Score Live",
         "tags": [
           "versions"
         ]

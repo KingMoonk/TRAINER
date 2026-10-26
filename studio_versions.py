@@ -28,9 +28,9 @@ NEXT = {"draft": {"saved"}, "saved": {"queued"}, "queued": {"saved", "training"}
 class NoCheckpoint(ValueError):
     """A version has no trained weights yet. The message says which one and where to fix it; it is already written for people."""
 
-    def __init__(self, version=None):
+    def __init__(self, version=None, message=None):
         self.version = version
-        super().__init__(f"Version {version} has not trained yet. Queue it from Build your model, or pick a trained version."
+        super().__init__(message or f"Version {version} has not trained yet. Queue it from Build your model, or pick a trained version."
                          if version else "No version has trained yet. Queue one from Build your model.")
 
 

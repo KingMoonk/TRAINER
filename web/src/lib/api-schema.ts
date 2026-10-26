@@ -3500,6 +3500,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/versions/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Live Checkpoints
+         * @description The runs in progress that have saved a checkpoint chat can answer from. A version appears here only while it trains and has no
+         *     final weights; the run's end removes it and Chat uses the final checkpoint.
+         */
+        get: operations["live_checkpoints_versions_live_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/versions/published": {
         parameters: {
             query?: never;
@@ -3656,6 +3677,27 @@ export interface paths {
         put?: never;
         /** Run Speed */
         post: operations["run_speed_versions__number__run_speed_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/versions/{number}/score-live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Score Live
+         * @description Held-out bits per character of the version's run-in-progress checkpoint. The job's result is {version, step, saved_at, bpc,
+         *     documents}, for the caller only: nothing is stored, and the version's checkpoint, scorecard and status do not change.
+         */
+        post: operations["score_live_versions__number__score_live_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5632,6 +5674,35 @@ export interface components {
             parent?: string | null;
             /** Path */
             path?: string | null;
+        };
+        /**
+         * LiveCheckpoint
+         * @description The newest checkpoint a run in progress has saved, for a version that has no final weights yet.
+         */
+        LiveCheckpoint: {
+            /**
+             * File
+             * @description best.npz or last.npz in the running job's folder
+             */
+            file: string;
+            /**
+             * Saved At
+             * @description when the file was written, epoch seconds
+             */
+            saved_at: number;
+            /**
+             * Step
+             * @description the training step it was saved at
+             */
+            step?: number | null;
+            /**
+             * Total
+             * @description the run's planned steps, 0 when unknown
+             * @default 0
+             */
+            total: number;
+            /** Version */
+            version: number;
         };
         /** LoopCheckOut */
         LoopCheckOut: {
@@ -14837,6 +14908,26 @@ export interface operations {
             };
         };
     };
+    live_checkpoints_versions_live_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveCheckpoint"][];
+                };
+            };
+        };
+    };
     published_versions_versions_published_get: {
         parameters: {
             query?: never;
@@ -15050,6 +15141,37 @@ export interface operations {
         };
     };
     run_speed_versions__number__run_speed_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["studio_api__routers__versions__JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    score_live_versions__number__score_live_post: {
         parameters: {
             query?: never;
             header?: never;

@@ -63,7 +63,7 @@ class ChatDevice(unittest.TestCase):
 
     def chat(self, name="m.npz"):
         with mock.patch("studio_model.LocalModel", side_effect=self.fake), mock.patch("studio_model.load_checkpoint", return_value={}), \
-                mock.patch.object(self.svc, "_checkpoint", side_effect=lambda v: v):
+                mock.patch.object(self.svc, "_checkpoint", side_effect=lambda v, live=False: v):
             return self.svc.chat(name, [], None, None)
 
     def devices(self):
