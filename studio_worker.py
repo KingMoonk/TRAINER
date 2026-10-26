@@ -74,7 +74,7 @@ class Handle:
     def __init__(self, job, handler, context, emit, folder, log_path, on_end=None):
         self.job, self.emit, self.on_end = job, emit, on_end
         self.params, self.error, self.details, self.done = {}, "", "", threading.Event()
-        self._finished, self._conn, self._lock = False, None, threading.Lock()
+        self._finished, self._killed, self._conn, self._lock = False, False, None, threading.Lock()
         self._want, self._sent = {"stop": False, "pause": False}, {"stop": False, "pause": False}
         self._token = secrets.token_hex(16)
         self._server = socket.create_server(("127.0.0.1", 0))
@@ -108,6 +108,16 @@ class Handle:
         with self._lock:
             self._want["stop"] = True
             self._flush()
+
+    def kill(self, terminate=None):
+        """End the worker process now (its whole tree on Windows), for a stop it did not answer in time. The job then ends as stopped,
+        not as a crash: whatever it last saved is what it continues from (checkpoints are written to a temp file and renamed)."""
+        import studio_platform as procs
+        with self._lock:
+            if self.done.is_set():
+                return
+            self._killed = True
+        (terminate or procs.terminate)(self.proc.pid)
 
     def _flush(self):
         if self._conn is None:
@@ -163,7 +173,7 @@ class Handle:
                 if part is not None:
                     part.close()  # before waiting: the worker waits for this close before it exits
             code = self.proc.wait()
-            if not self._finished:
+            if not self._finished and not self._killed:
                 self.error, self.details = crash_message(code), f"The worker process exited with code {code}."
             self._server.close()
             self.spec.unlink(missing_ok=True)

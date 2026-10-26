@@ -200,6 +200,8 @@ class Runner:
         self.user_paused = False       # a user intent: restored from queue.json, so a pause survives a restart
         self.stopping_job = ""         # the id of a running job the person stopped: persisted, so a restart does not run it again
         self.reap_grace = 35.          # seconds a worker an earlier app left gets to leave by itself (studio_worker.EXIT_GRACE and a margin)
+        self.kill_grace = 8.           # seconds a worker gets to stop after "Stop now" (a step and a save) before its process is ended
+        self._kill_at = None           # monotonic time "Stop now" ends the running job's process; None when no immediate stop is pending
         self.dead_runs = []            # jobs whose process an earlier app left running: their run.json is reconciled once it is stopped
         self._load()
         self.running = None            # Job on the runner thread
@@ -414,6 +416,7 @@ class Runner:
                 self.stopping_job = job.id  # saved first: an app that goes before the job ends must not run it again
                 self._save()
                 self.stop_event.set()  # the running job is stopped (the runner thread tells its worker); the runner marks it
+                self._kill_at = time.monotonic() + self.kill_grace  # only this stop is immediate: a worker that has not left by then is ended
             elif job and job.node and job.status == "running":
                 remote = job           # running on a peer: it is told to stop, and the record is kept as stopped
             elif job:
@@ -713,6 +716,7 @@ class Runner:
             self._sync_pause()  # a job that ignores the plan is not held by the gate that stood when it started
             job.params = {**job.params, "memory_share": share}  # studio_memory.batch_cap fits the job's batch to it
             self.stop_event.clear()
+            self._kill_at = None
             self._save()
         started = time.monotonic()
 
@@ -751,8 +755,16 @@ class Runner:
             self._watch()
             self._place_waiting()
             handle.sync(self.stop_event, self.pause_event)  # whatever set them also set wake
+            wait = self.tick
+            if self._kill_at is not None and not handle.done.is_set():
+                left = self._kill_at - time.monotonic()
+                if left <= 0:  # "Stop now" was not answered within the grace: end the process (the job still ends as stopped)
+                    self._kill_at = None
+                    handle.kill()
+                else:
+                    wait = min(wait, left)
             if not handle.done.is_set():
-                self.wake.wait(self.tick)
+                self.wake.wait(wait)
         platform_helpers.release_awake(awake)
         with self.lock:
             if handle:
@@ -769,6 +781,7 @@ class Runner:
             self._sync_pause()
             self.stopping = False
             self.stopping_job = ""
+            self._kill_at = None
             self.follow_up(job)
             if self.closed.is_set() and job.status == "stopped":
                 job.status = "waiting"  # shut down mid-run: try again next start
