@@ -14,6 +14,7 @@ export const BUILDER = {
   training_settings: "Training settings",
   training_precision: "Precision",
   training_precision_help: "The number format the model trains in.",
+  training_precision_unavailable: "{name} is not available here: {reason}",
   training_no_warmup: "This design's schedule has no warm-up.",
   training_note: "These are saved with the version. A run started from the Pretraining page begins from them; batch size sets its rows per step.",
   heads_help: "Parallel attention heads in each block. Each head learns relationships between tokens.",

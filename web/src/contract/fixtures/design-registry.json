@@ -20,21 +20,31 @@
       {
         "blurb": "Standard for training. Half the memory of float64.",
         "name": "float32",
+        "reason": "",
         "short": "fp32"
       },
       {
         "blurb": "Matrix multiplies run in bfloat16 for speed and memory; weights, optimizer and loss stay float32. Needs no loss scaling.",
         "name": "bfloat16 mixed",
+        "reason": "",
         "short": "bf16"
       },
       {
         "blurb": "Matrix multiplies run in float16 under a loss scale that grows and shrinks to avoid underflow; weights, optimizer and loss stay float32. A step whose gradients overflow is skipped.",
         "name": "float16 mixed",
+        "reason": "",
         "short": "fp16"
+      },
+      {
+        "blurb": "The linear layers' matrix multiplies run in 8-bit floats (e4m3 forward, e5m2 for gradients, one scale per tensor) and their inputs are kept in 8 bits for the backward pass. Aimed at large models on GPUs with 8-bit cores; scaling each tensor costs time, so small models and laptop GPUs can run slower than with bfloat16, and the loss can end higher. Weights, optimizer, embeddings, norms, attention scores, softmax and loss stay wide. Sizes that are not multiples of 16 are padded with zeros; a layer narrower than 16 stays in bfloat16. Scoring and chat run in bfloat16. Needs an NVIDIA GPU of the RTX 40 series, H100 or newer.",
+        "name": "float8 mixed",
+        "reason": "8-bit float needs an NVIDIA GPU of the RTX 40 series, H100 or newer; this run would use the CPU.",
+        "short": "fp8"
       },
       {
         "blurb": "Double precision. Twice the memory, used for gradient checks; not available on Apple GPUs.",
         "name": "float64",
+        "reason": "",
         "short": "fp64"
       }
     ],

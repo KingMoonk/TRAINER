@@ -5,10 +5,13 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from studio_modules.precision import fp8_ops
+
 
 def linear(layer, x, name):
     """x @ W (+ b when the layer registered a bias for `name`)."""
-    output = x @ layer.params[name + ".w"]
+    weight = layer.params[name + ".w"]
+    output = fp8_ops.linear_matmul(x, weight) if fp8_ops.applies(x, weight) else x @ weight
     if name + ".b" in layer.params:
         output = output + layer.params[name + ".b"]
     return output

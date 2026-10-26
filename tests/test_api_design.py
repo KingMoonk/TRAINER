@@ -26,6 +26,7 @@ class DesignRouterTests(ApiCase):
         self.assertEqual((reg["words"], reg["heads"]), (list(D.WORDS), list(D.HEADS)))
         self.assertEqual([p["short"] for p in reg["precisions"]], [m.short for m in D.registry.for_slot("precision")])
         self.assertIn("fp32", [p["short"] for p in reg["precisions"]])
+        self.assertEqual({p["short"]: p["reason"] for p in reg["precisions"]}, {m.short: D.precision_unavailable(m.short) for m in D.registry.for_slot("precision")})
 
         cur = self.call("POST", "/design/read", json={"spec": base})
         s = D.read_spec(base)
@@ -114,9 +115,20 @@ class DesignRouterTests(ApiCase):
         self.assertIn("batch size 4 → 32", changes["chips"])
         self.assertEqual(changes["warm"]["kind"], "same")
         for patch, text in (({"batch_size": 500}, "Batch size must be between 1 and 128."), ({"batch_size": 2.5}, "Batch size must be a whole number."),
-                            ({"dropout": 0.9}, "Dropout must be between 0 and 0.5."), ({"precision": "fp8"}, "Unknown precision module: 'fp8'.")):
+                            ({"dropout": 0.9}, "Dropout must be between 0 and 0.5."), ({"precision": "fp4"}, "Unknown precision module: 'fp4'.")):
             answer = self.call("POST", "/design/write", 422, json={"base": base, "choices": {**cur, **patch}, "was": cur})
             self.assertEqual(answer["detail"], text)
+
+    def test_fp8_is_refused_with_the_reason_where_the_machine_cannot_run_it(self):
+        from studio_modules.precision import fp8_ops
+        base = small_spec()
+        cur = self.call("POST", "/design/read", json={"spec": base})
+        with mock.patch.object(fp8_ops, "supported", return_value=False):
+            reg = self.call("GET", "/design/registry")
+            answer = self.call("POST", "/design/write", 422, json={"base": base, "choices": {**cur, "precision": "fp8"}, "was": cur})
+        reason = next(p["reason"] for p in reg["precisions"] if p["short"] == "fp8")
+        self.assertIn("RTX 40", reason)
+        self.assertEqual(answer["detail"], reason)
 
     def test_an_older_choices_payload_leaves_the_training_settings_alone(self):
         base = D.write_spec(small_spec(), {**D.read_spec(small_spec()), "batch_size": 16, "dropout": 0.3})

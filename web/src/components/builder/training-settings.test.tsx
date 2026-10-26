@@ -5,8 +5,9 @@ import { TrainingSettings } from "./training-settings";
 
 const registry = {
   precisions: [
-    { short: "fp32", name: "float32", blurb: "Full precision." },
-    { short: "bf16", name: "bfloat16 mixed", blurb: "Half the memory." },
+    { short: "fp32", name: "float32", blurb: "Full precision.", reason: "" },
+    { short: "bf16", name: "bfloat16 mixed", blurb: "Half the memory.", reason: "" },
+    { short: "fp8", name: "float8 mixed", blurb: "8-bit multiplies.", reason: "8-bit float needs an NVIDIA GPU of the RTX 40 series, H100 or newer." },
   ],
 } as Registry;
 const saved = { batch_size: 4, accumulation: 1, learning_rate: 0.001, weight_decay: 0.01, warmup: 20, dropout: 0.1, eval_every: 25, seed: 42, precision: "fp32" } as Choices;
@@ -54,6 +55,16 @@ describe("training settings", () => {
     expect(screen.getByText("Saved value: 42")).toBeInTheDocument();
     expect(screen.getByText("Saved value: float32")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Precision" })).toHaveTextContent("bfloat16 mixed");
+  });
+
+  test("say why a precision this machine cannot run is unavailable, and do not offer it", () => {
+    render(<TrainingSettings registry={registry} cur={saved} draft={saved} onChange={vi.fn()} />);
+    expect(screen.getByTestId("precision-unavailable-fp8")).toHaveTextContent(
+      "float8 mixed is not available here: 8-bit float needs an NVIDIA GPU of the RTX 40 series, H100 or newer.",
+    );
+    fireEvent.click(screen.getByRole("combobox", { name: "Precision" }));
+    expect(screen.getByRole("option", { name: "float8 mixed" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("option", { name: "bfloat16 mixed" })).not.toHaveAttribute("aria-disabled", "true");
   });
 
   test("follow a draft that changes from outside, such as a discard", () => {

@@ -2,7 +2,8 @@
 
 A precision module's build() returns the dtype of the stored weights (the master copy, which the optimizer also updates).
 A mixed-precision module additionally sets `compute` (the dtype matrix multiplies run in under torch.autocast) and,
-for float16, `scaled = True` (gradients are produced under a loss scale, see LossScaler).
+for float16, `scaled = True` (gradients are produced under a loss scale, see LossScaler). A module with `fp8 = True` also runs the
+linear layers' multiplies in 8-bit floats where fp8_ops.supported(device) proves they work (uses_fp8), and is bfloat16 mixed elsewhere.
 """
 from __future__ import annotations
 
@@ -67,9 +68,34 @@ def autocast_works(device, dtype):
         return False
 
 
+def uses_fp8(module, device):
+    """True when `module` asks for float8 linear layers and `device` really runs them (and the rest of its policy, bfloat16)."""
+    from studio_modules.precision import fp8_ops
+    return bool(getattr(module, "fp8", False)) and fp8_ops.supported(device) and autocast_works(device, module.compute)
+
+
+def unavailable(module, device):
+    """Why `module` cannot be picked for a run on `device`, or "" when it can. Only float8 needs hardware that may be missing;
+    the other modules fall back with a note (plan) instead of being refused."""
+    if not getattr(module, "fp8", False):
+        return ""
+    from studio_modules.precision import fp8_ops
+    reason = fp8_ops.unsupported_reason(device)
+    if not reason and not autocast_works(device, module.compute):
+        reason = f"{module.name} needs bfloat16 matrix multiplies, which this device does not run."
+    return reason
+
+
 def plan(module, device):
-    """(autocast dtype or None, note). The note says why a mixed-precision module falls back to float32 on this device."""
+    """(autocast dtype or None, note). The note says why a mixed-precision module falls back on this device: float8 to the
+    rest of its policy, bfloat16, the others to float32."""
     compute = getattr(module, "compute", None)
+    if getattr(module, "fp8", False):
+        reason = unavailable(module, device)
+        if not reason:
+            return compute, ""
+        fallback = compute if autocast_works(device, compute) else None
+        return fallback, f"{reason} Training in {'bfloat16' if fallback else 'float32'} instead."
     if compute is None or autocast_works(device, compute):
         return compute, ""
     label = {"cpu": "the CPU", "cuda": "this GPU", "mps": "Apple GPUs"}.get(device, device)

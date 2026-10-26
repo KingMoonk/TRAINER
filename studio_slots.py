@@ -288,6 +288,8 @@ class ModuleSpec:
     skip = False       # True for "none" modules: the compiler leaves the step out instead of building a layer
     compute = None     # precision modules: the dtype matrix multiplies run in under torch.autocast (None: the weights' own dtype)
     scaled = False     # precision modules: gradients need dynamic loss scaling (float16)
+    fp8 = False        # precision modules: the linear layers' products run in float8 where the device proves it (studio_modules.precision.fp8_ops)
+    tradeoff = ""      # precision modules: what picking it costs, for the not-saved summary
     backward = "PyTorch autograd · forward checked against finite differences in float64"
     glyph3d = None     # {"kind": "beams"|"ribbon"|"fan"|"tower", "hooks": [names]}; None = the slot's default glyph
 

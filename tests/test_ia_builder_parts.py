@@ -129,7 +129,7 @@ class TrainingSettings(unittest.TestCase):
                             ({"accumulation": 0}, "Accumulation must be between 1 and 64."), ({"dropout": 0.9}, "Dropout must be between 0 and 0.5."),
                             ({"eval_every": 0}, "Eval every must be between 1 and 100000."), ({"seed": -1}, "Seed must be between 0 and 2147483647."),
                             ({"learning_rate": 5}, "lr must be between"), ({"warmup": -3}, "warmup must be between"),
-                            ({"precision": "fp8"}, "Unknown precision module")):
+                            ({"precision": "fp4"}, "Unknown precision module")):
             with self.subTest(patch=patch), self.assertRaises(ValueError) as caught:
                 D.write_spec(base(), choices(**patch))
             self.assertIn(text, str(caught.exception))
