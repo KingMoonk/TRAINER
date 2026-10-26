@@ -16,6 +16,8 @@ function useSlowReads(): BusyItem[] {
     const cache = client.getQueryCache();
     const since = new Map<string, number>();
     const timers = new Map<string, ReturnType<typeof setTimeout>>();
+    // Reads whose SLOW_MS timer has fired. A timer can fire a millisecond before Date.now() has moved SLOW_MS, so the timer firing counts as due.
+    const due = new Set<string>();
     let shown = "";
     const sync = () => {
       const now = Date.now();
@@ -24,16 +26,23 @@ function useSlowReads(): BusyItem[] {
       for (const hash of [...since.keys()]) {
         if (live.has(hash)) continue;
         since.delete(hash);
+        due.delete(hash);
         clearTimeout(timers.get(hash));
         timers.delete(hash);
       }
       for (const hash of live) {
         if (since.has(hash)) continue;
         since.set(hash, now);
-        timers.set(hash, setTimeout(sync, SLOW_MS));
+        timers.set(
+          hash,
+          setTimeout(() => {
+            due.add(hash);
+            sync();
+          }, SLOW_MS),
+        );
       }
       const items = fetching
-        .filter((query) => now - (since.get(query.queryHash) ?? now) >= SLOW_MS)
+        .filter((query) => due.has(query.queryHash) || now - (since.get(query.queryHash) ?? now) >= SLOW_MS)
         .map((query) => ({ id: `read:${query.queryHash}`, label: queryLabel(query.queryKey), done: 0, total: null }));
       const signature = items.map((item) => item.id).join("|");
       if (signature === shown) return;
