@@ -144,6 +144,30 @@ class MembersTests(unittest.TestCase):
         self.assertEqual(found["token_budget"], int(10 * 3600 * 38000.))  # the combined measured speed
         self.assertEqual(found["flagged"], [])
 
+    def test_a_member_s_batch_is_a_divisor_of_the_rows_so_the_rows_a_step_stay_fixed(self):
+        cfg = config(rows=12, width=256, layers=4, context=256)
+        with mock.patch.object(F._Sizer, "largest_batch", lambda self, *a, **k: 5):  # fits 5 rows: ceil(12 / 5) x 5 would train 15
+            found = F.fit_members(cfg, [{"name": "laptop", "profile": machine(), "speed": 1000.}])
+        row = found["members"][0]
+        self.assertEqual((row["batch_size"], row["accumulation"]), (4, 3))
+        self.assertEqual(row["batch_size"] * row["accumulation"], 12)
+
+    def test_a_member_whose_rows_cannot_be_kept_says_so(self):
+        cfg = config(rows=13, width=256, layers=4, context=256)
+        with mock.patch.object(F._Sizer, "largest_batch", lambda self, *a, **k: 8):  # no divisor of 13 within 4..8
+            row = F.fit_members(cfg, [{"name": "laptop", "profile": machine(), "speed": 1000.}])["members"][0]
+        self.assertNotEqual(row["batch_size"] * row["accumulation"], 13)
+        self.assertTrue(any("rows a step instead of 13" in note for note in row["notes"]))
+
+    def test_only_members_with_a_speed_count_in_the_token_budget(self):
+        cfg = config(rows=8, width=256, layers=4, context=256)
+        found = F.fit_members(cfg, [{"name": "a", "profile": machine(), "speed": 1000.}, {"name": "b", "profile": machine(), "speed": None}],
+                              pieces=PIECES, window_hours=1.)
+        self.assertEqual((found["measured"], found["tokens_per_second"], found["token_budget"]), (1, 1000., 3_600_000))
+        self.assertEqual([row["measured"] for row in found["members"]], [True, False])
+        none = F.fit_members(cfg, [{"name": "b", "profile": machine()}], pieces=PIECES)
+        self.assertEqual((none["measured"], none["tokens_per_second"], none["token_budget"]), (0, None, None))
+
     def test_a_member_that_cannot_fit_is_flagged_and_the_others_are_not_scaled_for_it(self):
         cfg = config(rows=8, width=1024, layers=24, context=2048)
         found = F.fit_members(cfg, [{"name": "tiny", "profile": machine(vram=1, free=.2)}, {"name": "tower", "profile": machine(vram=80, free=78)}])

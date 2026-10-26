@@ -28,10 +28,12 @@ class Node(BaseModel):
     dtypes: list[str]
     speeds: dict[str, Speed] = {}  # design shape (a hash) -> this machine's measured step time for it; only probes valid for this machine as it is now
     profile: Hardware | None = None  # what this machine has free now (studio_fit.hardware_profile): the coordinator of a distributed run sizes this member from it; null where it cannot be read
+    memory_share: float | None = None  # the part of its memory this machine's queue plan lets a job take: the coordinator sizes this member's batch against that share
 
 
 @router.get("/node", response_model=Node)
 def node(services=Depends(get_services)):
     """Sync, so the GPU probe (cached after the first call) runs off the event loop."""
     profile = services.hardware_profile()
-    return studio_cluster.own_info(busy=services.queue().job is not None, version=app_version(), profile=profile).payload()
+    return studio_cluster.own_info(busy=services.queue().job is not None, version=app_version(), profile=profile,
+                                   memory_share=services.memory_share()).payload()

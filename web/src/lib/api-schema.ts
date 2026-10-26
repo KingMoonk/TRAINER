@@ -6280,6 +6280,8 @@ export interface components {
             hostname: string;
             /** Memory Bytes */
             memory_bytes: number;
+            /** Memory Share */
+            memory_share?: number | null;
             profile?: components["schemas"]["Hardware"] | null;
             /**
              * Speeds
