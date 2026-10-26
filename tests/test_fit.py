@@ -14,8 +14,11 @@ G = 2 ** 30
 PIECES = 4_000_000_000
 
 
-def design(width=1024, layers=24, context=2048):
-    spec = default_spec()
+def design(width=1024, layers=24, context=2048, precision="bf16"):
+    """A design with its precision pinned: default_spec() picks bfloat16 on a GPU and float32 on the CPU, which changes the
+    memory per row about 1.6x (#746), so a test that does not pin it depends on the machine it runs on."""
+    spec = default_spec(device="cpu")
+    spec["train"]["precision"] = {"id": precision}
     spec["dims"].update(d_model=width, n_layer=layers, n_ctx=context)
     spec["block"]["mixer"]["config"]["heads"] = 16
     return validate_spec(spec)
@@ -28,6 +31,18 @@ def config(rows=16, **dims):
 def machine(vram=8, free=7, ram=24, disk=300, **kw):
     return F.Profile(device="cuda", gpu_name="Fake 8 GB", vram_total=int(vram * G), vram_free=int(free * G), ram_total=32 * G,
                      ram_free=int(ram * G), disk_free=int(disk * G), cpu_cores=16, **kw)
+
+
+class HostIndependenceTests(unittest.TestCase):
+    def test_a_pinned_design_costs_the_same_on_any_machine(self):
+        cfg = validate_config(config(rows=8, width=1024, layers=24, context=2048))
+        sizer = F._Sizer(machine(vram=80, free=78), "cuda", 1., 256)
+        self.assertEqual(sizer.largest_batch(cfg, False), 8)  # 8 rows at context 2048 fit 80 GB: not near the boundary
+
+    def test_the_default_precision_is_what_changes_the_memory_between_a_gpu_and_a_cpu(self):
+        floats = validate_config(plan.pretrain_config(design(precision="fp32"), 1_000_000, 8, .05))
+        halves = validate_config(plan.pretrain_config(design(precision="bf16"), 1_000_000, 8, .05))
+        self.assertGreater(studio_memory.training_bytes(floats, 256)[1], 1.5 * studio_memory.training_bytes(halves, 256)[1])
 
 
 class SoloFitTests(unittest.TestCase):
@@ -56,7 +71,7 @@ class SoloFitTests(unittest.TestCase):
         self.assertGreaterEqual(sizer.largest_batch(validate_config(found.config), found.offload), 1)
 
     def test_a_tight_fit_can_be_kept(self):
-        cfg = config(width=1024, layers=24, context=1024)
+        cfg = config(width=1024, layers=24, context=2048)
         sizer = F._Sizer(machine(), "cuda", 1., 256)
         need = sizer.bytes_for(validate_config(cfg), False)
         free = need / 1.05 / G  # a little under what the declared batch needs
@@ -130,7 +145,7 @@ class MembersTests(unittest.TestCase):
         self.assertEqual(found["flagged"], [])
 
     def test_a_member_that_cannot_fit_is_flagged_and_the_others_are_not_scaled_for_it(self):
-        cfg = config(rows=8, width=1024, layers=24, context=1024)
+        cfg = config(rows=8, width=1024, layers=24, context=2048)
         found = F.fit_members(cfg, [{"name": "tiny", "profile": machine(vram=1, free=.2)}, {"name": "tower", "profile": machine(vram=80, free=78)}])
         self.assertEqual(found["flagged"], ["tiny"])
         self.assertIn("tiny cannot take part", found["members"][0]["refusal"])
@@ -139,7 +154,7 @@ class MembersTests(unittest.TestCase):
 
 class RefitTests(unittest.TestCase):
     def params(self, **kw):
-        return {"config": config(rows=8, context=1024), "mode": "from_scratch", **kw}
+        return {"config": config(rows=8, context=2048), "mode": "from_scratch", **kw}
 
     def test_refit_scales_a_fresh_job_from_what_was_declared(self):
         found = F.refit(self.params(), machine(), 1.)
