@@ -881,6 +881,13 @@ class Runner:
             if not handle.done.is_set():
                 self.wake.wait(wait)
         platform_helpers.release_awake(awake)
+        if handle and handle._killed:  # a hard kill skips the worker's own cleanup: mark its run stopped and drop its spool now
+            import studio_cleanup
+            with self.lock:
+                job.params.update(handle.params)
+            for folder in run_folders(self.root, job):
+                reconcile_run(folder)
+                studio_cleanup.sweep_temporaries(folder)
         with self.lock:
             if handle:
                 job.params.update(handle.params)
