@@ -745,6 +745,14 @@ def remap_vocabulary(old, old_tokenizer, tokenizer, fresh):
     return out
 
 
+def _checkpoint_tokenizer(cfg, path):
+    """The tokenizer stored in the checkpoint at path when the config asks for the same tokenizer spec, else None (fit a new one)."""
+    data = load_checkpoint(path, weights_only=True)
+    if effective_spec(cfg)["tokenizer"] != effective_spec(validate_config(data["config"]))["tokenizer"]:
+        return None
+    return Tokenizer.restore(data["tokenizer"])
+
+
 def _initialize_from(model, tokenizer, path):
     """Transplant weights from a checkpoint into the model's (possibly different) architecture."""
     data = load_checkpoint(path)
@@ -777,6 +785,9 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
     Left None (the default) the schedule spans this run alone.
     offload_optimizer keeps the optimizer state in host memory and streams it through the device for each update: slower,
     the same result, and a model whose state does not fit the GPU can train (studio_memory.offload_wanted says when).
+
+    init_from keeps the checkpoint's tokenizer when the config's tokenizer spec equals the checkpoint's (so the weights' pieces still
+    mean what they did); config["refit_tokenizer"]=True fits a new one on this data instead and remaps the rows by piece.
 
     rebase=True (with resume) continues a checkpoint on different data: the weights, tokenizer, optimizer state and step carry over,
     and cfg["steps"] is the number of steps to add. The dataset, split, seed, learning rate and batch size may differ from the
@@ -893,6 +904,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                     or any(current_spec["train"][key] != previous_spec["train"][key] for key in recipe)):
                 raise ValueError("Resume must preserve architecture, tokenizer, split, seed, objective, optimizer, schedule and batch settings.")
             tokenizer = Tokenizer.restore(checkpoint["tokenizer"])
+        elif init_from and not config.get("refit_tokenizer") and (kept := _checkpoint_tokenizer(cfg, init_from)) is not None:
+            tokenizer = kept  # a warm start keeps the checkpoint's tokenizer: refitting on new text changes pieces the weights were trained on
         else:
             module, module_cfg = module_of("tokenizer", effective_spec(cfg)["tokenizer"])
             fitting = _prepare_reporter(emit, stop, "tokenizer", 40, 45) if corpus is not None else None
