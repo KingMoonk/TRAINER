@@ -63,15 +63,17 @@ def oom_notice(event, now=None):
                          f"({batch * accumulation} rows a step) and training went on.", now)
 
 
-def projection(*, step, first_step, total, trained_tokens, elapsed, token_budget, window_seconds, now=None):
+def projection(*, step, first_step, total, trained_tokens, elapsed, token_budget, window_seconds, earlier_tokens=0, earlier_elapsed=0., now=None):
     """The overrun notice when the run, at the pace measured since it began, ends after `window_seconds`; None when it will end in time,
     when there is no window, or when the pace is not measured yet. `step`/`total`: where the run is and ends (steps); `first_step`: the
-    step this process began at; `trained_tokens`/`elapsed`: what it did since. `token_budget`: the run's cap on tokens, if any."""
-    steps_here = step - first_step
-    if not window_seconds or not elapsed or steps_here < MIN_STEPS_HERE or elapsed < MIN_ELAPSED or trained_tokens <= 0 or step >= total:
+    step this process began at; `trained_tokens`/`elapsed`: what the run did in all, counting the attempts before a resume
+    (`earlier_tokens`/`earlier_elapsed`, which the pace leaves out: it is measured on this attempt alone, while the window and the token
+    budget are for the whole run). `token_budget`: the run's cap on tokens, if any."""
+    steps_here, tokens_here, elapsed_here = step - first_step, trained_tokens - earlier_tokens, elapsed - earlier_elapsed
+    if not window_seconds or not elapsed_here or steps_here < MIN_STEPS_HERE or elapsed_here < MIN_ELAPSED or tokens_here <= 0 or step >= total:
         return None
-    rate = trained_tokens / elapsed
-    left = (total - step) * trained_tokens / steps_here
+    rate = tokens_here / elapsed_here
+    left = (total - step) * tokens_here / steps_here
     if token_budget:
         left = min(left, max(0, token_budget - trained_tokens))
     ends = elapsed + left / rate

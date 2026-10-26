@@ -785,7 +785,7 @@ class Runner:
             self.notices = [n for n in self.notices if n["kind"] != kind]
         self._emit("queue", {"job": job.id})
 
-    def _watch_event(self, job, event, first_step):
+    def _watch_event(self, job, event, first_step, earlier=(0, 0.)):
         """What a running pretrain job's progress events say: a batch halved after running out of memory, and where its pace puts its end."""
         if job.kind != "pretrain":
             return
@@ -797,7 +797,8 @@ class Runner:
         self._pace_at = time.monotonic()
         found = studio_run_watch.projection(
             step=event.get("step", 0), first_step=first_step, total=event.get("total", 0), trained_tokens=event.get("trained_tokens", 0),
-            elapsed=event["elapsed_seconds"], token_budget=job.params.get("token_budget"), window_seconds=studio_run_watch.window_seconds(job.params))
+            elapsed=event["elapsed_seconds"], token_budget=job.params.get("token_budget"), window_seconds=studio_run_watch.window_seconds(job.params),
+            earlier_tokens=earlier[0], earlier_elapsed=earlier[1])
         if found:
             self._notify(job, found)
         else:
@@ -840,6 +841,7 @@ class Runner:
             self._save()
         started = time.monotonic()
 
+        earlier = [0, 0.]  # the tokens and seconds the attempts before a resume already used (from the "resumed" event)
         resumed_at = [0]  # the step this run began at (a resume), so the time per step ignores the steps an earlier run did
 
         def emit(event):
@@ -847,7 +849,9 @@ class Runner:
                 self._resume_note(job, event)
             if event.get("type") == "saving":  # the final checkpoint is being written: "Stop now" waits for it (up to save_ceiling)
                 self._saving_since = time.monotonic()
-            self._watch_event(job, event, resumed_at[0])
+            if event.get("type") == "resumed":
+                earlier[:] = [event.get("earlier_tokens") or 0, event.get("earlier_seconds") or 0.]
+            self._watch_event(job, event, resumed_at[0], earlier)
             if event.get("type") == "prepare":  # the text is being tokenized: no step yet, only how far along it is
                 self.progress.update(phase="preparing", prepare=event.get("percent", 0), prepare_phase=event.get("phase"))
             elif event.get("total"):
