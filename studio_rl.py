@@ -499,14 +499,12 @@ def measure(checkpoint, docs, problems, stop=None, heldout_conversations=None, s
     return {"bpc": studio_eval.corpus_bpc(scores) if docs else None, "conv_loss": conv_loss, "eos_rate": eos_rate, "pass_k": k, "pass_n": len(problems)}
 
 
-def verdict_for(trained, ok, before, after, checks):
+def verdict_for(trained, ok, checks):
     """The sentence a finished round shows. `trained` says what training did; the gate result decides whether it is claimed:
-    passed (as is), failed (naming the checks that did not hold) or not measured (no held-back text to compare against)."""
+    passed (as is) or failed (naming the checks that did not hold)."""
     if ok:
         return trained
-    if before.get("bpc") is None or after.get("bpc") is None:
-        return "Not checked: there is no held-back text to compare against, so Chat stays where it was."
-    failed = ", ".join(c["name"].lower() for c in checks if not c["ok"])
+    failed = ", ".join(c["name"].lower() for c in checks if c["ok"] is False)
     return f"Training finished, but the held-back checks did not pass ({failed}), so Chat stays where it was."
 
 
@@ -526,7 +524,7 @@ def number_of(job):
 def rows_needed(number, params):
     """The post_rows kinds round `number` reads when `params` does not already carry them (`_rows`): what the owner ships with a round
     that runs on another machine, whose stores hold none of it."""
-    kinds = {1: ("heldout_docs", "heldout_problems", "conversations"), 2: ("problems", "heldout_docs", "heldout_problems"),
+    kinds = {1: ("heldout_docs", "heldout_problems", "conversations", "heldout_conversations"), 2: ("problems", "heldout_docs", "heldout_problems"),
              3: ("heldout_docs", "heldout_problems"), 4: ("heldout_docs", "heldout_problems", "pairs")}[number]
     if number == 3:
         kinds += ("corrections",) if params.get("teacher_choice") == "correction" else () if "prompts" in params else ("conversations",)
@@ -576,8 +574,7 @@ def run_round(number, job, context, emit, stop, pause):
             return {"round": number, "ok": False, "checkpoint": checkpoint}
     docs, held = _rows(job, context, "heldout_docs", "heldout_docs"), _rows(job, context, "heldout_problems", "heldout_problems")
     import studio_eval
-    # conversations held back from training: their row kind is the gate issue's (#801); until it ships only a job's own params carry them
-    held_conversations = p.get("heldout_conversations")
+    held_conversations = _rows(job, context, "heldout_conversations", "heldout_conversations") if number == 1 else None   # round 1's chat checks
     try:   # held-back text is scored twice in all: here, where the bpc and the noise band come from the same per-document scores, and after training
         scores = doc_scores(checkpoint, docs, stop)
         band = studio_eval.band_from_scores(scores) if scores else None
@@ -622,8 +619,8 @@ def run_round(number, job, context, emit, stop, pause):
         after = measure(candidate, docs, held, stop, held_conversations)
     except studio_eval.Stopped:
         return {"round": number, "ok": False, "checkpoint": checkpoint, "stopped": True}
-    ok, checks = studio_gate.passes(before, after, band)
-    result = {"round": number, "ok": ok, "checks": checks, "verdict": verdict_for(verdict, ok, before, after, checks), "before": before, "after": after,
+    ok, checks = studio_gate.passes(before, after, band, number=number)
+    result = {"round": number, "ok": ok, "checks": checks, "verdict": verdict_for(verdict, ok, checks), "before": before, "after": after,
               "band": band, "checkpoint": candidate}
     if number == 2:   # groups that taught something: the share of reward groups with any spread
         result.update(groups=record.get("groups"), taught=record.get("taught"), probe=probe)

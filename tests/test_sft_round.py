@@ -74,10 +74,10 @@ class RoundOne(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def run_it(self, name, trained=None, rows=CONVERSATIONS, docs=(), params=None, measured=None, stop=None):
+    def run_it(self, name, trained=None, rows=CONVERSATIONS, docs=(), params=None, measured=None, stop=None, held=()):
         out = self.dir / name
         job = SimpleNamespace(id=name, params={"round": 1, "checkpoint": str(self.ckpt), "output_dir": str(out), **(params or {})})
-        context = SimpleNamespace(run_dir=self.dir / "runs", post_rows=lambda kind: list(rows) if kind == "conversations" else list(docs) if kind == "heldout_docs" else [])
+        context = SimpleNamespace(run_dir=self.dir / "runs", post_rows=lambda kind: list(rows) if kind == "conversations" else list(docs) if kind == "heldout_docs" else list(held) if kind == "heldout_conversations" else [])
         events = []
 
         def fake_train(cfg, examples, directory, **kwargs):
@@ -110,6 +110,13 @@ class RoundOne(unittest.TestCase):
         self.assertEqual(measure.call_args_list[-1].args[0], str(self.dir / "best" / "best.npz"))
         self.assertEqual(job.params["result"]["checkpoint"], done["checkpoint"])
 
+    def test_round_1_measures_the_held_back_conversations_and_the_gate_gets_its_number(self):
+        held = [{"user": "Copy: yes", "assistant": "yes"}]
+        with mock.patch.object(studio_rl.studio_gate if hasattr(studio_rl, "studio_gate") else __import__("studio_gate"), "passes", return_value=(True, [])) as gate:
+            _, _, _, measure, _ = self.run_it("heldconv", held=held)
+        self.assertEqual(measure.call_args_list[0].args[4], held)
+        self.assertEqual(gate.call_args.kwargs["number"], 1)
+
     def test_the_candidate_is_the_runs_checkpoint_without_a_best(self):
         done, _, _, _, _ = self.run_it("nobest")
         self.assertEqual(done["checkpoint"], str(self.ckpt))
@@ -134,18 +141,15 @@ class RoundOne(unittest.TestCase):
 
     def test_the_verdict_follows_the_gate(self):
         check = {"name": "Held-back text: error did not rise", "detail": "", "ok": False}
-        passed = studio_rl.verdict_for("Answers now look like answers.", True, {"bpc": 2.}, {"bpc": 2.}, [])
-        self.assertEqual(passed, "Answers now look like answers.")
-        failed = studio_rl.verdict_for("Answers now look like answers.", False, {"bpc": 2.318}, {"bpc": 2.673}, [check])
+        self.assertEqual(studio_rl.verdict_for("Answers now look like answers.", True, []), "Answers now look like answers.")
+        failed = studio_rl.verdict_for("Answers now look like answers.", False, [check, dict(check, name="Other", ok=None)])
         self.assertNotIn("look like answers", failed)
         self.assertIn("held-back text: error did not rise", failed)
-        unmeasured = studio_rl.verdict_for("Answers now look like answers.", False, {"bpc": None}, {"bpc": None}, [check])
-        self.assertTrue(unmeasured.startswith("Not checked"))
-        self.assertNotEqual(failed, unmeasured)
+        self.assertNotIn("other", failed)
 
     def test_round_1_s_verdict_in_the_gate_event_is_the_failed_one_when_the_gate_fails(self):
-        worse = iter([{"bpc": 2.318, "conv_loss": None, "eos_rate": None, "pass_k": 0, "pass_n": 0},
-                      {"bpc": 2.673, "conv_loss": None, "eos_rate": None, "pass_k": 0, "pass_n": 0}])
+        worse = iter([{"bpc": 2.318, "conv_loss": 3., "eos_rate": .5, "pass_k": 0, "pass_n": 0},
+                      {"bpc": 2.673, "conv_loss": 1., "eos_rate": .9, "pass_k": 0, "pass_n": 0}])
         with mock.patch.object(studio_eval, "band_from_scores", return_value=(2.3, 2.33)):   # the band capped at 2.330, as in the audit
             done, job, _, _, events = self.run_it("verdict", docs=["Copy: yes", "Copy: no"], measured=lambda *a, **k: next(worse))
         self.assertFalse(done["ok"])

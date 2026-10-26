@@ -134,7 +134,7 @@ class OwnerDispatch(qc.OwnerSide):
         self.assertEqual(studio_rl.rows_needed(4, {}), ["heldout_docs", "heldout_problems", "pairs"])
         self.assertEqual(studio_rl.rows_needed(3, {"teacher_choice": "correction"}), ["heldout_docs", "heldout_problems", "corrections"])
         self.assertEqual(studio_rl.rows_needed(3, {"prompts": ["x"], "heldout_docs": []}), ["heldout_problems"])
-        self.assertEqual(studio_rl.rows_needed(1, {"conversations": []}), ["heldout_docs", "heldout_problems"])
+        self.assertEqual(studio_rl.rows_needed(1, {"conversations": []}), ["heldout_docs", "heldout_problems", "heldout_conversations"])
 
     def test_a_round_whose_checkpoint_cannot_be_found_waits_with_the_reason(self):
         job = self.runner.enqueue(Job("post_round", "Round 1", params={"round": 1, "checkpoint": str(self.root / "gone.npz")}))
