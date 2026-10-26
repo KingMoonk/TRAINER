@@ -170,7 +170,7 @@ class Kinds(unittest.TestCase):
         shares = {i: dk.text_characters(ws, [i]) for i in (a, b)}
         self.assertEqual(shares[a], shares[b])
         first = list(itertools.islice(dk.interleaved_examples(ws, [a, b], shares), 20))
-        self.assertEqual(sorted(e["datasetId"] for e in first), [a] * 10 + [b] * 10)
+        self.assertEqual([sum(e["datasetId"] == i for e in first) for i in (a, b)], [10, 10])
 
     def test_sqlite_storage_problems(self):
         ws = workspace()
