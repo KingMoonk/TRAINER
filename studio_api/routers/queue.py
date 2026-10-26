@@ -77,6 +77,15 @@ class PlanModel(BaseModel):
     chat_follows_best: bool = True
 
 
+class NoticeModel(Model):
+    """One thing the running job reports while it goes (studio_run_watch): its batch halved after running out of memory, free disk or RAM
+    below what it needs, or a projected end past the time window."""
+
+    kind: Literal["oom", "disk", "ram", "overrun"]
+    text: str
+    at: float  # epoch seconds
+
+
 class QueueStateModel(Model):
     """studio_ia.services.QueueState."""
 
@@ -95,6 +104,7 @@ class QueueStateModel(Model):
     up_next: list[JobModel] = []
     plan: PlanModel = PlanModel()
     failed: list[JobModel] = []  # jobs that ended failed (the last few), until removed
+    notices: list[NoticeModel] = []  # what the running job reports while it goes
 
 
 class Outlook(BaseModel):

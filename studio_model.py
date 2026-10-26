@@ -1093,7 +1093,8 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
                     torch.mps.empty_cache()
                 prefetcher.discard()  # a batch drawn ahead has the old size
                 shape[:] = [shape[0] // 2, shape[1] * 2]  # ponytail: an odd batch loses a sample per halving; pad instead if it matters
-                emit({"type": "info", "text": f"Out of memory at step {next_step}: batch size now {shape[0]}, accumulation {shape[1]}."})
+                emit({"type": "info", "kind": "oom", "step": next_step, "batch": shape[0], "accumulation": shape[1],
+                      "text": f"Out of memory at step {next_step}: batch size now {shape[0]}, accumulation {shape[1]}."})
             if not math.isfinite(loss):
                 raise ValueError("Non-finite loss. Reduce the learning rate.")
             payload = model.telemetry(model.last_tape) if sample_telemetry and model.last_tape is not None else None
