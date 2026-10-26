@@ -60,6 +60,17 @@ def ignores_stop(job, context, emit, stop, pause):
     time.sleep(120)
 
 
+def ignores_stop_with_run(job, context, emit, stop, pause):
+    """Stuck mid-run: run.json says training and a corpus spool sits in the output folder, as after a hard kill."""
+    out = Path(context.root) / "out"
+    out.mkdir(exist_ok=True)
+    (out / "run.json").write_text(json.dumps({"status": "training", "step": 3}))
+    (out / "corpus-abc.spool").write_bytes(b"rows")
+    emit({"type": "metric", "step": 1, "total": 10 ** 6})
+    (Path(context.root) / "stuck").write_text(str(os.getpid()))
+    time.sleep(120)
+
+
 def dies(job, context, emit, stop, pause):
     emit({"type": "metric", "step": 1, "total": 2})
     os._exit(7)
@@ -204,12 +215,12 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual((self.root / "stopped").read_text(), "yes")  # the handler saw the stop and returned: no kill
         self.assertEqual(job.error, "")
 
-    def start_and_remove(self, handler, grace, kind="quicktest"):
+    def start_and_remove(self, handler, grace, kind="quicktest", **params):
         runner = Runner(self.root / "data" / "queue.json", {kind: handler}, tick=.05)
         runner.set_plan(ANY)
         runner.kill_grace = grace
         self.addCleanup(runner.shutdown)
-        job = runner.enqueue(Job(kind, "t"))
+        job = runner.enqueue(Job(kind, "t", params=params))
         runner.start()
         self.assertTrue(wait(lambda: runner.handles and runner.progress.get("step")))
         return runner, job, next(iter(runner.handles))
@@ -224,6 +235,28 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(job.error, "")  # a deliberate kill is not a crash
         self.assertTrue(handle.done.is_set())
         self.assertIsNotNone(handle.proc.poll())  # no process left behind
+
+    def test_a_killed_worker_leaves_its_run_stopped_and_no_spool(self):
+        runner, job, handle = self.start_and_remove(ignores_stop_with_run, grace=.5, output_dir=str(self.root / "out"))
+        self.assertTrue(wait(lambda: (self.root / "stuck").exists()))
+        runner.remove(job.id)
+        self.assertTrue(wait(lambda: job.status == "stopped", 30))
+        out = self.root / "out"
+        record = json.loads((out / "run.json").read_text())
+        self.assertEqual((record["status"], record["interrupted"]), ("stopped", True))  # without a queue restart
+        self.assertFalse(list(out.glob("corpus-*.spool")))
+
+    def test_a_worker_that_stops_normally_keeps_its_files(self):
+        out = self.root / "out"
+        out.mkdir()
+        (out / "run.json").write_text(json.dumps({"status": "training"}))
+        (out / "corpus-abc.spool").write_bytes(b"rows")
+        runner, job, handle = self.start_and_remove(until_stopped, grace=30, output_dir=str(out))
+        runner.remove(job.id)
+        self.assertTrue(wait(lambda: job.status == "stopped"))
+        self.assertFalse(handle._killed)
+        self.assertTrue((out / "corpus-abc.spool").exists())  # the worker's own cleanup owns these, not the queue
+        self.assertEqual(json.loads((out / "run.json").read_text())["status"], "training")
 
     def test_stop_now_does_not_end_a_worker_that_stops_in_time(self):
         runner, job, handle = self.start_and_remove(until_stopped, grace=30)

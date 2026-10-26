@@ -153,6 +153,15 @@ def reconcile_run(folder):
     return True
 
 
+def clear_spools(folder):
+    """Delete the corpus spools (`corpus-*.spool`, studio_corpus) in `folder`: a worker ended hard never ran the finalizer that removes them."""
+    for spool in Path(folder).glob("corpus-*.spool"):
+        try:
+            spool.unlink()
+        except OSError:
+            pass
+
+
 def in_window(plan, hour):
     if plan.hours == "any":
         return True
@@ -793,6 +802,12 @@ class Runner:
             if not handle.done.is_set():
                 self.wake.wait(wait)
         platform_helpers.release_awake(awake)
+        if handle and handle._killed:  # a hard kill skips the worker's own cleanup: mark its run stopped and drop its spool now
+            with self.lock:
+                job.params.update(handle.params)
+            for folder in run_folders(self.root, job):
+                reconcile_run(folder)
+                clear_spools(folder)
         with self.lock:
             if handle:
                 job.params.update(handle.params)
