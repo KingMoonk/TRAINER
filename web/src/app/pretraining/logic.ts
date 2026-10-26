@@ -23,6 +23,8 @@ export function rowChoices(saved: string | null): string[] {
   return saved && !(ROWS as readonly string[]).includes(saved) ? [...ROWS, saved].sort((a, b) => Number(a) - Number(b)) : [...ROWS];
 }
 export const HOLD = ["2%", "5%", "10%"] as const;
+export const CHAT = { Off: 0, "5% chat": 0.05, "10% chat": 0.1 } as const; // conversations mixed into the text, as a share of its characters; Off is the default
+export type Chat = keyof typeof CHAT;
 export const LENGTHS = { Short: 1, Medium: 2, Long: 4 } as const; // passes over the chosen text
 export type Length = keyof typeof LENGTHS;
 export const PREVIEW_ROWS = 6; // rows of the size preview the page draws
@@ -43,6 +45,7 @@ export function planBody(c: {
   stopWhenFlat?: StopWhenFlat;
   fromVersion?: number | null; // the earlier version a catch-up starts from (one of the plan's sources); null: the server's default
   keepMine?: boolean; // "use my settings anyway": the server keeps the batch and token budget where the run only fits tightly or is slow
+  chat?: Chat; // conversations mixed into the text; Off sends 0
 }) {
   return {
     version: c.version,
@@ -58,6 +61,7 @@ export function planBody(c: {
     from_version: c.fromVersion ?? null,
     window_hours: HOURS[c.hours ?? DEFAULT_HOURS], // the longest the run may take: the server cuts a token budget that needs longer
     keep_my_settings: c.keepMine ?? false,
+    chat_share: CHAT[c.chat ?? "Off"],
   };
 }
 export type PlanBody = ReturnType<typeof planBody>;

@@ -14,10 +14,12 @@ from studio_api.app import get_services
 from studio_api.models_queue_data import JobRecordModel, Model, submit
 from studio_ia import pretraining_plan as plan
 from studio_ia import sizing
+import studio_data_kinds
 import studio_fit
 from studio_ia.services import if_added
 from studio_spec import RUN_INTS
 
+CHAT_SHARE_MAX = studio_data_kinds.CHAT_SHARE_MAX
 MAX_STEPS = RUN_INTS["steps"][1]  # the most steps a run may have (validate_spec refuses more)
 
 router = APIRouter(prefix="/pretraining", tags=["pretraining"])
@@ -130,6 +132,7 @@ class PlanRequest(BaseModel):
     plateau: bool | None = None  # end the run when its validation loss goes flat: true always, false never, null for runs over an hour
     from_version: int | None = None  # the version whose best checkpoint a catch-up starts from (one of the plan's `sources`); null: the default
     window_hours: float = Field(studio_fit.DEFAULT_WINDOW_HOURS, gt=0, le=24 * 365)  # the longest the run may take; a token budget that needs longer is cut to fit
+    chat_share: float = Field(0.0, ge=0.0, le=CHAT_SHARE_MAX)  # conversations mixed into the text as this share of its characters; 0 (off) is the default
     keep_my_settings: bool = False  # "use my settings anyway": keep the batch and token budget when the run only fits tightly or is only slow
 
 
@@ -492,13 +495,16 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
               else "The size of the chosen text is not known, so the steps cannot be worked out." if not steps else "")
     if fitted is not None and fitted["fit"].refusal and not reason:
         reason = fitted["fit"].refusal
+    chat_sets = [s["id"] for s in services.conversation_sets()] if body.chat_share > 0 else []
+    if body.chat_share > 0 and not chat_sets and not reason:
+        reason = "A chat share needs conversations to mix in. Add some in Your data, or turn the chat share off."
     if fitted is not None:
         config = fitted["fit"].config
     job = None
     rule = plan.plateau_rule(steps, steps * measured["seconds_per_step"] / 3600 if steps and measured else None, body.plateau)
     if not reason:
         label, job_params = plan.job_params(v, parent, ids, mode, body.rows, body.hold, steps, pieces,
-                                            plan.user_text(_sets(services), ids), rule, source)
+                                            plan.user_text(_sets(services), ids), rule, source, body.chat_share, chat_sets)
         if fitted is not None:
             job_params.update(fitted["fit"].job_params())
             job_params[studio_fit.RECORD] = fitted["record"]

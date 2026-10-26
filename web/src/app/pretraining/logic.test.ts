@@ -276,6 +276,12 @@ describe("the fitted-to-this-computer card", () => {
     expect(planBody({ ...base, hours: "1 h" })).toMatchObject({ hours: 1, window_hours: 1 });
     expect(planBody({ ...base, hours: "3 days" })).toMatchObject({ hours: 72, window_hours: 72 });
   });
+  it("sends no chat share unless one is chosen", () => {
+    const base = { version: 1, datasetIds: ["a"], mode: "from_scratch" as const, rows: "16", hold: "5%" as const, length: "Medium" as const };
+    expect(planBody(base).chat_share).toBe(0);
+    expect(planBody({ ...base, chat: "5% chat" }).chat_share).toBe(0.05);
+    expect(planBody({ ...base, chat: "10% chat" }).chat_share).toBe(0.1);
+  });
   it("sends the override with the plan request", () => {
     const base = { version: 1, datasetIds: ["a"], mode: "from_scratch" as const, rows: "16", hold: "5%" as const, length: "Medium" as const };
     expect(planBody(base).keep_my_settings).toBe(false);

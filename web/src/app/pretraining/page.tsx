@@ -12,7 +12,7 @@ import { useApiEvents } from "../your-data/events";
 import { runJob, type JobLike } from "../your-data/jobs";
 import { BatchesCard, EnoughCard, SetsCard } from "./cards";
 import { T } from "./copy";
-import { DEFAULT_HOURS, HOLD, PREVIEW_ROWS, DEFAULT_ROWS, chosenIds, errorText, planBody, type Hours, type Length, type Preview, type StepRate, savedRows, type StopWhenFlat } from "./logic";
+import { DEFAULT_HOURS, HOLD, PREVIEW_ROWS, DEFAULT_ROWS, chosenIds, errorText, planBody, type Chat, type Hours, type Length, type Preview, type StepRate, savedRows, type StopWhenFlat } from "./logic";
 import { LrCard } from "./lr-card";
 import { ScalingCard } from "./scaling-card";
 import { SizingCard } from "./sizing-card";
@@ -26,6 +26,7 @@ export default function PretrainingPage() {
   const [mode, setMode] = useState<"catch_up" | "from_scratch">("catch_up");
   const [hold, setHold] = useState<(typeof HOLD)[number]>("5%");
   const [length, setLength] = useState<Length>("Medium");
+  const [chat, setChat] = useState<Chat>("Off"); // off unless the person mixes some conversations in
   const [hours, setHours] = useState<Hours>(DEFAULT_HOURS);
   const [stopWhenFlat, setStopWhenFlat] = useState<StopWhenFlat>("Auto");
   const [keepMine, setKeepMine] = useState(false); // "use my settings anyway", on the fitted-to-this-computer card
@@ -39,7 +40,7 @@ export default function PretrainingPage() {
   const sets = useQuery({ queryKey: ["pretraining", "text_sets"], queryFn: () => unwrap(api.GET("/pretraining/text_sets")) });
   const ids = useMemo(() => chosenIds(sets.data, use), [sets.data, use]);
 
-  const body = planBody({ version: null, datasetIds: ids, mode, rows, hold, length, hours, steps: chosenSteps, stopWhenFlat, keepMine });
+  const body = planBody({ version: null, datasetIds: ids, mode, rows, hold, length, hours, steps: chosenSteps, stopWhenFlat, keepMine, chat });
   const plan = useQuery({
     queryKey: ["pretraining", "plan", body],
     queryFn: () => unwrap(api.POST("/pretraining/plan", { body })),
@@ -136,7 +137,7 @@ export default function PretrainingPage() {
       <SetsCard sets={sets.data} loading={sets.isLoading} chosen={ids} onToggle={toggle} />
       <CollectionCard kind="text" description={T.collectionDesc} />
       <EnoughCard plan={plan.data} estimating={estimating} />
-      <BatchesCard plan={plan.data} preview={cached.data} estimating={estimating} rows={rows} savedRows={saved} hold={hold} onRows={setRows} onHold={setHold} />
+      <BatchesCard plan={plan.data} preview={cached.data} estimating={estimating} rows={rows} savedRows={saved} hold={hold} chat={chat} onRows={setRows} onHold={setHold} onChat={setChat} />
       <SizingCard plan={plan.data} estimating={estimating} hours={hours} onHours={setHours} chosenSteps={chosenSteps} onUseSteps={setChosenSteps} />
       <ScalingCard plan={plan.data} keepMine={keepMine} onKeepMine={setKeepMine} />
       <TrainCard

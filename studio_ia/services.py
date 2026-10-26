@@ -2273,7 +2273,10 @@ class WorkspaceServices(Services):
         """The rows examples(params) returns, as an iterator that holds one row at a time (disk sets are read in batches), with
         `expected_characters`, the text's size from the stored counts. studio_model.train reads it as a stream, so a text of billions of
         characters never sits in memory. When params["token_budget"] is smaller than the text, the sets are mixed in proportion to their
-        size (studio_data_kinds.interleaved_examples) so the budget does not use up the first sets only; without one the order is by set. The first time (no data/heldout.json yet) the held-back split is made first, as a stream too."""
+        size (studio_data_kinds.interleaved_examples) so the budget does not use up the first sets only; without one the order is by set. The first time (no data/heldout.json yet) the held-back split is made first, as a stream too.
+
+        With params["chat_share"] above 0 the conversations of params["chat_datasets"] are mixed in, spread through the text, so that
+        they are that share of the stream's characters (see _chat_mix); the stream is then always interleaved. A share of 0 changes nothing."""
         import studio_corpus
         import studio_data_kinds
         ids = params.get("datasets") or [d["id"] for d in self.workspace.state["datasets"]]
@@ -2282,12 +2285,48 @@ class WorkspaceServices(Services):
         good_only = bool(params.get("reviewed_only"))
         total = studio_data_kinds.text_characters(self.workspace, ids, exclude=held)
         budget = studio_corpus.budget_chars(params.get("token_budget"))
+        chat, chat_total = self._chat_mix(params, total)
         source = studio_data_kinds.pretraining_examples(self.workspace, ids)
-        if budget is not None and len(ids) > 1 and budget < total:
+        if chat:
+            source = studio_data_kinds.interleaved_examples(self.workspace, ids, {i: studio_data_kinds.text_characters(self.workspace, [i], exclude=held) for i in ids},
+                                                            chat=chat, good_only=good_only)
+            total += chat_total
+        elif budget is not None and len(ids) > 1 and budget < total:
             # the budget ends the read before the last sets: draw from every set in proportion to its text instead
             source = studio_data_kinds.interleaved_examples(self.workspace, ids, {i: studio_data_kinds.text_characters(self.workspace, [i], exclude=held) for i in ids})
-        rows = (e for e in source if e.get("text") and e["text"] not in held and (not good_only or e.get("quality") == "Good"))
+        rows = (e for e in source if (e["text"] not in held and (not good_only or e.get("quality") == "Good") if e.get("text") else bool(chat)))
         return studio_corpus.RowStream(rows, total)
+
+    def _chat_mix(self, params, text_characters):
+        """({conversation set id: characters of conversations to give}, the characters they hold) for a pretraining run with a chat
+        share, ({}, 0) without one. The
+        share (params["chat_share"], at most CHAT_SHARE_MAX) is of the stream: chat / (text + chat), split evenly over
+        params["chat_datasets"]. The conversations it will read are written to data/chat_mix.json before the run reads any, so Round 1
+        (post_rows) leaves them out and still measures the format on conversations the model has not seen. Held-back conversations are
+        never in the mix (studio_data_kinds.chat_examples)."""
+        import studio_corpus
+        import studio_data_kinds
+        share = min(max(float(params.get("chat_share") or 0), 0.), studio_data_kinds.CHAT_SHARE_MAX)
+        sets = [i for i in dict.fromkeys(params.get("chat_datasets") or []) if self.workspace._dataset(i)]
+        if not share or not sets:
+            return {}, 0
+        each = share / (1 - share) * text_characters / len(sets)
+        good_only = bool(params.get("reviewed_only"))
+        used, sizes = [], {}
+        for i in sets:
+            sizes[i] = 0
+            for e in studio_data_kinds.chat_examples(self.workspace, i, each, good_only):   # one row at a time: only the ids stay
+                used.append(e["id"])
+                sizes[i] += studio_corpus.characters_of(e)
+        self._save_json("chat_mix.json", {"ids": sorted({*self._chat_mix_ids(), *used})})
+        return {i: each for i in sets if sizes[i]}, sum(sizes.values())
+
+    def _chat_mix_ids(self):
+        """The ids of every conversation a pretraining run has read or may read as chat (data/chat_mix.json)."""
+        try:
+            return frozenset(self._json("chat_mix.json", {}).get("ids") or [])
+        except (OSError, ValueError, AttributeError):
+            return frozenset()
 
     def conversations(self, params):
         """The conversations of params["datasets"] (default: every set) that can make a teacher's prompt: a run with a teacher takes its
@@ -3015,6 +3054,8 @@ class WorkspaceServices(Services):
                 rows = [e for e in self.workspace.iter_examples(d["id"]) if dk.stamp(e)["kind"] == want and bool(e["holdout"]) == held]
             out.extend({"prompt": e.get("user", ""), "rule": dk.rule_of(e), "params": e.get("params") or (e.get("metadata") or {}).get("params", {})}
                        if want == "problems" else e for e in rows if not dk.is_draft(e))   # synthetic drafts are not the user's data
+        if want == "conversations" and (mixed := self._chat_mix_ids()):   # pretraining read these as chat: Round 1 must not train on them
+            out = [e for e in out if e.get("id") not in mixed]
         if held:  # a held-back problem whose text also appears in training would be answered from memory: leave it out and say how many
             import studio_decontam
             out, report = studio_decontam.exclude_overlap(out, self._train_index(), (lambda row: row["prompt"]) if want == "problems" else _doc)

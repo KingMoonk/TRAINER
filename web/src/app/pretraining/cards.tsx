@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { T, fill } from "./copy";
-import { END, HOLD, PALETTE, enoughView, rowChoices, perStepLine, readoutView, selectedLine, type Plan, type Preview, type TextSet } from "./logic";
+import { CHAT, END, HOLD, PALETTE, enoughView, rowChoices, perStepLine, readoutView, selectedLine, type Chat, type Plan, type Preview, type TextSet } from "./logic";
 import { optionBox } from "@/components/option-box";
 
 /** A row of choices (rows per step, held back, how long) as a labelled radio group. */
@@ -160,8 +160,10 @@ export function BatchesCard({
   rows,
   savedRows,
   hold,
+  chat,
   onRows,
   onHold,
+  onChat,
 }: {
   plan: Plan | undefined;
   preview: Preview | null | undefined;
@@ -169,8 +171,10 @@ export function BatchesCard({
   rows: string;
   savedRows: string | null;
   hold: (typeof HOLD)[number];
+  chat: Chat;
   onRows: (v: string) => void;
   onHold: (v: (typeof HOLD)[number]) => void;
+  onChat: (v: Chat) => void;
 }) {
   const first = preview?.first_rows ?? [];
   return (
@@ -184,6 +188,7 @@ export function BatchesCard({
         {estimating ? <Skeleton className="h-24 w-full" aria-label={T.estimating} /> : first.length ? <RowsGrid rows={first} /> : <p className="text-sm text-muted-foreground">{T.noRowsYet}</p>}
         <Choice label={T.rowsPerStep} hint={T.rowsDesc} value={rows} items={rowChoices(savedRows)} onChange={onRows} />
         <Choice label={T.heldBack} hint={T.heldBackDesc} value={hold} items={HOLD} onChange={onHold} />
+        <Choice label={T.chatShare} hint={T.chatShareHint} value={chat} items={Object.keys(CHAT) as Chat[]} onChange={onChat} />
         <p className="text-sm text-muted-foreground" data-testid="per-step">
           {perStepLine(plan, estimating)}
         </p>

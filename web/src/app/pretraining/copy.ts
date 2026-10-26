@@ -46,6 +46,9 @@ export const T = {
   rowsDesc: "More rows: steadier learning, more memory.",
   heldBack: "Held back for testing",
   heldBackDesc: "Split by example, exact duplicates removed, never trained on.",
+  chatShare: "Chat in the mix",
+  chatShareHint:
+    "Off by default. Mixes a small share of your conversations into the text, so the model has seen the chat format before Post-training round 1. About 5% is suggested: in one tiny test run on a CPU it made the later chat round learn faster and stop its answers cleanly, with the text quality unchanged. That test was small and has not been repeated at real scale. The conversations used here are left out of Round 1 and of the held-back ones, so Round 1 still measures the format.",
   perStepPieces: "{pieces} pieces per step · one pass over your data ≈ {passes} steps",
   perStepOnly: "{pieces} pieces per step",
   train: "Train",

@@ -206,6 +206,17 @@ describe("Pretraining page", () => {
     expect(screen.getByRole("button", { name: "Add to the queue" })).toBeDisabled();
   });
 
+  test("the chat share is off until chosen, says what it is based on, and is sent with the plan", async () => {
+    const state = server();
+    const user = userEvent.setup();
+    renderPage(<PretrainingPage />, { route: "/pretraining/" });
+    expect(await screen.findByRole("radio", { name: "Off", checked: true })).toBeVisible();
+    expect(screen.getByText(/tiny test run on a CPU/)).toBeVisible();
+    await waitFor(() => expect(state.plans.at(-1)).toMatchObject({ chat_share: 0 }));
+    await user.click(screen.getByRole("radio", { name: "5% chat" }));
+    await waitFor(() => expect(state.plans.at(-1)).toMatchObject({ chat_share: 0.05 }));
+  });
+
   test("rows per step start at the batch size the newest version saved, and the person can still pick another", async () => {
     const state = server({ batchSize: 24 });
     const user = userEvent.setup();

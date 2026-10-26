@@ -66,6 +66,23 @@ class PretrainingRouterTests(ApiCase):
     def plan(self, **body):
         return self.call("POST", "/pretraining/plan", json={"dataset_ids": ["Your files"], **body})
 
+    def test_a_chat_share_is_off_by_default_and_recorded_on_the_job_when_chosen(self):
+        from unittest import mock
+        self.save_versions()
+        plain = self.plan()["job"]
+        self.assertNotIn("chat_share", plain["params"])
+        self.assertNotIn("chat", plain["label"])
+        with mock.patch.object(self.services, "conversation_sets", create=True, return_value=[{"id": "talk", "name": "Talk", "count": 9}]):
+            job = self.plan(chat_share=0.05)["job"]
+            self.assertEqual((job["params"]["chat_share"], job["params"]["chat_datasets"]), (0.05, ["talk"]))
+            self.assertEqual(job["label"], "Version 2 catch-up, 5% chat")
+            self.call("POST", "/pretraining/plan", 422, json={"dataset_ids": ["Your files"], "chat_share": 0.5})
+        with mock.patch.object(self.services, "conversation_sets", create=True, return_value=[]):
+            refused = self.plan(chat_share=0.05)
+            self.assertFalse(refused["can_add"])
+            self.assertIn("conversations", refused["reason"])
+            self.assertIsNone(refused["job"])
+
     def test_the_text_sets_start_ticked_unless_held_out(self):
         sets = self.call("GET", "/pretraining/text_sets")
         self.assertTrue(sets)
