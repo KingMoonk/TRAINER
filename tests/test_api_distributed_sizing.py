@@ -35,7 +35,8 @@ def peer(address, profile, **kw):
 
 
 def big_design():
-    spec = default_spec()
+    spec = default_spec(device="cpu")
+    spec["train"]["precision"] = {"id": "bf16"}  # default_spec() would pick it by the host's GPU, and the memory per row with it (#746)
     spec["dims"].update(d_model=1024, n_layer=24, n_ctx=1024)
     spec["block"]["mixer"]["config"]["heads"] = 16
     return spec
