@@ -1,7 +1,7 @@
 """Start from a pretrained open model: download OpenAI's GPT-2 (124M) and turn it into an ordinary studio checkpoint.
 
 Window-free and dependency-free (urllib, hashlib, numpy). The result is a normal `.npz` checkpoint with the GPT-2 design, so it is
-a version like any other: continue text with it, evaluate it, fine-tune it (a post-training round, a curriculum stage, or LoRA
+a version like any other: continue text with it, evaluate it, fine-tune it (a post-training round, or LoRA
 through `train.run.lora`) and export it again. It is a base model: it continues text but does not answer as a chat until it is
 fine-tuned, because it has never seen the USER and ASSISTANT tokens.
 
