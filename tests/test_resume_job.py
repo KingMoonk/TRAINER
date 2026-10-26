@@ -1,9 +1,11 @@
 """studio_jobs.pretrain with params["resume"]: a job placed again on the node that holds its full checkpoint continues with its optimizer."""
+import errno
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import studio_jobs
 import studio_model
@@ -111,6 +113,42 @@ class ResumeJob(unittest.TestCase):
             last = interrupted(root)
             with self.assertRaisesRegex(ValueError, "Resume must preserve"):
                 run_job(root, "second", [], resume=str(last), resume_steps=TINY["steps"], config=dict(TINY, learning_rate=.01))
+
+    def resume_failing_with(self, error, stop=None):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            last = interrupted(root)
+            events, trained = [], []
+            job = SimpleNamespace(id="second", kind="pretrain", params={"config": dict(TINY), "examples": EXAMPLES, "output_dir": str(root / "second"),
+                                                                       "resume": str(last), "resume_steps": TINY["steps"], "mode": "catch_up",
+                                                                       "init_from": str(last)})
+
+            def train(*args, **kwargs):
+                trained.append(kwargs.get("resume"))
+                if kwargs.get("resume") is not None:
+                    if stop is not None:
+                        stop.set()
+                    raise error
+                return {}
+            with mock.patch.object(studio_model, "train", train):
+                try:
+                    studio_jobs.pretrain(job, SimpleNamespace(run_dir=str(root)), events.append, stop, None)
+                except Exception as exc:
+                    return events, trained, exc
+            return events, trained, None
+
+    def test_a_stop_during_resume_preparation_ends_the_job_without_a_refusal_or_a_fresh_start(self):
+        events, trained, raised = self.resume_failing_with(InterruptedError("stopped"), threading.Event())
+        self.assertIsInstance(raised, InterruptedError)
+        self.assertFalse([e for e in events if e["type"] == "resume_refused"])
+        self.assertEqual(len(trained), 1)  # only the resume attempt, no training from step 0
+
+    def test_a_full_disk_during_resume_fails_the_job_with_its_error_and_does_not_train_fresh(self):
+        events, trained, raised = self.resume_failing_with(OSError(errno.ENOSPC, "No space left on device"))
+        self.assertIsInstance(raised, OSError)
+        self.assertIn("No space left", str(raised))
+        self.assertFalse([e for e in events if e["type"] == "resume_refused"])
+        self.assertEqual(len(trained), 1)
 
 
 if __name__ == "__main__":
