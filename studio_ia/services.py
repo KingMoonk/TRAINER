@@ -451,6 +451,15 @@ class Services:
         """studio_backend.gpu_status(): {available, kind, name, ...} of the GPU this computer offers, or None when it cannot say."""
         return None
 
+    def hardware_profile(self):
+        """studio_fit.Profile of this computer as it is now (GPU memory total and free, free RAM and disk, cores, the newest measured
+        speed), or None when it cannot say. The free figures are read on each call, so a plan or a start decides on fresh ones."""
+        return None
+
+    def memory_share(self):
+        """The part of the device's memory the queue's plan lets a job take (studio_queue.MEMORY)."""
+        return 1.
+
     def continue_run(self, number, kind, steps, dataset_ids=(), width=None, layers=None, spec=None, rows=16, hold=.05):
         """Queue a pretrain job that continues version `number`'s newest run (studio_ia.continue_run): kind "same" adds `steps` steps on
         the same data, "new_data" adds them on `dataset_ids` (same weights, optimizer and step), "grow" trains a bigger design
@@ -768,6 +777,8 @@ class FakeServices(Services):
         self.heldout_docs: list = []  # the held-back text
         self.live: list[dict] = []  # a test's runs in progress: [{version, step, total, saved_at, file}]
         self.reviewed_text = True  # whether the text sets hold an example marked Good
+        self.hardware = None  # a studio_fit.Profile a test gives the plan; None: the plan does not scale (as `studio_api --fake`)
+        self.share = 1.  # what memory_share answers
         self.conversations_in_text = 40  # how many conversations a cluster run's teacher can answer are in the data
 
     def inspect_landscape(self, version, snapshot=None, mode="random", grid=21, span=1.0, seed=0, live=False, new_anchor=False, stop=None):
@@ -802,6 +813,12 @@ class FakeServices(Services):
 
     def _heldout(self):
         return self.heldout_docs
+
+    def hardware_profile(self):
+        return self.hardware
+
+    def memory_share(self):
+        return self.share
 
     def has_reviewed_text(self, dataset_ids):
         return self.reviewed_text
@@ -1591,6 +1608,7 @@ class WorkspaceServices(Services):
     auto_bench = True  # a version that gets weights is scored on the frozen suite by itself (_bench_later); a test may turn it off
 
     def __init__(self, workspace):
+        import studio_fit
         import studio_jobs
         import studio_queue
 
@@ -1601,7 +1619,8 @@ class WorkspaceServices(Services):
         self.runner = studio_queue.Runner(self.root / "data" / "queue.json", studio_jobs.HANDLERS,
                                           prepare=lambda job: studio_jobs.prepare(job, self),
                                           ledger=self.ledger, make_room=self.evict_oldest_chat,
-                                          on_start=self.chat_job_started, on_end=self.chat_job_ended)
+                                          on_start=self.chat_job_started, on_end=self.chat_job_ended,
+                                          profile=lambda: studio_fit.hardware_profile(self.root))
         self.runner.subscribe(self.emit)
         self.runner.subscribe(self._record_job)
         for job in self.runner.ended_on_load:  # a distributed run the restart could not resume: its version is not training any more
@@ -2655,6 +2674,17 @@ class WorkspaceServices(Services):
             return gpu_status()
         except Exception:  # noqa: BLE001 - a broken driver is "no GPU" here
             return None
+
+    def hardware_profile(self):
+        import studio_fit
+        try:
+            return studio_fit.hardware_profile(self.root)
+        except Exception:  # noqa: BLE001 - a machine that cannot be measured is planned unscaled, as before
+            return None
+
+    def memory_share(self):
+        import studio_queue
+        return studio_queue.MEMORY.get(self.runner.plan.memory, 1.)
 
     def _speed(self, read_metrics):
         """Pieces per second of the newest run that logged one (for the time estimate)."""

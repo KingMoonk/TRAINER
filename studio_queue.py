@@ -22,6 +22,7 @@ KINDS = ("pretrain", "quicktest", "compare", "post_round", "restore_answers", "c
 MEMORY = {"half": .5, "most": .75, "all": 1.}
 QUEUED = ("waiting", "held")  # jobs listed under Up next, in order; only "waiting" ones are picked to run
 SIZING_PERCENT = "sizing_percent"  # with SIZING: how far the size of the text is worked out, in percent (set in memory; not saved on its own)
+SCALED_NOTE = "Scaled to this computer:"  # starts the part of a pretrain job's note the queue writes from studio_fit; rewritten at each start
 SIZING = "sizing"  # a param of a job added before the size of its text was known: it keeps its place but is not run until fill() gives its steps
 FAILED_SHOWN = 5
 MIN_FREE = 2 * 2 ** 30  # a job needs at least this much free disk to start
@@ -188,9 +189,10 @@ class Runner:
     the other. All three run on the runner thread, never the Tk one, and a failing hook never stops the queue."""
 
     def __init__(self, path, handlers, prepare=None, tick=3., clock=datetime.now, ledger=None, make_room=None, on_start=None, on_end=None,
-                 cluster=None):
+                 cluster=None, profile=None):
         self.path, self.handlers, self.prepare, self.tick, self.clock = Path(path), handlers, prepare, tick, clock
         self.ledger, self.make_room, self.on_start, self.on_end = ledger, make_room, on_start, on_end
+        self.profile = profile  # () -> studio_fit.Profile of this machine as it is now; a pretrain job is fitted to it just before it starts. None: not fitted
         self.root = self.path.parent.parent
         self.handles = set()           # live workers: the running job's and any cool-down branched off it
         self.lock = threading.RLock()
@@ -686,6 +688,28 @@ class Runner:
                 break
         return max(0., share - held / total)
 
+    def _fitted(self, job, share):
+        """(params, note, problem): a pretrain job's params fitted to this machine as it is now (studio_fit.refit: the free GPU memory, RAM and
+        disk are read again, since another app or an earlier run may hold more than when the plan was made), the job's note with what
+        that scaled and why, and a sentence when even the smallest scaled run cannot fit (the job then fails with it before a worker
+        starts). A job that is not a fresh pretrain run, or a queue without a profile, is left as it is."""
+        params, note = job.params, job.note.split(SCALED_NOTE)[0].strip()
+        if self.profile is None or job.kind != "pretrain":
+            return params, job.note, ""
+        import studio_fit
+        try:
+            found = studio_fit.refit(params, self.profile(), share, remote=bool(job.owner))
+        except Exception:  # noqa: BLE001 - a machine or a config that cannot be read is run as planned; the worker's own checks still apply
+            logging.getLogger("groundwork.queue").exception("fitting a job to this machine failed")
+            return params, job.note, ""
+        if found is None:
+            return params, job.note, ""
+        if found.refusal:
+            return params, note, found.refusal
+        params = studio_fit.applied(params, found)
+        said = " ".join(n.text for n in found.notes)
+        return params, f"{note} {SCALED_NOTE} {said}".strip() if said else note, ""
+
     def follow_up(self, job):
         """Queue what a job that ended leaves to do (the caller holds the lock and saves): after a pretrain on new text, the
         restore_answers round that teaches it its old manner again. The cluster calls it for a pretrain that ran on a peer, once its
@@ -711,10 +735,13 @@ class Runner:
         short = self._disk_problem()
         self._hook(self.on_start, job)  # chat leaves the GPU before the job is given a share of it
         share = self._share(job)  # before the lock: evicting waits on chat's own lock
+        params, note, refused = self._fitted(job, share)  # after chat made room: the free memory it reads is what the job really gets
+        short = short or refused
         with self.lock:
             job.status, self.running, self.progress, self.stopping = "running", job, {}, False
             self._sync_pause()  # a job that ignores the plan is not held by the gate that stood when it started
-            job.params = {**job.params, "memory_share": share}  # studio_memory.batch_cap fits the job's batch to it
+            job.params = {**params, "memory_share": share}  # studio_memory.batch_cap fits the job's batch to it
+            job.note = note
             self.stop_event.clear()
             self._kill_at = None
             self._save()

@@ -7,6 +7,7 @@ import time
 import unittest
 from pathlib import Path
 
+import studio_fit
 from studio_spec import default_spec
 
 from tests.sse_harness import ApiCase
@@ -46,6 +47,7 @@ class PretrainingRouterTests(ApiCase):
         self.assertEqual((rate["result"]["device"], rate["result"]["rows"]), ("cpu", 8))
         self.call("GET", "/pretraining/text_sets")
         self.call("POST", "/pretraining/plan", json={"dataset_ids": ["a"]})
+        self.assertIsNone(self.call("GET", "/pretraining/hardware"))
         self.assertEqual(self.call("POST", "/pretraining/start", 202, json={"dataset_ids": ["a"]})["id"], self.services.queue().up_next[-1].id)
         self.assertAllRoutesHit()
 
@@ -568,3 +570,80 @@ class PlanSizingTests(ApiCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlanScalingTests(ApiCase):
+    """The plan scales a solo run to the (injected) hardware profile and says what it changed (studio_fit)."""
+
+    prefix = "/pretraining"
+    G = 2 ** 30
+    RATE = {"seconds_per_step": 1., "tokens_per_second": 18_000., "device": "cuda", "device_name": "Fake", "note": "", "rows": 8, "context": 1024}
+
+    def machine(self, vram=8, free=7, disk=300):
+        G = self.G
+        return studio_fit.Profile(device="cuda", gpu_name="Fake 8 GB", vram_total=int(vram * G), vram_free=int(free * G), ram_total=32 * G,
+                                  ram_free=24 * G, disk_free=int(disk * G), cpu_cores=16)
+
+    def plan_for(self, profile, width=1024, layers=24, rate=None, **body):
+        spec = default_spec()
+        spec["dims"].update(d_model=width, n_layer=layers, n_ctx=1024)
+        spec["block"]["mixer"]["config"]["heads"] = 16
+        self.services.save_version(spec, "big")
+        self.services.hardware = profile
+        self.services.cached_preview = lambda ids, rows=16: {"pieces": 40_000_000, "params": 300_000_000, "vocab": 263, "context": 1024, "first_rows": []}
+        self.services.cached_step_rate = lambda spec, rows: rate
+        return self.call("POST", "/pretraining/plan", json={"dataset_ids": ["Your files"], "mode": "from_scratch", "rows": 8, "passes": 1, **body})
+
+    def test_without_a_readable_profile_the_plan_is_as_before(self):
+        plan = self.plan_for(None)
+        self.assertIsNone(plan["scaling"])
+        self.assertEqual(plan["config"]["batch_size"], 8)
+        self.assertNotIn("fit", plan["job"]["params"])
+
+    def test_a_run_that_fits_is_unchanged_and_the_hardware_is_reported(self):
+        plan = self.plan_for(self.machine(vram=80, free=78))
+        scaling = plan["scaling"]
+        self.assertEqual((scaling["scaled"], scaling["notes"], scaling["blocker"]), (False, [], None))
+        self.assertEqual(scaling["hardware"]["vram_total"], 80 * self.G)
+        self.assertEqual(plan["config"]["batch_size"], 8)
+        self.assertEqual(plan["job"]["params"]["fit"]["declared"]["config"], plan["config"])
+
+    def test_the_8gb_machine_is_scaled_and_the_job_carries_the_scaled_config(self):
+        plan = self.plan_for(self.machine())
+        scaling = plan["scaling"]
+        self.assertTrue(scaling["scaled"] and plan["can_add"])
+        self.assertIn("batch", [n["kind"] for n in scaling["notes"]])
+        self.assertTrue(all(n["text"] for n in scaling["notes"]))
+        self.assertLess(plan["config"]["batch_size"], 8)
+        job = plan["job"]["params"]
+        self.assertEqual(job["config"], plan["config"])
+        self.assertEqual(job["fit"]["declared"]["config"]["batch_size"], 8)  # the queue fits again from what was asked for
+        self.assertIn("offload_optimizer", job)
+
+    def test_a_run_that_cannot_fit_is_refused_with_the_blocker(self):
+        plan = self.plan_for(self.machine(vram=8, free=0))
+        self.assertFalse(plan["can_add"])
+        self.assertIn("GPU memory", plan["reason"])
+        self.assertEqual(plan["scaling"]["blocker"]["resource"], "vram")
+        self.assertIsNone(plan["job"])
+
+    def test_the_window_caps_the_token_budget_and_the_override_keeps_it(self):
+        big = self.machine(vram=80, free=78)
+        capped = self.plan_for(big, rate=self.RATE, window_hours=.25)
+        note = next(n for n in capped["scaling"]["notes"] if n["reason"] == "time")
+        self.assertTrue(note["advisory"] and capped["scaling"]["can_keep_mine"])
+        self.assertEqual(capped["job"]["params"]["token_budget"], int(.25 * 3600 * 18_000))
+        kept = self.plan_for(big, rate=self.RATE, window_hours=.25, keep_my_settings=True)
+        self.assertTrue(kept["scaling"]["kept_mine"])
+        self.assertNotIn("token_budget", kept["job"]["params"])
+        self.assertGreater(kept["scaling"]["hours"], .25)
+
+    def test_the_hardware_route_returns_the_profile(self):
+        self.services.hardware = self.machine()
+        got = self.call("GET", "/pretraining/hardware")
+        self.assertEqual((got["device"], got["vram_free"], got["disk_free"]), ("cuda", 7 * self.G, 300 * self.G))
+        self.services.hardware = None
+        self.assertIsNone(self.call("GET", "/pretraining/hardware"))
+
+    def test_the_window_is_validated(self):
+        self.call("POST", "/pretraining/plan", 422, json={"dataset_ids": ["a"], "window_hours": 0})

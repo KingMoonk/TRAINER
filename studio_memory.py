@@ -151,18 +151,46 @@ def process_memory():
         return peak if sys.platform == "darwin" else peak * 1024  # bytes on macOS, kilobytes on Linux
 
 
+def _windows_memory():
+    """(total, available) physical bytes on Windows, from GlobalMemoryStatusEx."""
+    import ctypes
+
+    class Status(ctypes.Structure):
+        _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong)] + [(n, ctypes.c_ulonglong) for n in (
+            "ullTotalPhys", "ullAvailPhys", "ullTotalPageFile", "ullAvailPageFile", "ullTotalVirtual", "ullAvailVirtual", "ullAvailExtendedVirtual")]
+    status = Status()
+    status.dwLength = ctypes.sizeof(status)
+    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
+    return int(status.ullTotalPhys), int(status.ullAvailPhys)
+
+
 def total_memory():
     if sys.platform == "win32":
-        import ctypes
-
-        class Status(ctypes.Structure):
-            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong)] + [(n, ctypes.c_ulonglong) for n in (
-                "ullTotalPhys", "ullAvailPhys", "ullTotalPageFile", "ullAvailPageFile", "ullTotalVirtual", "ullAvailVirtual", "ullAvailExtendedVirtual")]
-        status = Status()
-        status.dwLength = ctypes.sizeof(status)
-        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
-        return int(status.ullTotalPhys)
+        return _windows_memory()[0]
     return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+
+
+def available_memory():
+    """Bytes of RAM free for a program to take now (what the system could hand out without swapping), or None where it cannot be read."""
+    if sys.platform == "win32":
+        return _windows_memory()[1]
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    if sys.platform == "darwin":
+        try:
+            import re
+            import subprocess
+            text = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=5, check=True).stdout
+            page = int(re.search(r"page size of (\d+) bytes", text).group(1))
+            pages = sum(int(re.search(rf"Pages {name}:\s+(\d+)", text).group(1)) for name in ("free", "inactive", "speculative"))
+            return pages * page
+        except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+            return None
+    return None
 
 
 def physical_memory():

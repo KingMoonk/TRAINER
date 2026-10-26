@@ -239,6 +239,20 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
         <Sources plan={plan.data} onPick={(n) => { setFromVersion(n); setFailure(""); }} />
       )}
 
+      {single && stage === "pretrain" && plan.data?.scaling && plan.data.scaling.notes.length > 0 && (
+        <section className="flex flex-col gap-1" data-testid="scaling-notes">
+          <p className="text-sm font-medium">{plan.data.scaling.scaled ? PRETRAINING.scalingScaled : PRETRAINING.scalingHeadsUp}</p>
+          <ul className="list-disc pl-5 text-sm text-muted-foreground">
+            {plan.data.scaling.notes.map((note, i) => (
+              <li key={i}>{note.text}</li>
+            ))}
+          </ul>
+          <Link href="/pretraining" className="w-fit text-sm text-highlight hover:underline">
+            {PRETRAINING.scalingKeep} ›
+          </Link>
+        </section>
+      )}
+
       {stage === "pretrain" && (
         <Slot query={sets} title={T.text} loading={T.loadingText} failed={T.textFailed}>
           {() => (

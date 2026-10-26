@@ -61,6 +61,11 @@ def note_cap(job, context, emit, stop, pause):
     _note(context, f"share {job.params['memory_share']}")
 
 
+def note_batch(job, context, emit, stop, pause):
+    cfg = job.params["config"]
+    _note(context, f"batch {cfg['batch_size']}x{cfg.get('accumulation', 1)} offload {job.params.get('offload_optimizer')}")
+
+
 def boom(job, context, emit, stop, pause):
     raise ValueError("nope")
 
@@ -549,6 +554,61 @@ class QueueTests(unittest.TestCase):
         r.start()
         self.assertTrue(wait(lambda: self.fake.ran))
         self.assertEqual(self.fake.ran, ["share 0.5"])
+
+    def fit_job(self, **params):
+        import studio_fit
+        from studio_ia import pretraining_plan as plan
+        from studio_spec import default_spec, validate_spec
+        spec = default_spec()
+        spec["dims"].update(d_model=1024, n_layer=24, n_ctx=1024)
+        spec["block"]["mixer"]["config"]["heads"] = 16
+        cfg = plan.pretrain_config(validate_spec(spec), 1000, 8, .05)
+        return Job("pretrain", "big", params={"config": cfg, "mode": "from_scratch", **params}), studio_fit
+
+    def test_free_memory_is_read_again_at_start_and_the_run_scaled_to_it(self):
+        import studio_fit
+        G = 2 ** 30
+        self.handlers["pretrain"] = note_batch
+        job, _ = self.fit_job()
+        roomy = studio_fit.Profile(device="cuda", vram_total=80 * G, vram_free=78 * G, ram_total=64 * G, ram_free=48 * G, disk_free=500 * G)
+        tight = studio_fit.Profile(device="cuda", vram_total=80 * G, vram_free=5 * G, ram_total=64 * G, ram_free=48 * G, disk_free=500 * G)
+        seen = [roomy]  # the plan was made when it fit; another program has taken the memory by the time the job starts
+        r = self.runner(profile=lambda: seen[-1])
+        seen.append(tight)
+        r.enqueue(job)
+        r.start()
+        self.assertTrue(wait(lambda: self.fake.ran))
+        self.assertTrue(wait(lambda: r.jobs[0].status == "done"))
+        batch = int(self.fake.ran[0].split()[1].split("x")[0])
+        self.assertLess(batch, 8)
+        self.assertIn(studio_queue.SCALED_NOTE, r.jobs[0].note)
+        self.assertIn("batch", r.jobs[0].note.lower())
+
+    def test_a_job_that_fits_is_started_as_planned(self):
+        import studio_fit
+        G = 2 ** 30
+        self.handlers["pretrain"] = note_batch
+        job, _ = self.fit_job()
+        roomy = studio_fit.Profile(device="cuda", vram_total=80 * G, vram_free=78 * G, ram_total=64 * G, ram_free=48 * G, disk_free=500 * G)
+        r = self.runner(profile=lambda: roomy)
+        r.enqueue(job)
+        r.start()
+        self.assertTrue(wait(lambda: r.jobs[0].status == "done"))
+        self.assertEqual(self.fake.ran, ["batch 8x1 offload False"])
+        self.assertNotIn(studio_queue.SCALED_NOTE, r.jobs[0].note)
+
+    def test_a_job_that_cannot_fit_fails_with_a_plain_message_before_a_worker_starts(self):
+        import studio_fit
+        G = 2 ** 30
+        self.handlers["pretrain"] = note_batch
+        job, _ = self.fit_job(init_from="best.npz", mode="catch_up")
+        tiny = studio_fit.Profile(device="cuda", vram_total=2 * G, vram_free=G // 4, ram_total=64 * G, ram_free=48 * G, disk_free=500 * G)
+        r = self.runner(profile=lambda: tiny)
+        r.enqueue(job)
+        r.start()
+        self.assertTrue(wait(lambda: r.jobs[0].status == "failed"))
+        self.assertIn("GPU memory", r.jobs[0].error)
+        self.assertEqual(self.fake.ran, [])
 
     def test_failed_job_does_not_block_queue(self):
         self.handlers["compare"] = boom

@@ -6,6 +6,10 @@ import {
   countText,
   enoughView,
   errorText,
+  hardwareLine,
+  memoryText,
+  planBody,
+  scalingView,
   lrLine,
   lrText,
   modeTexts,
@@ -231,5 +235,38 @@ describe("readoutView", () => {
   it("gives the advice for each verdict", () => {
     expect(readoutView(readout({ verdict: "right", ratio_text: "20.0" }))!.advice).toBe(fill(T.adviceRight, { ratio: "about 20.0" }));
     expect(readoutView(readout({ verdict: "many", ratio_text: "90.0", target_params: 100_000_000 }))!.advice).toBe(fill(T.adviceMany, { ratio: "about 90.0", target: "100M" }));
+  });
+});
+
+const G = 2 ** 30;
+const hardware = { device: "cuda", gpu_name: "Test GPU", vram_total: 8 * G, vram_free: 7 * G, ram_total: 32 * G, ram_free: 24 * G, disk_free: 300 * G, cpu_cores: 8, tokens_per_second: null, measured_at: null };
+
+describe("the fitted-to-this-computer card", () => {
+  it("writes sizes like the server's notes", () => {
+    expect(memoryText(7 * G)).toBe("7.0 GB");
+    expect(memoryText(300 * 2 ** 20)).toBe("300 MB");
+  });
+  it("describes the machine from the measured profile and leaves out what could not be read", () => {
+    expect(hardwareLine(hardware)).toBe("This computer: Test GPU, 8.0 GB GPU memory (7.0 GB free), 24.0 GB RAM free, 300.0 GB disk free.");
+    expect(hardwareLine({ ...hardware, device: "cpu", vram_total: 0, vram_free: null, ram_free: null, disk_free: null })).toBe("This computer: no GPU.");
+  });
+  it("is nothing without a profile", () => expect(scalingView(plan())).toBeNull());
+  it("leads with what happened and keeps the server's notes in order", () => {
+    const notes = [{ kind: "batch", reason: "vram", text: "Batch 16 -> 3 x 6", advisory: false }];
+    const view = scalingView(plan({ scaling: { notes, scaled: true, can_keep_mine: false, kept_mine: false, hardware }, reason: "" }));
+    expect(view).toMatchObject({ lead: T.scalingScaled, notes, canKeep: false, refused: "" });
+  });
+  it("says so when the run fits, when it has only a note, and when it is refused", () => {
+    const base = { can_keep_mine: false, kept_mine: false, hardware };
+    expect(scalingView(plan({ scaling: { ...base, notes: [], scaled: false } }))?.lead).toBe(T.scalingFits);
+    const slow = [{ kind: "slow", reason: "time", text: "slow", advisory: true }];
+    expect(scalingView(plan({ scaling: { ...base, notes: slow, scaled: false, can_keep_mine: true } }))).toMatchObject({ lead: T.scalingHeadsUp, canKeep: true });
+    const blocker = { resource: "vram", needed: 2, available: 1 };
+    expect(scalingView(plan({ scaling: { ...base, notes: [], scaled: false, blocker }, reason: "Not enough GPU memory" }))).toMatchObject({ lead: T.scalingRefused, refused: "Not enough GPU memory" });
+  });
+  it("sends the override with the plan request", () => {
+    const base = { version: 1, datasetIds: ["a"], mode: "from_scratch" as const, rows: "16", hold: "5%" as const, length: "Medium" as const };
+    expect(planBody(base).keep_my_settings).toBe(false);
+    expect(planBody({ ...base, keepMine: true }).keep_my_settings).toBe(true);
   });
 });

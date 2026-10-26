@@ -25,6 +25,7 @@ export function rowChoices(saved: string | null): string[] {
 export const HOLD = ["2%", "5%", "10%"] as const;
 export const LENGTHS = { Short: 1, Medium: 2, Long: 4 } as const; // passes over the chosen text
 export type Length = keyof typeof LENGTHS;
+export const WINDOW_HOURS = 72; // the longest a run may take before the server cuts its token budget (studio_fit.DEFAULT_WINDOW_HOURS); the "Time you can give" choice only shapes the suggestion
 export const PREVIEW_ROWS = 6; // rows of the size preview the page draws
 // Theme tokens (globals.css), as CSS values for an inline style.
 export const PALETTE = ["var(--viz-1)", "var(--viz-2)", "var(--viz-3)", "var(--viz-4)", "var(--viz-5)"];
@@ -42,6 +43,7 @@ export function planBody(c: {
   steps?: number | null; // a step count chosen from the suggestion, instead of the length
   stopWhenFlat?: StopWhenFlat;
   fromVersion?: number | null; // the earlier version a catch-up starts from (one of the plan's sources); null: the server's default
+  keepMine?: boolean; // "use my settings anyway": the server keeps the batch and token budget where the run only fits tightly or is slow
 }) {
   return {
     version: c.version,
@@ -55,6 +57,8 @@ export function planBody(c: {
     steps: c.steps ?? null,
     plateau: STOP_WHEN_FLAT[c.stopWhenFlat ?? "Auto"],
     from_version: c.fromVersion ?? null,
+    window_hours: WINDOW_HOURS,
+    keep_my_settings: c.keepMine ?? false,
   };
 }
 export type PlanBody = ReturnType<typeof planBody>;
@@ -67,6 +71,37 @@ export const HOURS = { "1 h": 1, "4 h": 4, "12 h": 12, "24 h": 24, "3 days": 72 
 export type Hours = keyof typeof HOURS;
 export const DEFAULT_HOURS: Hours = "4 h";
 export type Sizing = NonNullable<Plan["sizing"]>;
+export type Scaling = NonNullable<Plan["scaling"]>;
+export type Hardware = Scaling["hardware"];
+
+/** Bytes the way the server writes them in its notes (studio_fit.size_text): binary units, called GB. */
+export function memoryText(bytes: number): string {
+  return bytes >= 2 ** 30 ? `${(bytes / 2 ** 30).toFixed(1)} GB` : `${Math.round(bytes / 2 ** 20)} MB`;
+}
+
+/** What the computer has, from the measured profile only: a figure the server could not read is left out, never guessed. */
+export function hardwareLine(h: Hardware): string {
+  const parts: string[] = [];
+  if (h.device !== "cpu" && h.vram_total) {
+    const free = h.vram_free != null ? ` (${memoryText(h.vram_free)} free)` : "";
+    parts.push(`${h.gpu_name || h.device.toUpperCase()}, ${memoryText(h.vram_total)} GPU memory${free}`);
+  } else {
+    parts.push("no GPU");
+  }
+  if (h.ram_free != null) parts.push(`${memoryText(h.ram_free)} RAM free`);
+  if (h.disk_free != null) parts.push(`${memoryText(h.disk_free)} disk free`);
+  if (h.tokens_per_second) parts.push(`${Math.round(h.tokens_per_second).toLocaleString("en-US")} tokens/s measured`);
+  return fill(T.scalingHardware, { parts: parts.join(", ") });
+}
+
+/** The "Fitted to this computer" card for a plan: the machine, each change with its reason, and the override. Null when the server sent no profile. */
+export function scalingView(plan: Plan | undefined): { hardware: string; lead: string; notes: Scaling["notes"]; canKeep: boolean; kept: boolean; refused: string } | null {
+  const s = plan?.scaling;
+  if (!plan || !s) return null;
+  const refused = s.blocker ? plan.reason : "";
+  const lead = refused ? T.scalingRefused : s.scaled ? T.scalingScaled : s.notes.length ? T.scalingHeadsUp : T.scalingFits;
+  return { hardware: hardwareLine(s.hardware), lead, notes: s.notes, canKeep: s.can_keep_mine, kept: s.kept_mine, refused };
+}
 
 /** Hours in plain words, as the server writes them (studio_ia.sizing.hours_text). */
 export function hoursText(hours: number): string {
