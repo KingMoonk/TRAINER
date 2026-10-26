@@ -607,6 +607,20 @@ class Runner:
         for job in dead:
             for folder in run_folders(self.root, job):
                 reconcile_run(folder)
+        self._sweep_temporaries()
+
+    def _sweep_temporaries(self):
+        """Delete the corpus spools and scratch files (studio_cleanup.TEMPORARY_FILES) in the folders of runs that are not running: a
+        worker that was killed or crashed never cleaned up after itself. The running job's folders are left alone."""
+        import studio_cleanup
+        with self.lock:
+            busy = {folder.resolve() for folder in run_folders(self.root, self.running)} if self.running else set()
+            folders = {folder for folder in (self.root / "runs").glob("*") if folder.is_dir()}
+            for job in self.jobs:
+                folders.update(Path(folder) for folder in run_folders(self.root, job))
+        for folder in folders:
+            if folder.resolve() not in busy:
+                studio_cleanup.sweep_temporaries(folder)
 
     def _start(self, job, handler, emit, on_end=None):
         """Start `job` in a worker process; the handle is tracked until the process ends."""

@@ -118,6 +118,43 @@ class Leftovers(unittest.TestCase):
         os.utime(old, (stamp, stamp))
         self.assertEqual(list(self.ids([])), [f"runs/.snapshots/{old.name}"])
 
+    def test_orphaned_temporaries_are_listed_once_old_and_never_in_a_running_jobs_folder(self):
+        old = time.time() - 2 * studio_cleanup.UNFINISHED
+
+        def make(path, data=b"x" * 10, directory=False):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if directory:
+                path.mkdir()
+                (path / "inside.bin").write_bytes(data)
+            else:
+                path.write_bytes(data)
+            for found in (path, *path.rglob("*")):
+                os.utime(found, (old, old))
+            return path
+        done, running = self.folder("queue_done"), self.folder("queue_run")
+        make(done / "corpus-ab.spool")
+        make(done / "tokens.part")
+        make(done / "last.tmp")
+        make(done / "best.tmp")
+        make(running / "corpus-cd.spool")
+        (done / "corpus-fresh.spool").write_bytes(b"new")  # younger than the grace: a worker may have just ended
+        shards = self.root / "data" / "shards"
+        make(shards / "tokens-k" / "seg-1.part", directory=True)
+        make(shards / "tok-z.part")
+        live = self.root / "data" / "live_checkpoints"
+        make(live / "v1-100.npz")
+        make(live / "v2-200.npz")
+        make(live / "v2-300.tmp")
+        (self.root / "data" / "versions.json").write_text(json.dumps({"versions": [{"number": 2, "status": "training", "runs": []}]}))
+        found = self.ids([job("run", "running")])
+        self.assertEqual(sorted(r["id"] for r in found.values() if r["kind"] == "temporary"), sorted([
+            "runs/queue_done/corpus-ab.spool", "runs/queue_done/tokens.part", "runs/queue_done/last.tmp", "runs/queue_done/best.tmp",
+            "data/shards/tokens-k/seg-1.part", "data/shards/tok-z.part", "data/live_checkpoints/v1-100.npz", "data/live_checkpoints/v2-300.tmp"]))
+        self.assertEqual(found["data/shards/tokens-k/seg-1.part"]["bytes"], 10)
+        self.assertEqual(studio_cleanup.remove_leftovers(self.root, ["runs/queue_done/corpus-ab.spool", "data/shards/tokens-k/seg-1.part"],
+                                                         [job("run", "running")])[0], 2)
+        self.assertTrue((live / "v2-200.npz").exists() and (running / "corpus-cd.spool").exists())
+
     def test_the_age_based_clean_judges_snapshots_one_by_one(self):
         old_stamp = time.time() - 40 * 86400
         used, _ = snapshots.store([{"text": "used"}], self.runs / snapshots.FOLDER)
