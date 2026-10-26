@@ -3740,9 +3740,19 @@ class WorkspaceServices(Services):
         with self._chat_lock:  # the files are gone: so are the chat models loaded from them
             self._evict_live_models(number)
 
+    def _live_number(self, ckpt):
+        """The version a live snapshot path (data/live_checkpoints/v<number>-<mtime>.npz) belongs to, or None for any other checkpoint."""
+        name = os.path.basename(str(ckpt))
+        if os.path.dirname(str(ckpt)) != str(self.root / "data" / "live_checkpoints") or not name.startswith("v"):
+            return None
+        digits = name[1:].split("-", 1)[0]
+        return int(digits) if digits.isdigit() else None
+
     def _evict_live_models(self, number, keep=None):
         """Drop the chat models loaded from version `number`'s live snapshots, except the one at `keep` (the chat lock is held). Each
         snapshot is keyed by its own path, so without this a new save adds a model beside the stale ones."""
+        if number is None:
+            return
         folder = str(self.root / "data" / "live_checkpoints")
         for ckpt in [c for c in self._models if c != keep and os.path.dirname(c) == folder and os.path.basename(c).startswith(f"v{number}-")]:
             del self._models[ckpt]
@@ -3793,9 +3803,7 @@ class WorkspaceServices(Services):
         with self._chat_lock:
             model = self._models.pop(ckpt, None)
             if model is None:
-                live = self._as_version(version)
-                if live is not None and not live.best_checkpoint:
-                    self._evict_live_models(live.number, keep=ckpt)  # a newer snapshot replaces the older one in the cache
+                self._evict_live_models(self._live_number(ckpt), keep=ckpt)  # a newer snapshot replaces the older one in the cache
                 device = self._chat_device()
                 with self.busy("Loading the model for chat", total=2) as task:
                     data = load_checkpoint(ckpt, weights_only=True)  # the file read, then the model built from it
