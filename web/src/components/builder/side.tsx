@@ -156,14 +156,10 @@ export function Controls({ registry, cur, draft, knobs, onKnob, onModelSetting =
   const mixer = registry.slots.find((slot) => slot.slot === "mixer")?.modules.find((module) => module.short === draft.M.mixer);
   const hasHeads = mixer?.fields.some((field) => field.name === "heads") ?? false;
   const numberInput = (label: string, key: ModelSettingKey, value: number, min: number, max: number, disabled = false) => (
-    <label className="flex flex-col gap-1 text-xs font-medium">
-      {label}
-      <Input type="number" min={min} max={max} step={1} value={value} disabled={disabled} className="h-9" onChange={(event) => {
-        const next = Number(event.currentTarget.value);
-        if (Number.isInteger(next) && next >= min && next <= max &&
-            (key !== "d" || ((!hasHeads || next % draft.H === 0) && (draft.M.position !== "rope" || next % 2 === 0)))) onModelSetting(key, next);
-      }} />
-    </label>
+    <ModelNumberField label={label} value={value} min={min} max={max} disabled={disabled} onCommit={(next) => onModelSetting(key, next)}
+      problem={key !== "d" ? undefined : (next) =>
+        hasHeads && next % draft.H !== 0 ? `Must be a multiple of the ${draft.H} look-back heads.` :
+        draft.M.position === "rope" && next % 2 !== 0 ? "Must be even with rotary positions." : undefined} />
   );
   return (
     <Panel title={BUILDER.model_controls} testId="controls">
@@ -185,6 +181,34 @@ export function Controls({ registry, cur, draft, knobs, onKnob, onModelSetting =
       </div>
       <p className="text-xs text-muted-foreground">Tokenizer size is adjustable for learned tokenizers. The token limit is off at 0 and stops at an optimizer-step boundary.</p>
     </Panel>
+  );
+}
+
+/** A number box you can click and type into: the text is held locally while typing and only a valid whole number in range is passed up, so a half-typed value is not snapped back. */
+function ModelNumberField({ label, value, min, max, disabled, problem, onCommit }: {
+  label: string; value: number; min: number; max: number; disabled: boolean;
+  problem?: (next: number) => string | undefined; onCommit: (next: number) => void;
+}) {
+  const [typed, setTyped] = useState<string | null>(null);
+  const text = typed ?? String(value);
+  const next = text.trim() === "" ? NaN : Number(text);
+  const error = text.trim() === "" ? undefined
+    : !Number.isInteger(next) ? "Whole numbers only."
+    : next < min || next > max ? `Between ${min.toLocaleString()} and ${max.toLocaleString()}.`
+    : problem?.(next);
+  return (
+    <label className="flex flex-col gap-1 text-xs font-medium">
+      {label}
+      <Input type="number" inputMode="numeric" min={min} max={max} step={1} value={text} disabled={disabled} className="h-9" aria-invalid={error ? true : undefined}
+        onBlur={() => setTyped(null)}
+        onChange={(event) => {
+          const raw = event.currentTarget.value;
+          setTyped(raw);
+          const parsed = raw.trim() === "" ? NaN : Number(raw);
+          if (Number.isInteger(parsed) && parsed >= min && parsed <= max && !problem?.(parsed)) onCommit(parsed);
+        }} />
+      {error && <span className="text-xs font-normal text-destructive" role="alert">{error}</span>}
+    </label>
   );
 }
 

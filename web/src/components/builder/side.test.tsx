@@ -44,6 +44,35 @@ describe("model controls", () => {
     expect(onModelSetting.mock.calls).toEqual([["d", 128], ["T", 512], ["U", 4096], ["token_limit_millions", 12]]);
   });
 
+  test("keeps what is typed while it is incomplete, then commits the finished number", () => {
+    const onModelSetting = vi.fn();
+    render(<Controls registry={registry} cur={choices} draft={choices} knobs={{ H: true, W: true }} onKnob={vi.fn()} onModelSetting={onModelSetting} />);
+    const size = screen.getByLabelText("Hidden size") as HTMLInputElement;
+    fireEvent.focus(size);
+    fireEvent.change(size, { target: { value: "" } });
+    expect(size.value).toBe("");
+    fireEvent.change(size, { target: { value: "1" } });
+    expect(size.value).toBe("1");
+    expect(screen.getByRole("alert")).toHaveTextContent("Between 16 and 1,024.");
+    expect(onModelSetting).not.toHaveBeenCalled();
+    fireEvent.change(size, { target: { value: "192" } });
+    expect(size.value).toBe("192");
+    expect(onModelSetting).toHaveBeenCalledWith("d", 192);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  test("an out-of-range entry is reported and reverts to the setting when the box is left", () => {
+    const onModelSetting = vi.fn();
+    render(<Controls registry={registry} cur={choices} draft={choices} knobs={{ H: true, W: true }} onKnob={vi.fn()} onModelSetting={onModelSetting} />);
+    const size = screen.getByLabelText("Hidden size") as HTMLInputElement;
+    fireEvent.focus(size);
+    fireEvent.change(size, { target: { value: "5000" } });
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    fireEvent.blur(size);
+    expect(size.value).toBe("64");
+    expect(onModelSetting).not.toHaveBeenCalled();
+  });
+
   test("maps nonconsecutive head choices to actual counts and width choices to indices", () => {
     const onKnob = vi.fn();
     render(<Controls registry={registry} cur={{ ...choices, H: 1, W: 0 }} draft={choices} knobs={{ H: true, W: true }} onKnob={onKnob} />);
