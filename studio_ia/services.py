@@ -700,7 +700,7 @@ class Services:
         raise NotImplementedError
 
     def post_rows(self, kind):
-        """Rows for a post_round job: conversations | problems | pairs | heldout_docs | heldout_problems."""
+        """Rows for a post_round job: conversations | problems | pairs | heldout_docs | heldout_conversations | heldout_problems. Generated drafts not yet marked Good are left out."""
         raise NotImplementedError
 
     def post_loops(self) -> list:
@@ -2938,7 +2938,7 @@ class WorkspaceServices(Services):
         if kind == "corrections":
             return self._json("corrections.json", [])
         want = "problems" if kind.endswith("problems") else "conversations"
-        held = kind == "heldout_problems"
+        held = kind in ("heldout_problems", "heldout_conversations")
         datasets = list(self.workspace.state["datasets"])
         # disk datasets: one indexed query on the kind and holdout columns; in-memory ones (under 10,000 rows each) carry the same two stamps
         on_disk = self.workspace.pick(want, held, [d["id"] for d in datasets if d.get("storage") == "sqlite"])
@@ -2949,11 +2949,12 @@ class WorkspaceServices(Services):
             else:
                 rows = [e for e in self.workspace.iter_examples(d["id"]) if dk.stamp(e)["kind"] == want and bool(e["holdout"]) == held]
             out.extend({"prompt": e.get("user", ""), "rule": dk.rule_of(e), "params": e.get("params") or (e.get("metadata") or {}).get("params", {})}
-                       if want == "problems" else e for e in rows)
+                       if want == "problems" else e for e in rows if not dk.is_draft(e))   # synthetic drafts are not the user's data
         if held:  # a held-back problem whose text also appears in training would be answered from memory: leave it out and say how many
             import studio_decontam
-            out, report = studio_decontam.exclude_overlap(out, self._train_index(), lambda row: row["prompt"])
-            self._note_overlap("problems", report)
+            out, report = studio_decontam.exclude_overlap(out, self._train_index(), (lambda row: row["prompt"]) if want == "problems" else _doc)
+            if want == "problems":   # the page shows this note for problems and text only
+                self._note_overlap("problems", report)
         return out
 
     def post_loops(self):

@@ -411,6 +411,18 @@ class WorkspaceRows(unittest.TestCase):
         convs = self.svc.post_rows("conversations")
         self.assertTrue(0 < len(convs) <= 30)
 
+    def test_post_rows_leave_out_drafts_and_have_held_back_conversations(self):
+        drafts = self.ws.create_dataset("drafts")
+        self.ws.add(drafts, [{"user": f"draft q{i}", "assistant": f"draft a{i}", "synthetic": True, "quality": "Review"} for i in range(60)])
+        self.ws.add(drafts, [{"user": f"good q{i}", "assistant": f"good a{i}", "synthetic": True, "quality": "Good"} for i in range(60)])
+        everything = self.svc.post_rows("conversations") + self.svc.post_rows("heldout_conversations")
+        self.assertFalse([e for e in everything if e["user"].startswith("draft")])
+        self.assertTrue([e for e in everything if e["user"].startswith("good")])
+        held = self.svc.post_rows("heldout_conversations")
+        self.assertTrue(held)
+        self.assertTrue(all(e["holdout"] for e in held))
+        self.assertFalse(any(e["holdout"] for e in self.svc.post_rows("conversations")))
+
     def test_corrections_and_pairs_are_saved_for_rounds_3_and_4(self):
         messages = [{"role": "user", "content": "Largest planet?"}]
         self.svc.teach_correction(None, messages, "Jupiter")
