@@ -125,6 +125,10 @@ describe("progressLine", () => {
     // 100 x 10 x 100 = 100,000 pieces seen = pass 4 of 30,000
     expect(line).toContain(`${T.pass} 4 ${T.overText} · 100,000 ${T.piecesSeen}`);
   });
+  it("says a checkpoint is being saved", () => {
+    expect(progressLine(q({ saving: true })).endsWith(` · ${T.saving}`)).toBe(true);
+    expect(progressLine(q({ saving: false }))).not.toContain(T.saving);
+  });
   it("says starting without a total", () => expect(progressLine(q({ total: 0, step: 0 })).startsWith(T.starting)).toBe(true));
   it("adds the phase, learning rate and time left when known", () => {
     const line = progressLine(q({ phase: "steady", lr: 0.00123, eta_s: 600 }));

@@ -69,6 +69,7 @@ class QueueState:
     phase: str = ""  # warm-up | steady | cool-down | preparing
     prepare: int | None = None  # percent of the text prepared, while phase == "preparing"
     prepare_phase: str | None = None  # reading | tokenizer | tokenizing
+    saving: bool = False  # the running job is writing a checkpoint
     lr: float | None = None
     eta_s: float | None = None
     paused: bool = False  # by the user; stays true with no job running ("Paused by you")
@@ -2833,8 +2834,10 @@ class WorkspaceServices(Services):
         path = out / f"last_term{term}.npz"
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_name(path.name + ".part")
-        part.write_bytes(body)
-        part.replace(path)
+        import studio_cleanup
+        with studio_cleanup.hold(out):  # a queue sweep must not take the half-written file
+            part.write_bytes(body)
+            part.replace(path)
         return path
 
     def _note_devices(self, number, ckpt, scored=False):

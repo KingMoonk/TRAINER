@@ -6,6 +6,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import studio_cleanup
 import studio_dataset_snapshot as snapshots
@@ -58,6 +59,19 @@ class Leftovers(unittest.TestCase):
         self.assertEqual(studio_cleanup.remove_leftovers(self.root, ["runs/queue_a-before-restart"], [])[0], 1)
         orphans = [r for r in self.ids([]).values() if r["kind"] == "snapshot"]
         self.assertEqual(len(orphans), 1)
+
+    def test_a_snapshot_copied_into_a_run_is_not_unused_while_the_run_exists(self):
+        with patch("studio_dataset_snapshot.os.link", side_effect=OSError("cross-device")):
+            path = self.folder("queue_a", 10, [{"text": "copied"}])
+        (stored, _, links), = snapshots.listing(self.runs / snapshots.FOLDER)
+        self.assertEqual((stored.stat().st_nlink, links), (1, 2))  # no hard link, but one user
+        self.assertFalse([r for r in self.ids([job("a", "failed")]).values() if r["kind"] == "snapshot"])
+        self.assertEqual(studio_cleanup.remove_leftovers(self.root, ["runs/queue_a"], [job("a", "failed")])[0], 1)
+        self.assertFalse(path.exists())
+        orphans = [r for r in self.ids([]).values() if r["kind"] == "snapshot"]  # the copy is gone: now it is unused
+        self.assertEqual(len(orphans), 1)
+        studio_cleanup.remove_leftovers(self.root, [orphans[0]["id"]], [])
+        self.assertFalse(stored.exists() or stored.with_suffix(snapshots.COPIES).exists())
 
     def test_a_snapshot_is_freed_only_when_every_link_to_it_goes(self):
         data = [{"text": "z" * 1000}]
@@ -136,6 +150,7 @@ class Leftovers(unittest.TestCase):
         make(done / "tokens.part")
         make(done / "last.tmp")
         make(done / "best.tmp")
+        make(done / "dataset.jsonl.tmp-x")
         make(running / "corpus-cd.spool")
         (done / "corpus-fresh.spool").write_bytes(b"new")  # younger than the grace: a worker may have just ended
         shards = self.root / "data" / "shards"
@@ -149,6 +164,7 @@ class Leftovers(unittest.TestCase):
         found = self.ids([job("run", "running")])
         self.assertEqual(sorted(r["id"] for r in found.values() if r["kind"] == "temporary"), sorted([
             "runs/queue_done/corpus-ab.spool", "runs/queue_done/tokens.part", "runs/queue_done/last.tmp", "runs/queue_done/best.tmp",
+            "runs/queue_done/dataset.jsonl.tmp-x",
             "data/shards/tokens-k/seg-1.part", "data/shards/tok-z.part", "data/live_checkpoints/v1-100.npz", "data/live_checkpoints/v2-300.tmp"]))
         self.assertEqual(found["data/shards/tokens-k/seg-1.part"]["bytes"], 10)
         self.assertEqual(studio_cleanup.remove_leftovers(self.root, ["runs/queue_done/corpus-ab.spool", "data/shards/tokens-k/seg-1.part"],

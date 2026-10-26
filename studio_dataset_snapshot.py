@@ -20,6 +20,7 @@ from pathlib import Path
 FOLDER = ".snapshots"   # beside the run folders, so a hard link never crosses a filesystem
 SUFFIX = ".jsonl"
 NAME = "dataset.jsonl"  # what a run folder calls its link
+COPIES = ".copies"      # <hash>.copies beside a snapshot: the run files a copy fallback made from it, one path a line (a copy has no link to count)
 _BUFFER = 1 << 20
 
 
@@ -72,7 +73,39 @@ def link(snapshot, destination):
             os.replace(temporary, destination)
         finally:
             temporary.unlink(missing_ok=True)
+        _note_copy(snapshot, destination)
         return False
+
+
+def _sidecar(snapshot):
+    snapshot = Path(snapshot)
+    return snapshot.with_suffix(COPIES)
+
+
+def _note_copy(snapshot, destination):
+    """Record that `destination` is a copy of `snapshot`, so the cleanup counts it as a user: a copy has the store file's bytes but no
+    link to it, and the snapshot would otherwise look unused (`listing`). Lines for copies that are gone are dropped as it writes.
+    Best effort: a snapshot that cannot note its copy is only offered for deletion as unused, as before."""
+    side = _sidecar(snapshot)
+    try:
+        lines = [*_copies(snapshot), str(Path(destination).resolve())]
+        side.write_text("\n".join(dict.fromkeys(lines)) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _copies(snapshot):
+    """The copies of `snapshot` that still exist."""
+    try:
+        lines = _sidecar(snapshot).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    return [line for line in lines if line and Path(line).is_file()]
+
+
+def forget(snapshot):
+    """Remove the record of copies beside a snapshot that is being deleted."""
+    _sidecar(snapshot).unlink(missing_ok=True)
 
 
 def adopt(examples, directory, destination):
@@ -116,11 +149,11 @@ def hash_of(path):
 
 
 def listing(directory):
-    """[(path, bytes, links)] of the snapshots stored in `directory`. links is 1 when no run folder holds a link to it."""
+    """[(path, bytes, links)] of the snapshots stored in `directory`. links is 1 when no run folder holds a link to it or a copy of it."""
     out = []
     directory = Path(directory)
     if directory.is_dir():
         for path in sorted(directory.glob("*" + SUFFIX)):
             stat = path.stat()
-            out.append((path, stat.st_size, stat.st_nlink))
+            out.append((path, stat.st_size, stat.st_nlink + len(_copies(path))))
     return out

@@ -3,8 +3,10 @@
 History = run folders, checkpoints, versions, logs, exports, backups, token shards and stores of earlier designs. Your data
 (datasets, downloads, the held-back set) is deleted only when asked. Settings and chat ratings are never touched.
 """
+import contextlib
 import re
 import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -60,6 +62,8 @@ def clean(workspace, days=None, data=False, now=None):
     freed = size(paths)
     for p in paths:
         shutil.rmtree(p) if p.is_dir() else p.unlink()
+        if p.suffix == snapshots.SUFFIX:
+            snapshots.forget(p)
     store = VersionStore(root)
     if store.path.exists():  # versions survive an age-based clean; they forget runs and checkpoints that are gone
         def there(p):
@@ -91,17 +95,47 @@ JOB_PATHS = ("output_dir", "resume", "init_from", "previous_best")  # folders a 
 UNFINISHED = 3600  # seconds: a half-written snapshot older than this is a crashed write
 
 
-TEMPORARY_FILES = ("corpus-*.spool", "*.part", "last.tmp", "best.tmp")  # what a run folder holds only while a worker is writing it
+TEMPORARY_FILES = ("corpus-*.spool", "*.part", "last.tmp", "best.tmp", "dataset.jsonl.tmp-*")  # what a run folder holds only while a worker is writing it
 LIVE_COPY = re.compile(r"^v(?P<number>\d+)-")  # data/live_checkpoints/v<number>-<mtime>.npz (studio_ia.services._live_snapshot)
 
 
-def sweep_temporaries(folder):
-    """Delete the spools and scratch files a hard kill left in a run `folder` (`TEMPORARY_FILES`; files only). Returns how many."""
+_HELD = {}  # resolved folder -> how many writers hold it right now (hold)
+_HELD_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def hold(folder):
+    """Mark `folder` as being written by this process (a pull's `.part`, say) for the duration, so `sweep_temporaries` leaves it alone."""
+    key = str(Path(folder).resolve())
+    with _HELD_LOCK:
+        _HELD[key] = _HELD.get(key, 0) + 1
+    try:
+        yield
+    finally:
+        with _HELD_LOCK:
+            _HELD[key] -= 1
+            if not _HELD[key]:
+                del _HELD[key]
+
+
+def held(folder):
+    with _HELD_LOCK:
+        return str(Path(folder).resolve()) in _HELD
+
+
+def sweep_temporaries(folder, before=None):
+    """Delete the spools and scratch files a hard kill left in a run `folder` (`TEMPORARY_FILES`; files only). Returns how many. A folder
+    some writer holds (`hold`) is left alone; with `before` (a time), so is any file written after it, so a sweep that overlaps new
+    work cannot take what that work is writing."""
     removed = 0
+    if held(folder):
+        return 0
     for pattern in TEMPORARY_FILES:
         for path in Path(folder).glob(pattern) if Path(folder).is_dir() else []:
             if path.is_file():
                 try:
+                    if before is not None and path.stat().st_mtime > before:
+                        continue
                     path.unlink()
                     removed += 1
                 except OSError:
@@ -224,4 +258,6 @@ def remove_leftovers(root, ids, jobs):
     for row in chosen:
         path = root / row["id"]
         shutil.rmtree(path) if path.is_dir() else path.unlink(missing_ok=True)
+        if row["kind"] == "snapshot" and path.suffix == snapshots.SUFFIX:
+            snapshots.forget(path)
     return len(chosen), sum(row["bytes"] for row in chosen)

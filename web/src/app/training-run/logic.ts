@@ -86,6 +86,7 @@ export function progressLine(q: {
   lr?: number | null;
   eta_s?: number | null;
   stopping: boolean;
+  saving?: boolean;
   blocked?: string | null;
   params: JobParams;
 }): string {
@@ -98,6 +99,7 @@ export function progressLine(q: {
   parts.push(T.lrAuto.replace("auto", q.lr == null ? "auto" : `auto (${Number(q.lr.toPrecision(2))})`));
   if (q.eta_s != null) parts.push(`about ${Math.max(1, Math.round(q.eta_s / 60))} min ${T.left}`);
   if (q.stopping) parts.push(T.coolingDown);
+  if (q.saving) parts.push(T.saving);
   if (q.blocked) parts.push(`${T.waiting} ${q.blocked}`);
   return parts.join(" · ");
 }
