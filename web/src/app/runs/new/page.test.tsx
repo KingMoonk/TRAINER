@@ -25,7 +25,7 @@ const source = (version: number, over: Record<string, unknown> = {}) => ({
   params: 812_000, best_val_loss: 2.25, train_loss: 2.5, device: "RTX 4090", rounds: null, inner_steps: null, same_design: true, parent: false, ...over,
 });
 
-function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODES, failRun = false, jobs = [] as unknown[], sources = [] as unknown[], blocked = null as string | null, sizing = false, scaling = null as unknown } = {}) {
+function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODES, failRun = false, jobs = [] as unknown[], sources = [] as unknown[], blocked = null as string | null, sizing = false, scaling = null as unknown, sized = null as unknown } = {}) {
   const calls = mockApi({
     "GET /cluster/merged": { body: { nodes: [], jobs } },
     "GET /cluster/nodes": { body: nodes },
@@ -52,6 +52,7 @@ function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODE
         can_continue: sources.length > 0, sources, continue_from: from, continue_blocked: sources.length ? null : blocked, scaling } };
     },
     "POST /pretraining/start": { status: 202, body: { id: "job-5", label: "Version 2, once the size of its text is known" } },
+    "POST /distributed/sizing": { body: sized },
     "POST /distributed/runs": failRun ? { status: 400, body: { detail: "Rounds must be at most 1000." } } : { body: { id: "run-3" } },
     "POST /post-training/rounds": { body: { id: "job-8", label: "SFT", params: {}, round: 1 } },
     "POST /quicktest/run": { body: { job_id: "job-9", outlook: "x", started_at: 1 } },
@@ -224,6 +225,61 @@ describe("New run", () => {
     await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Launch anyway" }));
     await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=run-3"));
     expect(sent("POST", "/distributed/runs")?.body).toMatchObject({ machines: ["beast"] });
+  });
+
+  describe("sizing per member", () => {
+    const mem = (name: string, over: Record<string, unknown> = {}) => ({
+      name, address: name, sized: true, fits: true, batch_size: 16, accumulation: 1, offload: false, notes: [], refusal: "", ...over,
+    });
+    const answer = (members: unknown[], over: Record<string, unknown> = {}) => ({
+      members, flagged: [], tokens_per_second: 38000, token_budget: null, rounds: 40, rounds_cut: false, note: "", ...over,
+    });
+
+    test("each member's batch and notes are shown beside the form", async () => {
+      server({ nodes: MORE, sized: answer([mem("mac"), mem("beast", { batch_size: 2, accumulation: 8, notes: ["beast: batch 16 -> 2 x 8 accumulation to fit 5.0 GB of GPU memory."] })]) });
+      const user = userEvent.setup();
+      renderPage(<NewRunPage />, { route: "/runs/new/" });
+      await user.click(await screen.findByTestId("worker-beast"));
+      const section = await screen.findByTestId("member-sizing");
+      expect(section).toHaveTextContent("mac: batch 16, 1 accumulation steps");
+      expect(section).toHaveTextContent("beast: batch 2, 8 accumulation steps");
+      expect(section).toHaveTextContent("beast: batch 16 -> 2 x 8 accumulation to fit 5.0 GB of GPU memory.");
+    });
+
+    test("a member that cannot fit is named, Start waits, and ticking start-without sends leave_out_unfit", async () => {
+      const { sent } = server({ nodes: MORE, sized: answer([mem("mac"), mem("beast", { fits: false, refusal: "beast cannot take part: it has 200 MB of GPU memory for this run and the design needs about 9 GB even at one row." })], { flagged: ["beast"] }) });
+      const user = userEvent.setup();
+      renderPage(<NewRunPage />, { route: "/runs/new/" });
+      await user.click(await screen.findByTestId("worker-beast"));
+      expect(await screen.findByTestId("member-sizing")).toHaveTextContent("beast cannot take part. it has 200 MB of GPU memory");
+      await waitFor(() => expect(screen.getByTestId("blocker")).toHaveTextContent("beast cannot hold the design"));
+      expect(await cta()).toBeDisabled();
+      await user.click(screen.getByRole("checkbox", { name: "Start without beast" }));
+      await waitFor(() => expect(screen.queryByTestId("blocker")).toBeNull());
+      await user.click(await cta());
+      await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=run-3"));
+      expect(sent("POST", "/distributed/runs")?.body).toMatchObject({ machines: ["beast"], leave_out_unfit: true });
+    });
+
+    test("when this computer cannot fit, nothing offers to start without it", async () => {
+      server({ nodes: MORE, sized: answer([mem("mac", { fits: false, refusal: "mac cannot take part: no room." }), mem("beast")], { flagged: ["mac"] }) });
+      const user = userEvent.setup();
+      renderPage(<NewRunPage />, { route: "/runs/new/" });
+      await user.click(await screen.findByTestId("worker-beast"));
+      await waitFor(() => expect(screen.getByTestId("blocker")).toHaveTextContent("This computer cannot hold the design"));
+      expect(screen.queryByRole("checkbox", { name: /Start without/ })).toBeNull();
+    });
+
+    test("cut rounds are told, and a start with nothing flagged sends no leave_out_unfit", async () => {
+      const { sent } = server({ nodes: MORE, sized: answer([mem("mac"), mem("beast")], { rounds: 12, rounds_cut: true, note: "Token budget 5B -> 100M to finish in about 1 h at the 38,000 tokens/s the members that fit measure together. Rounds 40 -> 12." }) });
+      const user = userEvent.setup();
+      renderPage(<NewRunPage />, { route: "/runs/new/" });
+      await user.click(await screen.findByTestId("worker-beast"));
+      expect(await screen.findByTestId("member-sizing")).toHaveTextContent("Rounds 40 -> 12.");
+      await user.click(await cta());
+      await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=run-3"));
+      expect(sent("POST", "/distributed/runs")?.body).not.toHaveProperty("leave_out_unfit");
+    });
   });
 
   test("a busy machine with no job row says it runs another job", async () => {

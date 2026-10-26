@@ -27,7 +27,7 @@ import { planBody } from "../../pretraining/logic";
 import { QUICKTEST } from "../../quick-test/copy";
 import { Coordinator, FIELD, Hint, OuterLoop, Workers, selectedText } from "./fields";
 import { fill, NEW_RUN as T } from "./copy";
-import { busyPeers, ctaLabel, defaultSftVersion, localForced, nameList, peersOf, runHref, shapeOf, sourceFacts, workersOf, type Node, type Source, type Stage } from "./logic";
+import { busyPeers, ctaLabel, defaultSftVersion, localForced, memberLine, nameList, peersOf, runHref, shapeOf, sizingBlocker, sourceFacts, workersOf, type Node, type Source, type Stage } from "./logic";
 
 
 const SLOW_MS = 6_000;
@@ -102,6 +102,7 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
   const [minutes, setMinutes] = useState<"1" | "3" | "10">("3");
   const [failure, setFailure] = useState("");
   const [confirming, setConfirming] = useState(false);
+  const [leftOut, setLeftOut] = useState(""); // the machines the person ticked "start without" for, as a list of names
   const rows = jobRows(useCluster().data, undefined);
   const change = (patch: Partial<Form>) => {
     setForm((f) => ({ ...f, ...patch }));
@@ -132,12 +133,26 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
   const outlook = useQuery({ queryKey: ["queue", "outlook"], queryFn: ({ signal }) => unwrap(api.GET("/queue/outlook", { signal })), retry: false });
   useEvent("queue", () => void client.invalidateQueries({ queryKey: ["queue", "outlook"] }));
 
+  // A run over several machines is sized per member from what each reports free: the server says what each trains with and who cannot take part.
+  const startForm = several ? startBody({ ...form, machines: peers }) : null;
+  const sizing = useQuery({
+    queryKey: ["distributed", "sizing", startForm],
+    queryFn: ({ signal }) => unwrap(api.POST("/distributed/sizing", { body: startForm!, signal })),
+    enabled: !!startForm,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+  const sized = several && sizing.data?.members ? sizing.data : null; // null when this computer cannot read its own hardware
+  const flagged = sized?.flagged ?? [];
+  const confirmedLeaveOut = flagged.length > 0 && leftOut === flagged.join(",");
+  const localName = nodes.find((n) => n.local)?.hostname;
+
   const submit = useMutation({
     mutationFn: async (): Promise<string> => {
       if (several) {
         const body = startBody({ ...form, machines: peers });
         if (!body) throw new Error(T.needSettings);
-        return (await unwrap(api.POST("/distributed/runs", { body }))).id;
+        return (await unwrap(api.POST("/distributed/runs", { body: confirmedLeaveOut ? { ...body, leave_out_unfit: true } : body }))).id;
       }
       const id =
         stage === "pretrain"
@@ -185,7 +200,7 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
     if (stage === "pretrain" && !sets.data) return sets.isError ? T.textDown : T.loadingText;
     if (stage === "pretrain" && ids.length === 0) return T.needText;
     if (several && !defaults.data) return defaults.isError ? T.settingsDown : T.loadingSettings;
-    if (several) return startBody({ ...form, machines: peers }) ? "" : T.needSettings;
+    if (several) return startBody({ ...form, machines: peers }) ? sizingBlocker(sized, localName, confirmedLeaveOut) : T.needSettings;
     if (stage === "pretrain") return plan.data && !plan.data.can_add && !plan.data.estimating ? plan.data.reason : ""; // the server checks the rest on Start
     return sftVersion === null ? T.noVersions : "";
   })();
@@ -299,6 +314,33 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
         )}
       </Slot>
       <Coordinator />
+
+      {several && sized && sized.members.length > 0 && (
+        <section className="flex flex-col gap-1" data-testid="member-sizing">
+          <h2 className="text-xl font-semibold">{T.sizingTitle}</h2>
+          <ul className="list-disc pl-5 text-sm text-muted-foreground">
+            {sized.members.map((m) => (
+              <li key={m.address} className={cn(!m.fits && "text-destructive")}>
+                {memberLine(m)}
+                {m.fits && m.notes.length > 0 && (
+                  <ul className="list-[circle] pl-5">
+                    {m.notes.map((note, i) => (
+                      <li key={i}>{note}</li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            ))}
+          </ul>
+          {sized.rounds_cut && <p className="text-sm text-muted-foreground">{sized.note || fill(T.sizingRounds, { asked: form.rounds, rounds: sized.rounds })}</p>}
+          {flagged.length > 0 && !flagged.includes(localName ?? "") && (
+            <label className="flex min-h-9 items-center gap-2 text-sm">
+              <input type="checkbox" checked={confirmedLeaveOut} onChange={(e) => setLeftOut(e.target.checked ? flagged.join(",") : "")} />
+              <span>{fill(T.sizingLeaveOut, { names: nameList(flagged) })}</span>
+            </label>
+          )}
+        </section>
+      )}
 
       {several && (
         <Slot query={defaults} title={T.outerLoop} loading={T.loadingSettings} failed={T.settingsFailed}>
