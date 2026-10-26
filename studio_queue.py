@@ -15,6 +15,7 @@ from pathlib import Path
 import studio_platform as platform_helpers  # battery + keep-awake live there; never duplicated
 from studio_core import atomic_json, read_json
 from studio_failures import explain
+import studio_run_watch
 from studio_timing import timed
 
 KINDS = ("pretrain", "quicktest", "compare", "post_round", "restore_answers", "checkpoint_now", "import_pretrained",
@@ -83,6 +84,7 @@ class QueueState:
     up_next: list = field(default_factory=list)
     plan: dict = field(default_factory=dict)  # asdict(Plan)
     failed: list = field(default_factory=list)  # jobs that ended failed (the last FAILED_SHOWN), with their sentence in .error; removing one dismisses it
+    notices: list = field(default_factory=list)  # what the running job reports while it goes (studio_run_watch): {kind, text, at}
 
 
 def _idle_macos():
@@ -203,12 +205,17 @@ class Runner:
         self.stopping_job = ""         # the id of a running job the person stopped: persisted, so a restart does not run it again
         self.reap_grace = 35.          # seconds a worker an earlier app left gets to leave by itself (studio_worker.EXIT_GRACE and a margin)
         self.kill_grace = 8.           # seconds a worker gets to stop after "Stop now" (a step and a save) before its process is ended
+        self.save_ceiling = 120.       # seconds a worker that said it is saving its checkpoint may take (counted from that event) before "Stop now" ends it anyway
+        self._saving_since = None      # monotonic time of the running job's last "saving" event; None when it is not saving
         self._kill_at = None           # monotonic time "Stop now" ends the running job's process; None when no immediate stop is pending
         self.dead_runs = []            # jobs whose process an earlier app left running: their run.json is reconciled once it is stopped
         self._load()
         self.running = None            # Job on the runner thread
         self.yielding = None           # (id of the running job being stepped aside, the status it goes back to) until it has stopped
         self.progress = {}
+        self.notices = []              # the running job's live notices (studio_run_watch), cleared when a job starts and ends
+        self._noted, self._read_at, self._pace_at = set(), 0., 0.  # kinds of notice already written into the job's note; when the machine and the pace were last read
+        self.watch_every = studio_run_watch.WATCH_EVERY  # seconds between two hardware readings of the running job
         self.stopping = False
         self.gate = Gate()
         self.blocked = None
@@ -516,7 +523,7 @@ class Runner:
             return QueueState(
                 job=self.running, step=p.get("step", 0), total=p.get("total", 0), phase=p.get("phase", ""), prepare=p.get("prepare"), prepare_phase=p.get("prepare_phase"), lr=p.get("lr"),
                 eta_s=p.get("eta_s"), paused=self.user_paused, blocked=gate.reason, gate=gate, stopping=self.stopping,
-                up_next=self._queued(), plan=dataclasses.asdict(self.plan),
+                up_next=self._queued(), plan=dataclasses.asdict(self.plan), notices=[dict(n) for n in self.notices],
                 failed=[j for j in self.jobs if j.status == "failed"][-FAILED_SHOWN:])
 
     def start(self):
@@ -730,6 +737,65 @@ class Runner:
             job.note = f"{job.note} {text}".strip()
             self._save()
 
+    def _notify(self, job, found, accumulate=False):
+        """Show `found` (a studio_run_watch notice) on the running job: in the state's notices, and once per kind in the job's note, which
+        outlives the run. A notice of the same kind replaces the last one, unless `accumulate` (each halving is its own event)."""
+        with self.lock:
+            if self.running is not job:
+                return
+            kept = [n for n in self.notices if accumulate or n["kind"] != found["kind"]]
+            self.notices = [*kept, found][-studio_run_watch.OOM_SHOWN:]
+            if accumulate or found["kind"] not in self._noted:
+                self._noted.add(found["kind"])
+                job.note = f"{job.note} {found['text']}".strip()
+                self._save()
+        self._emit("queue", {"job": job.id})
+
+    def _clear(self, job, kind):
+        """Drop the notice of `kind` once what it said no longer holds (the job's note keeps what was said)."""
+        with self.lock:
+            if self.running is not job or not any(n["kind"] == kind for n in self.notices):
+                return
+            self.notices = [n for n in self.notices if n["kind"] != kind]
+        self._emit("queue", {"job": job.id})
+
+    def _watch_event(self, job, event, first_step):
+        """What a running pretrain job's progress events say: a batch halved after running out of memory, and where its pace puts its end."""
+        if job.kind != "pretrain":
+            return
+        found = studio_run_watch.oom_notice(event)
+        if found:
+            self._notify(job, found, accumulate=True)
+        if event.get("type") != "metric" or not event.get("elapsed_seconds") or time.monotonic() - self._pace_at < self.watch_every / 3:
+            return
+        self._pace_at = time.monotonic()
+        found = studio_run_watch.projection(
+            step=event.get("step", 0), first_step=first_step, total=event.get("total", 0), trained_tokens=event.get("trained_tokens", 0),
+            elapsed=event["elapsed_seconds"], token_budget=job.params.get("token_budget"), window_seconds=studio_run_watch.window_seconds(job.params))
+        if found:
+            self._notify(job, found)
+        else:
+            self._clear(job, "overrun")
+
+    def _watch_machine(self, job):
+        """Read the machine again (every `watch_every` seconds) and say on the running job when its free disk or RAM has fallen below what
+        the run needs. Nothing is stopped: the run goes on and the person decides."""
+        if self.profile is None or job.kind != "pretrain" or time.monotonic() - self._read_at < self.watch_every:
+            return
+        self._read_at = time.monotonic()
+        try:
+            need = studio_run_watch.needs(job.params)
+            found = studio_run_watch.resources(self.profile(), need) if need else []
+        except Exception:  # noqa: BLE001 - a machine that cannot be read is no news
+            logging.getLogger("groundwork.queue").exception("re-reading the hardware of a running job failed")
+            return
+        for kind in ("disk", "ram"):
+            mine = next((n for n in found if n["kind"] == kind), None)
+            if mine:
+                self._notify(job, mine)
+            else:
+                self._clear(job, kind)
+
     def _run(self, job):
         handler = self.handlers.get(job.kind)
         short = self._disk_problem()
@@ -742,8 +808,9 @@ class Runner:
             self._sync_pause()  # a job that ignores the plan is not held by the gate that stood when it started
             job.params = {**params, "memory_share": share}  # studio_memory.batch_cap fits the job's batch to it
             job.note = note
+            self.notices, self._noted, self._read_at, self._pace_at = [], set(), time.monotonic(), 0.
             self.stop_event.clear()
-            self._kill_at = None
+            self._kill_at = self._saving_since = None
             self._save()
         started = time.monotonic()
 
@@ -752,6 +819,9 @@ class Runner:
         def emit(event):
             if event.get("type") in ("resumed", "resume_refused"):
                 self._resume_note(job, event)
+            if event.get("type") == "saving":  # the final checkpoint is being written: "Stop now" waits for it (up to save_ceiling)
+                self._saving_since = time.monotonic()
+            self._watch_event(job, event, resumed_at[0])
             if event.get("type") == "prepare":  # the text is being tokenized: no step yet, only how far along it is
                 self.progress.update(phase="preparing", prepare=event.get("percent", 0), prepare_phase=event.get("phase"))
             elif event.get("total"):
@@ -781,10 +851,14 @@ class Runner:
             self.wake.clear()
             self._watch()
             self._place_waiting()
+            self._watch_machine(job)
             handle.sync(self.stop_event, self.pause_event)  # whatever set them also set wake
             wait = self.tick
             if self._kill_at is not None and not handle.done.is_set():
-                left = self._kill_at - time.monotonic()
+                deadline = self._kill_at
+                if self._saving_since is not None:  # a kill mid-save leaves a half-written last.npz: give the save its own, longer allowance
+                    deadline = max(deadline, self._saving_since + self.save_ceiling)
+                left = deadline - time.monotonic()
                 if left <= 0:  # "Stop now" was not answered within the grace: end the process (the job still ends as stopped)
                     self._kill_at = None
                     handle.kill()
@@ -805,10 +879,11 @@ class Runner:
             job.error, job.details = error, details if error else ""
             job.status = status  # last: a reader that waits for the status without the lock then finds the error and details in place
             self.running = None
+            self.notices = []
             self._sync_pause()
             self.stopping = False
             self.stopping_job = ""
-            self._kill_at = None
+            self._kill_at = self._saving_since = None
             self.follow_up(job)
             if self.closed.is_set() and job.status == "stopped":
                 job.status = "waiting"  # shut down mid-run: try again next start

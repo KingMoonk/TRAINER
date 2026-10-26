@@ -59,6 +59,31 @@ class Declared(unittest.TestCase):
             taken.append(text)
         self.assertLessEqual(len(taken), 51)   # a stream is read only as far as the budget
 
+    def test_a_rows_like_corpus_is_read_only_at_the_sampled_rows(self):
+        class CountingRows:
+            def __init__(self, count):
+                self.rows, self.reads = [{"text": "x" * 100} for _ in range(count)], 0
+
+            def __len__(self):
+                return len(self.rows)
+
+            def __getitem__(self, position):
+                self.reads += 1
+                return self.rows[position]
+
+            def characters(self):
+                return sum(len(row["text"]) for row in self.rows)
+
+        rows, heard = CountingRows(1000), []
+        picked = list(sample_texts(rows, 10_000, lambda done, total: heard.append((done, total))))
+        self.assertEqual(picked, list(sample_texts([{"text": "x" * 100} for _ in range(1000)], 10_000)))
+        self.assertLessEqual(rows.reads, len(picked))
+        self.assertEqual(heard[-1][1], 10_000)
+        self.assertGreaterEqual(heard[-1][0], 10_000 - 100)
+        small = CountingRows(5)
+        self.assertEqual(len(list(sample_texts(small, 10_000))), 5)   # fits: every row, each read once
+        self.assertEqual(small.reads, 5)
+
 
 @NEEDS
 class Fitting(unittest.TestCase):

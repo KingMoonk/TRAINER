@@ -10,7 +10,7 @@ const NODES = [node("local", "mac"), node("beast:8000", "beast", { device: "cuda
 const job = (id: string, over: Partial<Job> = {}): Job => ({ id, kind: "pretrain", label: id, note: "", params: {}, status: "waiting", eta_s: null, created_at: 0, epoch: 0, error: "", details: "", node: "", owner: "", sizing: null, ...over });
 const queue = (over: Partial<Queue> = {}): Queue => ({
   job: null, step: 0, total: 0, phase: "", lr: null, eta_s: null, paused: false, blocked: null, stopping: false,
-  gate: { supported: true }, up_next: [], failed: [], plan: { hours: "any", start_hour: 22, end_hour: 7, memory: "most", idle_only: true, idle_after_s: 60, pause_on_battery: true, keep_awake: false, chat_follows_best: true },
+  gate: { supported: true }, up_next: [], failed: [], notices: [], plan: { hours: "any", start_hour: 22, end_hour: 7, memory: "most", idle_only: true, idle_after_s: 60, pause_on_battery: true, keep_awake: false, chat_follows_best: true },
   ...over,
 });
 const round = (n: number, loss: number | null, val: number | null, seconds = 600) => ({ round: n, loss, val_loss: val, seconds, step: n * 100, members: 2, contributed: 2, dropped: [], bytes_up: 0, bytes_down: 0, best: false, pivot: "", polish: "" as const, lessons: 0 });

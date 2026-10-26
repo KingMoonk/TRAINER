@@ -176,7 +176,8 @@ class Scaling(BaseModel):
     hours: float | None = None  # the run's time at the measured speed; null without one
     token_budget: int | None = None
     offload: bool = False  # the optimizer state lives in RAM
-    blocker: Blocker | None = None  # set with a refusal
+    refusal: str = ""  # a plain sentence when even the smallest scaled run cannot fit; set whether or not a blocker names a resource
+    blocker: Blocker | None = None  # the resource behind a refusal, when one is to blame
     hardware: Hardware
 
 
@@ -401,7 +402,7 @@ def _fitted(services, v, config, body, mode, pieces, readout, measured):
     shown = fit.to_dict()
     scaling = Scaling(notes=shown["notes"], scaled=shown["scaled"], can_keep_mine=shown["can_keep_mine"], kept_mine=shown["kept_mine"],
                       window_hours=body.window_hours, hours=shown["hours"], token_budget=shown["token_budget"], offload=shown["offload"],
-                      blocker=shown["blocker"], hardware=Hardware.model_validate(profile.to_dict()))
+                      refusal=shown["refusal"], blocker=shown["blocker"], hardware=Hardware.model_validate(profile.to_dict()))
     record = studio_fit.record(fit, config, limit, window_hours=body.window_hours, keep_mine=body.keep_my_settings, speed=speed,
                                pieces=pieces, chars_per_piece=chars)
     return {"fit": fit, "scaling": scaling, "record": record}
