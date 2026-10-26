@@ -78,6 +78,7 @@ class QueueState:
     up_next: list = field(default_factory=list)
     plan: dict = field(default_factory=dict)
     failed: list = field(default_factory=list)  # jobs that ended failed, newest last; see studio_queue.QueueState
+    notices: list = field(default_factory=list)  # what the running job reports while it goes: {kind: oom | disk | ram | overrun, text, at}
 
 
 _log = logging.getLogger(__name__)

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { round, run } from "@/app/cluster/training/test-data";
-import { clock, dilocoShape, extendRequest, gapNow, gapText, gaps, overfit, overfitBad, percentOf, roundPairs, roundSeries, runViewHref, soloShape, stepSeries, type Curve } from "./logic";
+import { clock, dilocoShape, extendRequest, gapNow, gapText, gaps, overfit, overfitBad, percentOf, roundPairs, roundSeries, runViewHref, soloNotices, soloShape, stepSeries, type Curve, type Notice } from "./logic";
 
 const curve = (over: Partial<Curve> = {}): Curve => ({ steps: [], smooth: [], heldout: [], ...over });
 /** A training line that keeps falling, one point per 100 steps. */
@@ -106,5 +106,18 @@ describe("extendRequest", () => {
   });
   test("is null for what the API would refuse or what changes nothing", () => {
     for (const [add, steps] of [["0", ""], ["", ""], ["-1", ""], ["1.5", ""], ["abc", ""], ["5", "0"], ["5", "2.5"], ["100000", ""]]) expect(extendRequest(going, add, steps)).toBeNull();
+  });
+});
+
+describe("soloNotices", () => {
+  const notices: Notice[] = [
+    { kind: "oom", text: "Ran out of memory at step 3: the batch was halved to 4 with accumulation 2 (8 rows a step) and training went on.", at: 10 },
+    { kind: "disk", text: "Free disk is down to 1 MB while the run goes.", at: 20 },
+  ];
+  test("lists a running job's notices newest first", () => {
+    expect(soloNotices({ notices }, true).map((n) => n.kind)).toEqual(["disk", "oom"]);
+  });
+  test("lists none for a job that is not running, whatever the queue's running job says", () => {
+    expect(soloNotices({ notices }, false)).toEqual([]);
   });
 });
