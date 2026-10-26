@@ -815,6 +815,9 @@ class FakeServices(Services):
     def _heldout(self):
         return self.heldout_docs
 
+    def _heldout_set(self):
+        return frozenset(self.heldout_docs)
+
     def hardware_profile(self):
         return self.hardware
 
@@ -2230,7 +2233,7 @@ class WorkspaceServices(Services):
         fixed the first time (exact duplicates removed, seeded split) and then kept, so every version is scored on the same text."""
         self._fix_heldout(params)
         rows = self._text_rows(params.get("datasets"))
-        held = set(self._heldout())
+        held = self._heldout_set()
         good_only = bool(params.get("reviewed_only"))  # after the split: the held-back text is the same for every run, reviewed or not
         return [e for e in rows if e["text"] not in held and (not good_only or e.get("quality") == "Good")]
 
@@ -2243,7 +2246,7 @@ class WorkspaceServices(Services):
         import studio_data_kinds
         ids = params.get("datasets") or [d["id"] for d in self.workspace.state["datasets"]]
         self._fix_heldout(params)
-        held = set(self._heldout())
+        held = self._heldout_set()
         good_only = bool(params.get("reviewed_only"))
         total = studio_data_kinds.text_characters(self.workspace, ids, exclude=held)
         budget = studio_corpus.budget_chars(params.get("token_budget"))
@@ -2460,7 +2463,7 @@ class WorkspaceServices(Services):
         def step(times=1):
             for _ in range(times if task is not None else 0):
                 task.step()
-        exclude = set(self._heldout())
+        exclude = self._heldout_set()
         rev = self._set_rev(set_id)
         report(0)
         self.note("Reading a sample of the chosen text")
@@ -2500,7 +2503,7 @@ class WorkspaceServices(Services):
         import studio_estimate
         from itertools import chain, zip_longest
         from studio_model import read_metrics
-        exclude = set(self._heldout())
+        exclude = self._heldout_set()
         context = spec["dims"]["n_ctx"]
         pieces, chars, vocab, lengths, estimated = 0.0, 0, None, [], False
         for set_id in ids:
@@ -2603,7 +2606,7 @@ class WorkspaceServices(Services):
             import studio_data_kinds as dk
             from studio_ia import pieces
             ids = [d["id"] for d in self.workspace.state["datasets"]]
-            texts, _ = dk.text_sample(self.workspace, ids, pieces.SAMPLE_CHARS, exclude=set(self._heldout()))
+            texts, _ = dk.text_sample(self.workspace, ids, pieces.SAMPLE_CHARS, exclude=self._heldout_set())
             return pieces.word_lists(texts, self._cached("gpt2", self._gpt2))
         return self._fresh("word_lists", make)
 
@@ -2611,7 +2614,7 @@ class WorkspaceServices(Services):
         import studio_compute
         import studio_data_kinds as dk
         ids = [d["id"] for d in self.workspace.state["datasets"]]
-        texts, _ = dk.text_sample(self.workspace, ids, RANGE_CHARS, exclude=set(self._heldout()))
+        texts, _ = dk.text_sample(self.workspace, ids, RANGE_CHARS, exclude=self._heldout_set())
         if not texts:
             raise ValueError("There is no plain text to try it on. Add some in Your data.")
         # the processor only: this runs on a worker thread while Tk runs, where a GPU probe or Metal work crashes the app on macOS
@@ -2629,7 +2632,7 @@ class WorkspaceServices(Services):
         import studio_data_kinds as dk
         import studio_estimate
         import studio_spec
-        characters = dk.text_characters(self.workspace, dataset_ids, exclude=set(self._heldout()))
+        characters = dk.text_characters(self.workspace, dataset_ids, exclude=self._heldout_set())
         try:
             params = studio_estimate.estimate(studio_spec.validate_spec(spec))["total"]
         except (ValueError, KeyError, TypeError):
@@ -2639,7 +2642,7 @@ class WorkspaceServices(Services):
             ids = self._preview_ids(dataset_ids)
             sized = [self._set_size(i, studio_spec.validate_spec(spec)) for i in ids]
             if sized and all(sized):  # every chosen set measured: characters per piece over the whole choice
-                exclude = set(self._heldout())
+                exclude = self._heldout_set()
                 parts = [(dk.text_characters(self.workspace, [i], exclude=exclude), m["chars_per_piece"]) for i, m in zip(ids, sized) if m["chars_per_piece"]]
                 pieces = sum(c / cpp for c, cpp in parts)
                 measured = sum(c for c, _ in parts) / pieces if pieces else None
@@ -2915,7 +2918,7 @@ class WorkspaceServices(Services):
         def make():
             import studio_data_kinds as dk
             import studio_decontam
-            held, index = set(self._heldout()), studio_decontam.Index()
+            held, index = self._heldout_set(), studio_decontam.Index()
             for d in self.workspace.state["datasets"]:
                 for e in self.workspace.iter_examples(d["id"]):
                     if not dk.is_draft(e) and not (e["text"] in held if dk.classify(e) == "text" else dk.stamp(e)["holdout"]):
@@ -3518,8 +3521,16 @@ class WorkspaceServices(Services):
             return []
         if getattr(self, "_heldout_hit", (None,))[0] != stamp:
             path = self.root / "data" / "heldout.json"
-            self._heldout_hit = (stamp, [_doc(r) for r in json.loads(path.read_text(encoding="utf-8"))])
+            docs = [_doc(r) for r in json.loads(path.read_text(encoding="utf-8"))]
+            self._heldout_hit = (stamp, docs, frozenset(docs))
         return self._heldout_hit[1]
+
+    def _heldout_set(self):
+        """The held-back documents as a frozenset, built with the list and cached with it by the file's stamp (the file is capped
+        by studio_eval.HELDOUT_MAX_DOCS and HELDOUT_MAX_CHARS)."""
+        docs = self._heldout()
+        hit = getattr(self, "_heldout_hit", (None,))
+        return hit[2] if len(hit) > 2 and hit[1] is docs else frozenset(docs)
 
     def _tokenizer(self, run_dir):
         from studio_model import Tokenizer, load_checkpoint
