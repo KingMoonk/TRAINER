@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api";
 import { T, fill } from "./copy";
-import { count, errorText, firstOpenRound, roundBlocker, rowText, spreadText, stepLine, type Status } from "./logic";
+import { count, errorText, firstOpenRound, gateState, roundBlocker, rowText, spreadText, stepLine, type Status } from "./logic";
 
 const rounds = (statuses: Record<string, string>) => ({ rounds: Object.fromEntries(Object.entries(statuses).map(([k, status]) => [k, { status }])) }) as unknown as Status;
 
@@ -116,5 +116,21 @@ describe("rowText", () => {
     expect(rowText(null)).toBe("null");
     expect(rowText(undefined)).toBeUndefined();
     expect(rowText([1, 2])).toBe("0: 1\n1: 2"); // an array is listed by index
+  });
+});
+
+describe("gateState", () => {
+  const check = (ok: boolean | null) => ({ name: "c", detail: "d", ok });
+  it("fails when the gate or any check failed", () => {
+    expect(gateState({ ok: false, checks: [check(true)] })).toBe("failed");
+    expect(gateState({ ok: true, checks: [check(true), check(false)] })).toBe("failed");
+  });
+  it("is unmeasured when no check measured anything", () => {
+    expect(gateState({ ok: true, checks: [check(null), check(null)] })).toBe("unmeasured");
+    expect(gateState({})).toBe("unmeasured");
+  });
+  it("passes when nothing failed and something was measured", () => {
+    expect(gateState({ ok: true, checks: [check(true), check(null)] })).toBe("passed");
+    expect(gateState({ ok: true })).toBe("passed");
   });
 });

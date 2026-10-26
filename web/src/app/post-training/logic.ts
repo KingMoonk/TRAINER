@@ -17,6 +17,16 @@ export type Gate = {
   groups?: number;
 };
 
+export type GateState = "passed" | "failed" | "unmeasured";
+
+/** How a finished round reads: failed when the gate or any check failed, unmeasured when no check measured anything, else passed. */
+export function gateState(gate: Gate): GateState {
+  const checks = gate.checks ?? [];
+  if (gate.ok === false || checks.some((c) => c.ok === false)) return "failed";
+  if (checks.length === 0 ? gate.ok !== true : checks.every((c) => c.ok == null)) return "unmeasured";
+  return "passed";
+}
+
 /** studio_api/routers/post_training.py round_blocker: why a round cannot be queued yet (plain words), or null. */
 export function roundBlocker(
   round: number,
