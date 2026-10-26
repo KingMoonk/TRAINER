@@ -3744,8 +3744,9 @@ class WorkspaceServices(Services):
                     old.unlink()
                 except OSError:
                     pass
-        with self._chat_lock:  # the files are gone: so are the chat models loaded from them
-            self._evict_live_models(number)
+        if hasattr(self, "_chat_lock"):  # a bare instance (tests build one without __init__) has no chat cache
+            with self._chat_lock:  # the files are gone: so are the chat models loaded from them
+                self._evict_live_models(number)
 
     def _live_number(self, ckpt):
         """The version a live snapshot path (data/live_checkpoints/v<number>-<mtime>.npz) belongs to, or None for any other checkpoint."""
