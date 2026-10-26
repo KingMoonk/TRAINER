@@ -88,8 +88,30 @@ class PostTrainingApiTest(unittest.TestCase):
         third = trained(self.services)
         options = self.client.get("/post-training/options", params={"version": third.number}).json()
         self.assertEqual([t["number"] for t in options["teachers"]], [first.number])
-        self.assertEqual(options["default_teacher"], first.number)
+        self.assertIsNone(options["default_teacher"])   # Round 1 never ran on it: never an unchecked default
+        self.assertEqual(options["teachers"][0]["chat_passed"], None)
         self.assertEqual(self.client.get("/post-training/options", params={"version": 99}).status_code, 404)
+
+    def test_the_default_teacher_is_the_best_earlier_version_that_passed_round_1(self):
+        from studio_api.routers.post_training import default_teacher
+        weak, strong, failed, newest, student = (trained(self.services) for _ in range(5))
+        gate = lambda ok, loss: {1: {"ok": ok, "after": {"conv_loss": loss}}}
+        self.services._round_gates = {weak.number: gate(True, 2.0), strong.number: gate(True, 1.2),
+                                      failed.number: gate(False, 0.5), newest.number: {}}
+        options = self.client.get("/post-training/options", params={"version": student.number}).json()
+        self.assertEqual(options["default_teacher"], strong.number)
+        by_number = {t["number"]: t for t in options["teachers"]}
+        self.assertEqual((by_number[strong.number]["chat_passed"], by_number[strong.number]["chat_loss"]), (True, 1.2))
+        self.assertEqual((by_number[failed.number]["chat_passed"], by_number[failed.number]["chat_loss"]), (False, 0.5))
+        self.assertIsNone(by_number[newest.number]["chat_passed"])
+        # only a failed or unmeasured Round 1 earlier on: no default, and a round queued without a pick says so
+        self.services._round_gates = {failed.number: gate(False, 0.5), weak.number: {1: {"ok": True, "after": {}}}}
+        self.assertIsNone(default_teacher([weak, failed, newest], student, self.services.round_gates()))
+        refused = self.client.post("/post-training/rounds", json={"round": 3, "version": student.number})
+        self.assertEqual(refused.status_code, 400, refused.text)
+        self.assertIn("no teacher is preselected", refused.text)
+        picked = self.client.post("/post-training/rounds", json={"round": 3, "version": student.number, "teacher_version": failed.number})
+        self.assertEqual(picked.status_code, 200, picked.text)
 
     def test_teachers_are_filtered_by_the_serialized_tokenizer_the_job_will_compare(self):
         from studio_api.routers.post_training import teacher_options
@@ -128,6 +150,7 @@ class PostTrainingApiTest(unittest.TestCase):
     def test_a_correction_round_goes_to_the_front(self):
         teacher = trained(self.services)
         trained(self.services)
+        self.services._round_gates = {teacher.number: {1: {"ok": True, "after": {"conv_loss": 1.0}}}}
         self.client.post("/post-training/rounds", json={"round": 2})
         round_three = self.client.post("/post-training/rounds", json={"round": 3}).json()
         self.assertEqual(self.queued()[0].id, round_three["id"])

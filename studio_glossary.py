@@ -58,7 +58,6 @@ GLOSSARY = {
     "step": ("Step", "One adjustment of the model. The step counter shows progress through the run."),
     "run": ("Run", "One training session and everything it saved: checkpoints, the loss history and a copy of the data used."),
     "resume": ("Resume", "Continue training a saved checkpoint for more steps instead of starting over from random numbers."),
-    "curriculum": ("Sequential training (curriculum)", "Teaching in stages like school: reading text first (that is where facts are learned), then instructions, code, reasoning, with earlier material replayed along the way. One learning-rate curve spans all stages. After each stage the model is re-tested on earlier ones to see what it forgot."),
     "replay": ("Replay earlier data", "Mixing a little of the old lessons into each new stage so the model does not forget them."),
     "forgetting": ("Forgetting", "When learning something new makes the model worse at something it learned before."),
     # ---- chat

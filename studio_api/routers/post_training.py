@@ -59,7 +59,7 @@ T = {
 "lora_no_checkpoint": "LoRA needs a trained version to start from.",
 "lora_mixed": "LoRA needs float32. This version trains in mixed precision.",
 "lora_job": "LoRA rank {rank}",
-"few_thousand": "A few thousand is enough. Only the answer part is scored. No frozen copy and no leash: this round is ordinary training on good examples.",
+"few_thousand": "A few thousand conversations teach the chat format; more keep improving the answers. It trains about two passes over all your conversations, up to 2,000 steps, so a large mix takes a while. Only the answer part is scored. No frozen copy and no leash: this round is ordinary training on good examples.",
     "prompt_rule": "PROMPT · RULE: {rule}",
     "answer_output": "its answer",
     "rule_label": "rule",
@@ -77,7 +77,8 @@ T = {
     "teacher_label": "Teacher",
     "teacher_note": "The teacher must share this model's word list and reading window; the app checks and says so if it doesn't. Your local model (Ollama) can't teach here. It keeps two jobs: rewriting prompts and judging.",
     "previous_best": "Another trained version",
-    "previous_desc": "{version}. Same word list and reading window as this model; pick a stronger one if you have it.",
+    "previous_desc": "{version}. Same word list and reading window as this model, and the earlier version with the lowest answer loss among those whose Round 1 passed.",
+    "no_default_teacher": "No earlier version has a passed Round 1 yet, so no teacher is preselected: pick one yourself, or run Round 1 on an earlier version first.",
     "no_previous": "No other trained version shares this model's word list yet: train another first, or teach a correction in Chat.",
     "this_model_correction": "This model, shown your correction as a hint",
     "correction_desc": "From Chat's \"Teach a correction\": the same model is shown your correction as a hint and learns to answer as if it had it. This only works if the model can use a hint.",
@@ -182,6 +183,8 @@ class LeashOut(BaseModel):
 class TeacherOut(BaseModel):
     number: int
     name: str
+    chat_passed: bool | None = None  # whether its Round 1 passed the gate; None = Round 1 never ran on it
+    chat_loss: float | None = None  # its measured answer loss on held-back conversations after Round 1; None = not measured
 
 
 class OptionsOut(BaseModel):
@@ -300,10 +303,25 @@ def teacher_options(versions, version, root=None):
     return out
 
 
-def default_teacher(options, version):
-    """The previous best (the latest option before `version`), else the latest option; None when there is none."""
-    earlier = [v for v in options if version and v.number < version.number]
-    return (earlier or options or [None])[-1]
+def chat_result(gates, number):
+    """(passed, answer loss) of version `number`'s recorded Round 1 (gates = services.round_gates()); (None, None) when it never ran,
+    and a loss of None when the round did not measure one."""
+    record = ((gates or {}).get(number) or {}).get(1)
+    if not record:
+        return None, None
+    loss = (record.get("after") or {}).get("conv_loss")
+    return bool(record.get("ok")), (float(loss) if isinstance(loss, (int, float)) and loss == loss else None)
+
+
+def default_teacher(options, version, gates=None):
+    """The earlier option (before `version`) whose Round 1 passed its gate with the lowest measured answer loss; None when no
+    earlier option passed, so the page preselects nothing rather than an unchecked version."""
+    ranked = []
+    for v in options:
+        passed, loss = chat_result(gates, v.number)
+        if version and v.number < version.number and passed and loss is not None:
+            ranked.append((loss, -v.number, v))
+    return min(ranked, key=lambda r: r[:2])[2] if ranked else None
 
 
 def round_blocker(round_number, counts, teacher_is_version, has_teacher, checkpoint):
@@ -343,10 +361,11 @@ def options(version: int | None = None, services=Depends(get_services)):
     """The choices a round offers for a version: LoRA for round 1, the teachers for round 3, the leash for round 4."""
     chosen = pick_version(services, version)
     teachers = teacher_options(services.versions(), chosen, getattr(services, "root", None))
-    teacher = default_teacher(teachers, chosen)
+    gates = services.round_gates()
+    teacher = default_teacher(teachers, chosen, gates)
     return OptionsOut(leash=[LeashOut(name=name, beta=beta, note=note) for name, beta, note in LEASH], lora_ranks=list(LORA_RANKS),
                       lora_blocker=lora_blocker(chosen), lora_default=lora_default(chosen),
-                      teachers=[TeacherOut(number=v.number, name=v.name) for v in teachers],
+                      teachers=[TeacherOut(number=v.number, name=v.name, **dict(zip(("chat_passed", "chat_loss"), chat_result(gates, v.number)))) for v in teachers],
                       default_teacher=teacher.number if teacher else None)
 
 
@@ -378,10 +397,12 @@ def queue_round(body: RoundRequest, services=Depends(get_services)):
     if body.round == 3:
         teacher = None
         if body.teacher == "version":
-            teacher = next((v for v in teachers if v.number == body.teacher_version), None) or default_teacher(teachers, version)
+            teacher = next((v for v in teachers if v.number == body.teacher_version), None) or default_teacher(teachers, version, services.round_gates())
             if body.teacher_version is not None and (teacher is None or teacher.number != body.teacher_version):
                 raise ValueError(f"Version {body.teacher_version} cannot teach version {version.number}: "
                                  "it needs a checkpoint, the same word list and the same reading window.")
+            if teacher is None:
+                raise ValueError(T["no_default_teacher"])
         params["teacher"] = teacher.best_checkpoint if teacher else None
         params["teacher_choice"] = "previous best" if body.teacher == "version" else "correction"
     if body.round == 4:

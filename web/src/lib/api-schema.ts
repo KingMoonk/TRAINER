@@ -9168,6 +9168,10 @@ export interface components {
         };
         /** TeacherOut */
         TeacherOut: {
+            /** Chat Loss */
+            chat_loss?: number | null;
+            /** Chat Passed */
+            chat_passed?: boolean | null;
             /** Name */
             name: string;
             /** Number */

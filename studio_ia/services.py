@@ -698,6 +698,10 @@ class Services:
         """Run (or read back) the benchmark suite on one trained version: studio_bench.run_suite's dict. Slow."""
         raise NotImplementedError
 
+    def round_gates(self) -> dict:
+        """Every version's recorded round results: {version number: {round: {"ok", "after": {"conv_loss", ...}, ...}}}."""
+        raise NotImplementedError
+
     def post_training(self, version) -> dict:
         """{"rounds": {1..4: {"status": done|running|queued|idle, "note": str}}, "counts": {"conversations", "corrections",
         "problems", "pairs"}, "gates": {round: {"ok", "checks", "verdict", "judge": (k, n), "taught", "groups"}},
@@ -1410,6 +1414,9 @@ class FakeServices(Services):
 
     def run_benchmark(self, number):
         return next(r["result"] for r in self.benchmark()["rows"] if r["number"] == number) or {}
+
+    def round_gates(self):
+        return dict(getattr(self, "_round_gates", {}))
 
     def post_training(self, version):
         return {"rounds": {}, "counts": {}, "gates": {}}
@@ -2982,6 +2989,9 @@ class WorkspaceServices(Services):
     def _human_pairs(self):
         from studio_rlhf import PreferenceStore
         return PreferenceStore(self.root).all(["human"])
+
+    def round_gates(self):
+        return {int(v): {int(n): g for n, g in rounds.items()} for v, rounds in self._json("post_training.json", {}).items()}
 
     def post_training(self, version):
         v = self._as_version(version) if version else self.current_version()
