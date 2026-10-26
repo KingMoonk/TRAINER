@@ -3,7 +3,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { ROUNDS, T, fill } from "./copy";
-import { stepLine, type Gate, type Queue, type Status } from "./logic";
+import { gateState, stepLine, type Gate, type Queue, type Status } from "./logic";
 
 function Progress({ fraction }: { fraction: number }) {
   return (
@@ -37,11 +37,16 @@ export function GateCard({
   else if (spec.counted) verdict = fill(running ? T.soFarCount : T.willCount, { what: lead });
   else if (running) verdict = fill(T.soFar, { verdict: lead[0].toLowerCase() + lead.slice(1) });
   else verdict = fill(T.willRead, { verdict: lead });
-  const checks = gate?.checks ?? [
-    { name: T.heldBackCheck, detail: T.measuredAtEnd, ok: null },
-    { name: T.problemsCheck, detail: T.measuredAtEnd, ok: null },
-  ];
-  const result = gate ? (gate.ok ? T.resultLive : T.resultKept) : running ? T.chatKeeps : T.untilThen;
+  const state = gate ? gateState(gate) : null;
+  if (gate && state === "failed" && !gate.verdict) verdict = T.verdictFailed;
+  if (gate && state === "unmeasured" && !gate.verdict) verdict = T.verdictUnmeasured;
+  const pending = (name: string) => ({ name, detail: T.measuredAtEnd, ok: null });
+  const checks =
+    gate?.checks ??
+    (round === 1
+      ? [pending(T.conversationsCheck), pending(T.stopCheck), pending(T.heldBackCheck), pending(T.problemsCheck)]
+      : [pending(T.heldBackCheck), pending(T.problemsCheck)]);
+  const result = gate ? (state === "passed" && gate.ok !== false ? T.resultLive : T.resultKept) : running ? T.chatKeeps : T.untilThen;
   const total = queue?.total ?? 0;
   const shown = Object.entries(overlap ?? {}).filter(([, o]) => o.left_out);
   return (
@@ -61,8 +66,15 @@ export function GateCard({
           </div>
         )}
         <div>
-          <div className="text-xs uppercase text-muted-foreground">Verdict</div>
-          <p className={cn("mt-1 text-lg", gate ? "text-success" : "text-muted-foreground")}>{verdict}</p>
+          <div className="text-xs uppercase text-muted-foreground">
+            Verdict
+            {state && (
+              <span data-testid="gate-state" className={cn("ml-2 font-medium", state === "passed" ? "text-success" : state === "failed" ? "text-destructive" : "text-muted-foreground")}>
+                {state === "passed" ? T.gatePassed : state === "failed" ? T.gateFailed : T.gateUnmeasured}
+              </span>
+            )}
+          </div>
+          <p className={cn("mt-1 text-lg", state === "passed" ? "text-success" : state === "failed" ? "text-destructive" : "text-muted-foreground")}>{verdict}</p>
         </div>
         <p className="text-xs text-muted-foreground">{T.chatMoves}</p>
         <ul className="flex flex-col gap-2">
