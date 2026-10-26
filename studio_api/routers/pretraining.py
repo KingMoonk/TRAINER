@@ -14,6 +14,7 @@ from studio_api.app import get_services
 from studio_api.models_queue_data import JobRecordModel, Model, submit
 from studio_ia import pretraining_plan as plan
 from studio_ia import sizing
+import studio_fit
 from studio_ia.services import if_added
 from studio_spec import RUN_INTS
 
@@ -128,6 +129,55 @@ class PlanRequest(BaseModel):
     steps: int | None = Field(None, ge=1, le=100_000_000)  # a step count chosen instead of `passes` (the suggestion's "use these steps")
     plateau: bool | None = None  # end the run when its validation loss goes flat: true always, false never, null for runs over an hour
     from_version: int | None = None  # the version whose best checkpoint a catch-up starts from (one of the plan's `sources`); null: the default
+    window_hours: float = Field(studio_fit.DEFAULT_WINDOW_HOURS, gt=0, le=24 * 365)  # the longest the run may take; a token budget that needs longer is cut to fit
+    keep_my_settings: bool = False  # "use my settings anyway": keep the batch and token budget when the run only fits tightly or is only slow
+
+
+class ScaleNote(BaseModel):
+    """One thing the run was scaled for (studio_fit.Note). `advisory`: it only says the run is tight or slow, and "use my settings anyway" keeps the figure."""
+
+    kind: Literal["batch", "offload", "context", "tokens", "model", "slow", "tight"]
+    reason: Literal["vram", "ram", "disk", "time"]
+    text: str
+    advisory: bool = False
+
+
+class Blocker(BaseModel):
+    """The resource behind a refusal, in bytes."""
+
+    resource: Literal["vram", "ram", "disk"]
+    needed: int
+    available: int
+
+
+class Hardware(BaseModel):
+    """What this computer has, measured now (studio_fit.hardware_profile). A figure that could not be read is null."""
+
+    device: str  # cuda | mps | cpu
+    gpu_name: str = ""
+    vram_total: int = 0
+    vram_free: int | None = None
+    ram_total: int | None = None
+    ram_free: int | None = None
+    disk_free: int | None = None
+    cpu_cores: int = 1
+    tokens_per_second: float | None = None  # the newest device probe on this machine; null before any
+    measured_at: float | None = None  # when it was made (epoch seconds)
+
+
+class Scaling(BaseModel):
+    """How the run was fitted to this computer (studio_fit.fit_solo): every change with its reason, and what the person may do about it."""
+
+    notes: list[ScaleNote] = []
+    scaled: bool  # the config or token budget differs from the one asked for
+    can_keep_mine: bool = False  # "use my settings anyway" keeps the person's figure
+    kept_mine: bool = False
+    window_hours: float
+    hours: float | None = None  # the run's time at the measured speed; null without one
+    token_budget: int | None = None
+    offload: bool = False  # the optimizer state lives in RAM
+    blocker: Blocker | None = None  # set with a refusal
+    hardware: Hardware
 
 
 class PlateauRule(BaseModel):
@@ -278,6 +328,7 @@ class PretrainPlan(BaseModel):
     minutes: int | None = None  # null until this computer has timed the design (POST /pretraining/step_rate)
     lr: float | None = None
     sizing: Sizing | None = None  # null until the size of the text is known
+    scaling: Scaling | None = None  # null until the run is known, or when this computer's hardware cannot be read
     enough: EnoughText | None = None
     readout: SizeReadout | None = None  # null without chosen text or a valid design
     expectation: Expectation | None = None
@@ -333,10 +384,41 @@ def _sizing(services, v, mode, preview, steps, body, measured):
     return Sizing.model_validate(found)
 
 
+def _fitted(services, v, config, body, mode, pieces, readout, measured):
+    """The run fitted to this computer (studio_fit.fit_solo), with the figures the queue needs to fit it again at start; None when the
+    hardware cannot be read or the design cannot be fitted. A solo run is scaled; a run over several machines is sized per member elsewhere."""
+    profile = services.hardware_profile()
+    if profile is None:
+        return None
+    limit = ((v.spec.get("train", {}).get("run", {}) or {}).get("token_limit_millions") or 0) * 1_000_000 or None
+    speed = measured["tokens_per_second"] if measured else profile.tokens_per_second
+    chars = readout.chars_per_piece if readout else plan.CHARS_PER_PIECE
+    try:
+        fit = studio_fit.fit_solo(config, profile, share=services.memory_share(), pieces=pieces, chars_per_piece=chars, token_budget=limit,
+                                  window_hours=body.window_hours, speed=speed, keep_mine=body.keep_my_settings, fixed_architecture=mode == "catch_up")
+    except (ValueError, KeyError, TypeError):
+        return None
+    shown = fit.to_dict()
+    scaling = Scaling(notes=shown["notes"], scaled=shown["scaled"], can_keep_mine=shown["can_keep_mine"], kept_mine=shown["kept_mine"],
+                      window_hours=body.window_hours, hours=shown["hours"], token_budget=shown["token_budget"], offload=shown["offload"],
+                      blocker=shown["blocker"], hardware=Hardware.model_validate(profile.to_dict()))
+    record = studio_fit.record(fit, config, limit, window_hours=body.window_hours, keep_mine=body.keep_my_settings, speed=speed,
+                               pieces=pieces, chars_per_piece=chars)
+    return {"fit": fit, "scaling": scaling, "record": record}
+
+
 def _unusable_reason(unusable):
     """Why a run cannot start when the chosen text has nothing a run may use: generated text is a draft until it is marked Good."""
     names = ", ".join(f"{name} ({rows:,} rows waiting for review)" if rows else name for name, rows in unusable)
     return f"There is no text to train on yet in {names}. Generated text is used for nothing until it is marked Good: review it in Your data."
+
+
+@router.get("/hardware")
+def hardware(services: Services) -> Hardware | None:
+    """What this computer has right now: GPU memory, free RAM and disk, and the speed the newest device probe measured. Null when it
+    cannot be read. The plan scales a run to it; the figures are read fresh on every call."""
+    found = services.hardware_profile()
+    return None if found is None else Hardware.model_validate(found.to_dict())
 
 
 @router.get("/text_sets")
@@ -382,13 +464,23 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
     if steps:
         steps = min(steps, MAX_STEPS)  # the engine refuses more; text this large is not passed over in full (passes_over_text shows how much is)
     measured = services.cached_step_rate(v.spec, body.rows) if v is not None and v.spec else None
-    size = _sizing(services, v, mode, preview, steps, body, measured) if v is not None and steps and pieces and params else None
+    readout = _readout(services, v.spec if v is not None else None, ids, preview)
+    config = fitted = scaling = None
+    if v is not None and steps and not unusable:
+        config = plan.pretrain_config(v.spec, steps, body.rows, body.hold)
+        fitted = _fitted(services, v, config, body, mode, pieces, readout, measured)
+        if fitted is not None:
+            scaling = fitted["scaling"]
+            if not fitted["fit"].refusal:
+                steps = fitted["fit"].steps
+    redesigned = fitted is not None and fitted["fit"].config.get("architecture") != config.get("architecture")  # the sizing below is of the design asked for
+    size = (_sizing(services, v, mode, preview, steps, body, measured)
+            if v is not None and steps and pieces and params and not redesigned else None)
     enough = None
     if not estimating and pieces and params:
         ratio = pieces / params
         headline, verdict = plan.enough_text(ratio)
         enough = EnoughText(ratio=ratio, ratio_text=plan.ratio_text(ratio), headline=headline, verdict=verdict)
-    readout = _readout(services, v.spec if v is not None else None, ids, preview)
     expect = None
     if v is not None and not estimating:
         headline, details = plan.version_expectation(v.spec, preview, body.passes)
@@ -397,13 +489,18 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
               else _unusable_reason(unusable) if unusable
               else "The size of the text is still being worked out." if estimating
               else "The size of the chosen text is not known, so the steps cannot be worked out." if not steps else "")
-    config = job = None
-    if v is not None and steps:
-        config = plan.pretrain_config(v.spec, steps, body.rows, body.hold)
+    if fitted is not None and fitted["fit"].refusal and not reason:
+        reason = fitted["fit"].refusal
+    if fitted is not None:
+        config = fitted["fit"].config
+    job = None
     rule = plan.plateau_rule(steps, steps * measured["seconds_per_step"] / 3600 if steps and measured else None, body.plateau)
     if not reason:
         label, job_params = plan.job_params(v, parent, ids, mode, body.rows, body.hold, steps, pieces,
                                             plan.user_text(_sets(services), ids), rule, source)
+        if fitted is not None:
+            job_params.update(fitted["fit"].job_params())
+            job_params[studio_fit.RECORD] = fitted["record"]
         job = NewPretrainJob(label=label, params=job_params)
     lr = (((v.spec if v else None) or {}).get("train", {}).get("optimizer", {}).get("config", {}) or {}).get("lr")
     return PretrainPlan(
@@ -412,7 +509,7 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
         estimating=estimating, pieces=pieces, estimated=bool(preview.get("estimated")), params=params, context=context,
         pieces_per_step=per_step, passes_over_text=max(1, round(pieces / per_step)) if pieces else None, steps=steps,
         minutes=max(1, round(steps * measured["seconds_per_step"] / 60)) if steps and measured else None, lr=lr, sizing=size,
-        enough=enough, readout=readout, expectation=expect, plateau=PlateauRule.model_validate(rule) if rule else None, plateau_line=plan.plateau_line(rule),
+        scaling=scaling, enough=enough, readout=readout, expectation=expect, plateau=PlateauRule.model_validate(rule) if rule else None, plateau_line=plan.plateau_line(rule),
         config=config, can_add=not reason, reason=reason, job=job, outlook=if_added(services.queue_outlook()))
 
 

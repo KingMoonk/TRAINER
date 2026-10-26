@@ -14,6 +14,7 @@ import { BatchesCard, EnoughCard, SetsCard } from "./cards";
 import { T } from "./copy";
 import { DEFAULT_HOURS, HOLD, PREVIEW_ROWS, DEFAULT_ROWS, chosenIds, errorText, planBody, type Hours, type Length, type Preview, type StepRate, savedRows, type StopWhenFlat } from "./logic";
 import { LrCard } from "./lr-card";
+import { ScalingCard } from "./scaling-card";
 import { SizingCard } from "./sizing-card";
 import { TrainCard } from "./train-card";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
@@ -27,6 +28,7 @@ export default function PretrainingPage() {
   const [length, setLength] = useState<Length>("Medium");
   const [hours, setHours] = useState<Hours>(DEFAULT_HOURS);
   const [stopWhenFlat, setStopWhenFlat] = useState<StopWhenFlat>("Auto");
+  const [keepMine, setKeepMine] = useState(false); // "use my settings anyway", on the fitted-to-this-computer card
   const [chosenSteps, setChosenSteps] = useState<number | null>(null); // from the sizing suggestion; a length chosen afterwards clears it
 
   const versions = useQuery({ queryKey: ["versions"], queryFn: () => unwrap(api.GET("/versions")) });
@@ -37,7 +39,7 @@ export default function PretrainingPage() {
   const sets = useQuery({ queryKey: ["pretraining", "text_sets"], queryFn: () => unwrap(api.GET("/pretraining/text_sets")) });
   const ids = useMemo(() => chosenIds(sets.data, use), [sets.data, use]);
 
-  const body = planBody({ version: null, datasetIds: ids, mode, rows, hold, length, hours, steps: chosenSteps, stopWhenFlat });
+  const body = planBody({ version: null, datasetIds: ids, mode, rows, hold, length, hours, steps: chosenSteps, stopWhenFlat, keepMine });
   const plan = useQuery({
     queryKey: ["pretraining", "plan", body],
     queryFn: () => unwrap(api.POST("/pretraining/plan", { body })),
@@ -136,6 +138,7 @@ export default function PretrainingPage() {
       <EnoughCard plan={plan.data} estimating={estimating} />
       <BatchesCard plan={plan.data} preview={cached.data} estimating={estimating} rows={rows} savedRows={saved} hold={hold} onRows={setRows} onHold={setHold} />
       <SizingCard plan={plan.data} estimating={estimating} hours={hours} onHours={setHours} chosenSteps={chosenSteps} onUseSteps={setChosenSteps} />
+      <ScalingCard plan={plan.data} keepMine={keepMine} onKeepMine={setKeepMine} />
       <TrainCard
         plan={plan.data}
         body={body}

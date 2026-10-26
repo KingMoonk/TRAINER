@@ -36,7 +36,7 @@ const preview = {
   tokens_per_second: null,
 };
 
-type PlanBody = { dataset_ids: string[]; mode: string; rows: number; hold: number; passes: number; hours: number; steps: number | null; plateau: boolean | null };
+type PlanBody = { dataset_ids: string[]; mode: string; rows: number; hold: number; passes: number; hours: number; steps: number | null; plateau: boolean | null; keep_my_settings: boolean };
 
 const SIZING = {
   verdict: "model_too_small",
@@ -64,8 +64,26 @@ const SIZING = {
   gpu_note: "A RTX 4090 would run this design about 10.0× faster than the CPU does.",
 };
 
-function server({ known = true, sizing = SIZING as unknown, batchSize }: { known?: boolean; sizing?: unknown; batchSize?: number } = {}) {
-  const state = { plans: [] as PlanBody[], lr: [] as unknown[], known, sizing, rates: [] as unknown[], starts: [] as unknown[] };
+const HARDWARE = { device: "cuda", gpu_name: "Test GPU", vram_total: 8 * 2 ** 30, vram_free: 7 * 2 ** 30, ram_total: 32 * 2 ** 30, ram_free: 24 * 2 ** 30, disk_free: 300 * 2 ** 30, cpu_cores: 16, tokens_per_second: 14000, measured_at: 1 };
+const SCALING = {
+  notes: [
+    { kind: "batch", reason: "vram", text: "Batch 16 -> 3 x 6 accumulation to fit the 7.0 GB of GPU memory free.", advisory: false },
+    { kind: "context", reason: "vram", text: "Context 2048 -> 1024 tokens: the activations at 2048 do not fit the 7.0 GB of GPU memory free.", advisory: false },
+    { kind: "tokens", reason: "time", text: "Token budget 33B -> 3.6B to finish in about 3.0 days at 14,000 tokens/s.", advisory: true },
+  ],
+  scaled: true,
+  can_keep_mine: true,
+  kept_mine: false,
+  window_hours: 72,
+  hours: 72,
+  token_budget: 3_600_000_000,
+  offload: false,
+  blocker: null,
+  hardware: HARDWARE,
+};
+
+function server({ known = true, sizing = SIZING as unknown, batchSize, scaling = null, refusal = "" }: { known?: boolean; sizing?: unknown; batchSize?: number; scaling?: unknown; refusal?: string } = {}) {
+  const state = { plans: [] as PlanBody[], lr: [] as unknown[], known, sizing, rates: [] as unknown[], starts: [] as unknown[], scaling };
   mockApi({
     "GET /versions": {
       body: [
@@ -85,7 +103,7 @@ function server({ known = true, sizing = SIZING as unknown, batchSize }: { known
       const ids = sent.dataset_ids;
       const perStep = sent.rows * 256;
       const steps = state.known && ids.length ? Math.ceil((PIECES * sent.passes) / perStep) : null;
-      const reason = !ids.length ? "Choose some text first." : !state.known ? "The size of the text is still being worked out." : "";
+      const reason = !ids.length ? "Choose some text first." : !state.known ? "The size of the text is still being worked out." : refusal;
       return {
         body: {
           version: 2,
@@ -103,6 +121,7 @@ function server({ known = true, sizing = SIZING as unknown, batchSize }: { known
           steps,
           minutes: null,
           sizing: state.known && ids.length ? state.sizing : null,
+          scaling: state.known && ids.length && state.scaling ? { ...(state.scaling as object), kept_mine: sent.keep_my_settings } : null,
           plateau: null,
           plateau_line: sent.plateau === false || !ids.length ? "" : "Stops by itself, keeping its best, once the best validation loss improves by less than 1% over 49 steps (not before step 98).",
           lr: 0.0006,
@@ -119,6 +138,7 @@ function server({ known = true, sizing = SIZING as unknown, batchSize }: { known
         },
       };
     },
+    "GET /pretraining/hardware": { body: HARDWARE },
     "GET /pretraining/preview": () => json(state.known ? preview : null), // mockApi turns a null body into {}, so a null answer is sent as a Response
     "POST /pretraining/preview": () => {
       state.known = true; // the job has the answer; it arrives on /events
@@ -214,6 +234,40 @@ describe("Pretraining page", () => {
 
     await user.click(screen.getByRole("radio", { name: "12 h" }));
     await waitFor(() => expect(state.plans.at(-1)).toMatchObject({ hours: 12 }));
+  });
+
+  test("the plan says how the run was scaled to this computer, and the override keeps the person's settings", async () => {
+    const state = server({ scaling: SCALING });
+    const user = userEvent.setup();
+    renderPage(<PretrainingPage />, { route: "/pretraining/" });
+    expect(await screen.findByTestId("hardware-line")).toHaveTextContent("This computer: Test GPU, 8.0 GB GPU memory (7.0 GB free), 24.0 GB RAM free, 300.0 GB disk free, 14,000 tokens/s measured.");
+    expect(screen.getByTestId("scaling-lead")).toHaveTextContent("The run was scaled to fit this computer:");
+    const notes = screen.getByTestId("scaling-notes");
+    expect(notes).toHaveTextContent("Batch 16 -> 3 x 6 accumulation");
+    expect(notes).toHaveTextContent("Context 2048 -> 1024 tokens");
+    expect(notes).toHaveTextContent("Token budget 33B -> 3.6B");
+    expect(state.plans.at(-1)).toMatchObject({ keep_my_settings: false });
+    await user.click(screen.getByTestId("keep-mine"));
+    await waitFor(() => expect(state.plans.at(-1)).toMatchObject({ keep_my_settings: true }));
+    expect(await screen.findByText("Keeping your settings.")).toBeVisible();
+    expect(screen.getByTestId("keep-mine")).toHaveTextContent("Scale it to fit");
+  });
+
+  test("a run that cannot fit is refused with the plain message and cannot be added", async () => {
+    const message = "Not enough GPU memory: 0.0 GB free for this run, and even the smallest model needs about 0.2 GB.";
+    server({ scaling: { ...SCALING, notes: [], scaled: false, can_keep_mine: false, blocker: { resource: "vram", needed: 200_000_000, available: 0 } }, refusal: message });
+    renderPage(<PretrainingPage />, { route: "/pretraining/" });
+    expect(await screen.findByTestId("scaling-refused")).toHaveTextContent(message);
+    expect(screen.getByTestId("scaling-lead")).toHaveTextContent("This run cannot start here:");
+    expect(screen.queryByTestId("keep-mine")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add to the queue" })).toBeDisabled();
+  });
+
+  test("a run that fits shows the machine and no changes", async () => {
+    server({ scaling: { ...SCALING, notes: [], scaled: false, can_keep_mine: false } });
+    renderPage(<PretrainingPage />, { route: "/pretraining/" });
+    expect(await screen.findByTestId("scaling-lead")).toHaveTextContent("The run fits this computer as it is set.");
+    expect(screen.queryByTestId("scaling-notes")).not.toBeInTheDocument();
   });
 
   test("the plan says when the run will stop itself, and the person can turn that off", async () => {

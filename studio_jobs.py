@@ -117,7 +117,8 @@ def pretrain(job, context, emit, stop, pause):
     cfg = dict(p["config"])
     share = p.get("memory_share", 1.)
     declared = cfg.get("batch_size", studio_model.DEFAULT_CONFIG["batch_size"])
-    offload = studio_memory.offload_wanted(studio_model.validate_config(cfg), share)  # CUDA only, and only when the state cannot fit
+    # the queue's fit (studio_fit) may have put the optimizer on the host already; CUDA only, and otherwise only when the state cannot fit
+    offload = bool(p.get("offload_optimizer")) or studio_memory.offload_wanted(studio_model.validate_config(cfg), share)
     cfg["batch_size"] = studio_memory.batch_cap(cfg, share, offload=offload)  # the plan's share of the device's memory
     if cfg["batch_size"] < declared:
         emit({"type": "info", "text": f"A batch of {declared} does not fit the {share:.0%} of memory the plan allows this job: "

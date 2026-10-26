@@ -151,6 +151,35 @@
         "title": "Block",
         "type": "object"
       },
+      "Blocker": {
+        "description": "The resource behind a refusal, in bytes.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "integer"
+          },
+          "needed": {
+            "title": "Needed",
+            "type": "integer"
+          },
+          "resource": {
+            "enum": [
+              "vram",
+              "ram",
+              "disk"
+            ],
+            "title": "Resource",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource",
+          "needed",
+          "available"
+        ],
+        "title": "Blocker",
+        "type": "object"
+      },
       "BlockingJob": {
         "description": "The job on a machine that a member waits behind.",
         "properties": {
@@ -3219,6 +3248,101 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "Hardware": {
+        "description": "What this computer has, measured now (studio_fit.hardware_profile). A figure that could not be read is null.",
+        "properties": {
+          "cpu_cores": {
+            "default": 1,
+            "title": "Cpu Cores",
+            "type": "integer"
+          },
+          "device": {
+            "title": "Device",
+            "type": "string"
+          },
+          "disk_free": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disk Free"
+          },
+          "gpu_name": {
+            "default": "",
+            "title": "Gpu Name",
+            "type": "string"
+          },
+          "measured_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measured At"
+          },
+          "ram_free": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ram Free"
+          },
+          "ram_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ram Total"
+          },
+          "tokens_per_second": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Per Second"
+          },
+          "vram_free": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vram Free"
+          },
+          "vram_total": {
+            "default": 0,
+            "title": "Vram Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "title": "Hardware",
         "type": "object"
       },
       "HasText": {
@@ -6454,6 +6578,11 @@
             "title": "Hours",
             "type": "number"
           },
+          "keep_my_settings": {
+            "default": false,
+            "title": "Keep My Settings",
+            "type": "boolean"
+          },
           "mode": {
             "default": "catch_up",
             "enum": [
@@ -6518,6 +6647,13 @@
               }
             ],
             "title": "Version"
+          },
+          "window_hours": {
+            "default": 72.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 8760.0,
+            "title": "Window Hours",
+            "type": "number"
           }
         },
         "title": "PlanRequest",
@@ -7101,6 +7237,16 @@
             "default": "",
             "title": "Reason",
             "type": "string"
+          },
+          "scaling": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Scaling"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "sizing": {
             "anyOf": [
@@ -10427,6 +10573,128 @@
           "switch"
         ],
         "title": "RunPageModel",
+        "type": "object"
+      },
+      "ScaleNote": {
+        "description": "One thing the run was scaled for (studio_fit.Note). `advisory`: it only says the run is tight or slow, and \"use my settings anyway\" keeps the figure.",
+        "properties": {
+          "advisory": {
+            "default": false,
+            "title": "Advisory",
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "batch",
+              "offload",
+              "context",
+              "tokens",
+              "model",
+              "slow",
+              "tight"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "vram",
+              "ram",
+              "disk",
+              "time"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "reason",
+          "text"
+        ],
+        "title": "ScaleNote",
+        "type": "object"
+      },
+      "Scaling": {
+        "description": "How the run was fitted to this computer (studio_fit.fit_solo): every change with its reason, and what the person may do about it.",
+        "properties": {
+          "blocker": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Blocker"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "can_keep_mine": {
+            "default": false,
+            "title": "Can Keep Mine",
+            "type": "boolean"
+          },
+          "hardware": {
+            "$ref": "#/components/schemas/Hardware"
+          },
+          "hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hours"
+          },
+          "kept_mine": {
+            "default": false,
+            "title": "Kept Mine",
+            "type": "boolean"
+          },
+          "notes": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ScaleNote"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "offload": {
+            "default": false,
+            "title": "Offload",
+            "type": "boolean"
+          },
+          "scaled": {
+            "title": "Scaled",
+            "type": "boolean"
+          },
+          "token_budget": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Budget"
+          },
+          "window_hours": {
+            "title": "Window Hours",
+            "type": "number"
+          }
+        },
+        "required": [
+          "scaled",
+          "window_hours",
+          "hardware"
+        ],
+        "title": "Scaling",
         "type": "object"
       },
       "SelfTestDigest": {
@@ -20044,6 +20312,36 @@
         "summary": "Read Status",
         "tags": [
           "post-training"
+        ]
+      }
+    },
+    "/pretraining/hardware": {
+      "get": {
+        "description": "What this computer has right now: GPU memory, free RAM and disk, and the speed the newest device probe measured. Null when it\ncannot be read. The plan scales a run to it; the figures are read fresh on every call.",
+        "operationId": "hardware_pretraining_hardware_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Hardware"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Hardware Pretraining Hardware Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Hardware",
+        "tags": [
+          "pretraining"
         ]
       }
     },

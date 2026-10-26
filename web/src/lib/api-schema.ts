@@ -2513,6 +2513,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pretraining/hardware": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Hardware
+         * @description What this computer has right now: GPU memory, free RAM and disk, and the speed the newest device probe measured. Null when it
+         *     cannot be read. The plan scales a run to it; the figures are read fresh on every call.
+         */
+        get: operations["hardware_pretraining_hardware_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/pretraining/jobs/{job_id}/curve": {
         parameters: {
             query?: never;
@@ -3876,6 +3897,21 @@ export interface components {
             };
         };
         /**
+         * Blocker
+         * @description The resource behind a refusal, in bytes.
+         */
+        Blocker: {
+            /** Available */
+            available: number;
+            /** Needed */
+            needed: number;
+            /**
+             * Resource
+             * @enum {string}
+             */
+            resource: "vram" | "ram" | "disk";
+        };
+        /**
          * BlockingJob
          * @description The job on a machine that a member waits behind.
          */
@@ -5116,6 +5152,41 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * Hardware
+         * @description What this computer has, measured now (studio_fit.hardware_profile). A figure that could not be read is null.
+         */
+        Hardware: {
+            /**
+             * Cpu Cores
+             * @default 1
+             */
+            cpu_cores: number;
+            /** Device */
+            device: string;
+            /** Disk Free */
+            disk_free?: number | null;
+            /**
+             * Gpu Name
+             * @default
+             */
+            gpu_name: string;
+            /** Measured At */
+            measured_at?: number | null;
+            /** Ram Free */
+            ram_free?: number | null;
+            /** Ram Total */
+            ram_total?: number | null;
+            /** Tokens Per Second */
+            tokens_per_second?: number | null;
+            /** Vram Free */
+            vram_free?: number | null;
+            /**
+             * Vram Total
+             * @default 0
+             */
+            vram_total: number;
         };
         /** HasText */
         HasText: {
@@ -6434,6 +6505,11 @@ export interface components {
              */
             hours: number;
             /**
+             * Keep My Settings
+             * @default false
+             */
+            keep_my_settings: boolean;
+            /**
              * Mode
              * @default catch_up
              * @enum {string}
@@ -6460,6 +6536,11 @@ export interface components {
             steps?: number | null;
             /** Version */
             version?: number | null;
+            /**
+             * Window Hours
+             * @default 72
+             */
+            window_hours: number;
         };
         /**
          * PlateauRule
@@ -6676,6 +6757,7 @@ export interface components {
              * @default
              */
             reason: string;
+            scaling?: components["schemas"]["Scaling"] | null;
             sizing?: components["schemas"]["Sizing"] | null;
             /**
              * Sources
@@ -8013,6 +8095,65 @@ export interface components {
             total: number;
             /** Version */
             version?: number | null;
+        };
+        /**
+         * ScaleNote
+         * @description One thing the run was scaled for (studio_fit.Note). `advisory`: it only says the run is tight or slow, and "use my settings anyway" keeps the figure.
+         */
+        ScaleNote: {
+            /**
+             * Advisory
+             * @default false
+             */
+            advisory: boolean;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "batch" | "offload" | "context" | "tokens" | "model" | "slow" | "tight";
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "vram" | "ram" | "disk" | "time";
+            /** Text */
+            text: string;
+        };
+        /**
+         * Scaling
+         * @description How the run was fitted to this computer (studio_fit.fit_solo): every change with its reason, and what the person may do about it.
+         */
+        Scaling: {
+            blocker?: components["schemas"]["Blocker"] | null;
+            /**
+             * Can Keep Mine
+             * @default false
+             */
+            can_keep_mine: boolean;
+            hardware: components["schemas"]["Hardware"];
+            /** Hours */
+            hours?: number | null;
+            /**
+             * Kept Mine
+             * @default false
+             */
+            kept_mine: boolean;
+            /**
+             * Notes
+             * @default []
+             */
+            notes: components["schemas"]["ScaleNote"][];
+            /**
+             * Offload
+             * @default false
+             */
+            offload: boolean;
+            /** Scaled */
+            scaled: boolean;
+            /** Token Budget */
+            token_budget?: number | null;
+            /** Window Hours */
+            window_hours: number;
         };
         /** SelfTestDigest */
         SelfTestDigest: {
@@ -13435,6 +13576,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    hardware_pretraining_hardware_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Hardware"] | null;
                 };
             };
         };

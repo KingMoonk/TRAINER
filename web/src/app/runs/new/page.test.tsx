@@ -25,7 +25,7 @@ const source = (version: number, over: Record<string, unknown> = {}) => ({
   params: 812_000, best_val_loss: 2.25, train_loss: 2.5, device: "RTX 4090", rounds: null, inner_steps: null, same_design: true, parent: false, ...over,
 });
 
-function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODES, failRun = false, jobs = [] as unknown[], sources = [] as unknown[], blocked = null as string | null, sizing = false } = {}) {
+function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODES, failRun = false, jobs = [] as unknown[], sources = [] as unknown[], blocked = null as string | null, sizing = false, scaling = null as unknown } = {}) {
   const calls = mockApi({
     "GET /cluster/merged": { body: { nodes: [], jobs } },
     "GET /cluster/nodes": { body: nodes },
@@ -49,7 +49,7 @@ function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODE
       if (sizing) return { body: { can_add: false, reason: "The size of the text is still being worked out.", job: null, version: 2, mode: "from_scratch", outlook: "", pieces_per_step: 1, context: 256, estimating: true, can_continue: false, sources: [], continue_from: null, continue_blocked: null } };
       const from = sources.length ? (from_version ?? (sources[0] as { version: number }).version) : null;
       return { body: { can_add: true, reason: "", job: { ...job, params: { ...job.params, mode } }, mode: "from_scratch", outlook: "", pieces_per_step: 1, context: 256, estimating: false,
-        can_continue: sources.length > 0, sources, continue_from: from, continue_blocked: sources.length ? null : blocked } };
+        can_continue: sources.length > 0, sources, continue_from: from, continue_blocked: sources.length ? null : blocked, scaling } };
     },
     "POST /pretraining/start": { status: 202, body: { id: "job-5", label: "Version 2, once the size of its text is known" } },
     "POST /distributed/runs": failRun ? { status: 400, body: { detail: "Rounds must be at most 1000." } } : { body: { id: "run-3" } },
@@ -84,6 +84,15 @@ describe("New run", () => {
     expect(sent("POST", "/pretraining/plan")?.body).toMatchObject({ dataset_ids: ["stories"], mode: "from_scratch", version: null });
     expect(sent("POST", "/pretraining/start")?.body).toMatchObject({ dataset_ids: ["stories"], mode: "from_scratch", version: null });
     expect(calls.some((c) => c.method === "POST" && c.path === "/queue/jobs")).toBe(false);
+  });
+
+  test("a run the plan scaled to this computer lists every change before Start", async () => {
+    const hardware = { device: "cuda", gpu_name: "Test GPU", vram_total: 8, vram_free: 7, ram_total: 32, ram_free: 24, disk_free: 300, cpu_cores: 8, tokens_per_second: null, measured_at: null };
+    const notes = [{ kind: "batch", reason: "vram", text: "Batch 16 -> 3 x 6 accumulation to fit the 7.0 GB of GPU memory free.", advisory: false }];
+    server({ scaling: { notes, scaled: true, can_keep_mine: false, kept_mine: false, window_hours: 72, hours: null, token_budget: null, offload: false, blocker: null, hardware } });
+    renderPage(<NewRunPage />, { route: "/runs/new/" });
+    expect(await screen.findByTestId("scaling-notes")).toHaveTextContent("Batch 16 -> 3 x 6 accumulation");
+    expect(screen.getByTestId("scaling-notes")).toHaveTextContent("The run was scaled to fit this computer:");
   });
 
   test("Continue lists the earlier runs with what they did, and the one picked is the one the plan starts from", async () => {

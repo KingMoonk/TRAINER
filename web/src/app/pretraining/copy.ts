@@ -108,6 +108,17 @@ export const T = {
   lrFailed: "The test could not run: {error}",
   lrNoDesign: "Save a design in the Network designer first.",
   lrTitle: "Learning rate",
+  scalingTitle: "Fitted to this computer",
+  scalingDesc: "What this computer can train, measured now. Where the run as set would not fit, it was scaled down, and every change is listed here.",
+  scalingScaled: "The run was scaled to fit this computer:",
+  scalingHeadsUp: "The run fits, with a note:",
+  scalingFits: "The run fits this computer as it is set.",
+  scalingHardware: "This computer: {parts}.",
+  scalingKeep: "Use my settings anyway",
+  scalingKeepHint: "Keeps your batch size and token budget where the run only fits tightly or is only slow. If it runs out of memory, the batch is halved and training goes on.",
+  scalingKept: "Keeping your settings.",
+  scalingScale: "Scale it to fit",
+  scalingRefused: "This run cannot start here:",
 } as const;
 
 export function fill(text: string, values: Record<string, string | number>): string {
