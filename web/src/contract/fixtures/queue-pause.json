@@ -10,6 +10,7 @@
     },
     "job": null,
     "lr": null,
+    "notices": [],
     "paused": true,
     "phase": "",
     "plan": {
