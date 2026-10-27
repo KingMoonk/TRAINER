@@ -105,6 +105,8 @@ def create_app(services, open=False, origins=(), hosts=(), fake_traffic=False, u
                 raise
             continue  # router not written yet
         app.include_router(module.router)
+    from studio_api.routers import pretraining
+    services.build_pretrain = lambda settings, version: pretraining.auto_run_pretrain(services, settings, version)  # the Auto Run's pretrain phase
     app.include_router(events.router)
     app.include_router(traffic.router)
     app.include_router(jobs.router)
