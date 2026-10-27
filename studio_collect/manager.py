@@ -13,7 +13,7 @@ import threading
 from studio_collect import config as cfg
 import studio_platform
 from studio_collect import register, service
-from studio_collect.store import State
+from studio_collect.store import Journal, State
 
 INTERVAL = 30.0
 
@@ -56,8 +56,11 @@ class Manager:
         while not self.stop.is_set():
             try:
                 self.tick()
-            except Exception:    # noqa: BLE001 - a failed pass is retried at the next one; the page shows the service's own state
-                pass
+            except Exception as error:    # noqa: BLE001 - a failed pass is retried at the next one; the journal (and so the page) says why
+                try:
+                    Journal(self.root).append("error", message=f"collect pass failed: {type(error).__name__}: {error}")
+                except OSError:
+                    pass
             self.stop.wait(self.interval)
 
     def tick(self):
@@ -67,7 +70,8 @@ class Manager:
             if cfg.load(self.root)["enabled"] and not self.running(self.root):
                 changed = self.ensure(self.root) is not None
             if register.pending(self.root):
-                changed = register.register(self.workspace)["shards"] > 0 or changed
+                report = register.register(self.workspace)
+                changed = report["shards"] > 0 or report["failed"] > 0 or changed
         if changed:
             self.emit("collect", {})
         return changed
