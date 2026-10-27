@@ -625,7 +625,7 @@ def run_round(number, job, context, emit, stop, pause):
         after = measure(candidate, docs, held, stop, held_conversations)
     except studio_eval.Stopped:
         return {"round": number, "ok": False, "checkpoint": checkpoint, "stopped": True}
-    ok, checks = studio_gate.passes(before, after, band, number=number)
+    ok, checks = studio_gate.passes(before, after, band, number=number, record=record)
     result = {"round": number, "ok": ok, "checks": checks, "verdict": verdict_for(verdict, ok, checks), "before": before, "after": after,
               "band": band, "checkpoint": candidate}
     if number == 2:   # groups that taught something: the share of reward groups with any spread
