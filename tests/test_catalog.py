@@ -712,5 +712,26 @@ class LanguageCorpusSizeTests(unittest.TestCase):
         self.assertEqual(_convert("simplewiki", {"id": "12", "title": "T", "text": "word " * 60})[0]["groupId"], "simplewiki:12")
 
 
+class Relettering(unittest.TestCase):
+    PROMPT = "Answer the question. Reply with the letter and the option text.\n\nWhich is wet?\n\nA) dust\nB) water\nC) sand\nD) rock"
+
+    def test_the_key_follows_its_option_and_the_order_varies_by_seed(self):
+        from studio_catalog import reletter_choice
+        prompts = set()
+        for seed in range(12):
+            prompt, key = reletter_choice(self.PROMPT, "B", seed)
+            lines = prompt.rpartition("\n\n")[2].split("\n")
+            self.assertEqual([line[:2] for line in lines], ["A)", "B)", "C)", "D)"])
+            self.assertEqual(next(line for line in lines if line.startswith(key + ")")), f"{key}) water")
+            self.assertEqual(reletter_choice(self.PROMPT, "B", seed), (prompt, key))
+            prompts.add(prompt)
+        self.assertGreater(len(prompts), 3)
+
+    def test_prompts_that_are_not_clean_lettered_lists_are_left_alone(self):
+        from studio_catalog import reletter_choice
+        self.assertEqual(reletter_choice("Count to three.", "B"), ("Count to three.", "B"))
+        self.assertEqual(reletter_choice(self.PROMPT, "Z"), (self.PROMPT, "Z"))
+
+
 if __name__ == "__main__":
     unittest.main()
