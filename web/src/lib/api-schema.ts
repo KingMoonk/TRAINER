@@ -2534,6 +2534,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/post-training/stages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue Stage
+         * @description Queue mid-training or SFT from a trained version's best weights.
+         */
+        post: operations["queue_stage_post_training_stages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/post-training/status": {
         parameters: {
             query?: never;
@@ -8751,6 +8771,30 @@ export interface components {
             /** Sites */
             sites?: string[] | null;
         };
+        /** StageQueued */
+        StageQueued: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "midtrain" | "sft";
+        };
+        /** StageRequest */
+        StageRequest: {
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "midtrain" | "sft";
+            /** Steps */
+            steps?: number | null;
+            /** Version */
+            version?: number | null;
+        };
         /** Stages */
         Stages: {
             /**
@@ -13769,6 +13813,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["studio_api__models_work__JobOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    queue_stage_post_training_stages_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StageQueued"];
                 };
             };
             /** @description Validation Error */

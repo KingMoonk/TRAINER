@@ -32,6 +32,7 @@ export function Workers({
   workers,
   forced,
   multiple,
+  localOnly = false,
   rows,
   onToggle,
 }: {
@@ -40,6 +41,7 @@ export function Workers({
   workers: string[];
   forced: boolean;
   multiple: boolean;
+  localOnly?: boolean;
   onToggle: (address: string) => void;
 }) {
   return (
@@ -60,7 +62,7 @@ export function Workers({
               key={node.address}
               type="button"
               aria-pressed={on}
-              disabled={!node.online || required}
+              disabled={!node.online || required || (localOnly && !node.local)}
               data-testid={`worker-${node.address}`}
               onClick={() => onToggle(node.address)}
               className={cn(
@@ -81,7 +83,7 @@ export function Workers({
               )}
             </button>
           );
-          const tip = required ? T.localRequired : !node.online ? node.error : "";
+          const tip = localOnly && !node.local ? T.stageLocal : required ? T.localRequired : !node.online ? node.error : "";
           return tip ? (
             <Tooltip key={node.address}>
               <TooltipTrigger asChild>

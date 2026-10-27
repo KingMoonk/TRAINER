@@ -213,6 +213,18 @@ class RoundQueued(BaseModel):
     params: dict[str, Any]
 
 
+class StageRequest(BaseModel):
+    stage: Literal["midtrain", "sft"]
+    version: int | None = None
+    steps: int | None = Field(None, ge=1, le=100_000)
+
+
+class StageQueued(BaseModel):
+    id: str
+    label: str
+    stage: Literal["midtrain", "sft"]
+
+
 class AdoptRequest(BaseModel):
     version: int | None = None  # None = the current version
 
@@ -413,6 +425,21 @@ def queue_round(body: RoundRequest, services=Depends(get_services)):
         for _ in range(len(services.queue().up_next)):
             services.move_up(job.id)
     return RoundQueued(id=job.id, label=job.label, round=body.round, params=params)
+
+
+@router.post("/stages", response_model=StageQueued, status_code=202)
+def queue_stage(body: StageRequest, services=Depends(get_services)):
+    """Queue mid-training or SFT from a trained version's best weights."""
+    version = pick_version(services, body.version)
+    if version is None or not version.best_checkpoint:
+        raise HTTPException(409, "Choose a trained version with a checkpoint first.")
+    label = f"Version {version.number} · {'mid-training' if body.stage == 'midtrain' else 'chat SFT'}"
+    params = {"version": version.number}
+    if body.steps is not None:
+        params["config"] = {"steps": body.steps}
+    job = Job(uuid.uuid4().hex[:8], body.stage, label, f"{body.stage} stage", params=params)
+    services.enqueue(job)
+    return StageQueued(id=job.id, label=label, stage=body.stage)
 
 
 @router.post("/rounds/{round}/adopt", response_model=AdoptedOut)

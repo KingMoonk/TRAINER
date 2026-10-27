@@ -147,6 +147,17 @@ class PostTrainingApiTest(unittest.TestCase):
         self.client.post("/post-training/rounds", json={"round": 4, "leash": "Far"})
         self.assertEqual(self.queued()[-1].params["beta"], .02)
 
+    def test_midtrain_and_sft_are_real_queue_jobs_from_a_trained_version(self):
+        self.assertEqual(self.client.post("/post-training/stages", json={"stage": "sft"}).status_code, 409)
+        version = trained(self.services)
+        for stage in ("midtrain", "sft"):
+            response = self.client.post("/post-training/stages", json={"stage": stage, "version": version.number, "steps": 12})
+            self.assertEqual(response.status_code, 202, response.text)
+            self.assertEqual(response.json()["stage"], stage)
+            job = self.queued()[-1]
+            self.assertEqual((job.kind, job.params), (stage, {"version": version.number, "config": {"steps": 12}}))
+        self.assertEqual(self.client.post("/post-training/stages", json={"stage": "sft", "steps": 0}).status_code, 422)
+
     def test_a_correction_round_goes_to_the_front(self):
         teacher = trained(self.services)
         trained(self.services)
