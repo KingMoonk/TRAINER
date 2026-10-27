@@ -39,6 +39,8 @@ export const T = {
   hideExamples: "Hide examples",
   examplesHint: "Search, or open the list to read, edit or review single examples.",
   toolbar: "Data actions",
+  downloadMore: "Download more",
+  downloadMoreHint: "Recommended sources to download, check and add to your sets.",
   noMatches: "Nothing matches.",
 } as const;
 
