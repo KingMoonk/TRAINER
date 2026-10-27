@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useAccent } from "@/components/theme";
 import { APPEARANCE } from "@/lib/copy/appearance";
 import Link from "next/link";
+import { routeFor } from "@/lib/routes";
 import { ACCENTS, MODES, type Accent, type Mode } from "@/lib/theme";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 import { TTS_VOICES, useTtsVoice, type TtsVoice } from "@/lib/voice";
@@ -88,7 +89,16 @@ export default function Page() {
           <CardDescription>{APPEARANCE.clusterDesc}</CardDescription>
         </CardHeader>
         <CardContent>
-          <Link href="/cluster" className="text-sm underline underline-offset-2">{APPEARANCE.clusterLink}</Link>
+          <Link href={routeFor("machines").href} className="text-sm underline underline-offset-2">{APPEARANCE.clusterLink}</Link>
+        </CardContent>
+      </Card>
+      <Card data-testid="settings-storage">
+        <CardHeader>
+          <CardTitle>{APPEARANCE.storageTitle}</CardTitle>
+          <CardDescription>{APPEARANCE.storageDesc}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Link href={routeFor("storage").href} className="text-sm underline underline-offset-2">{APPEARANCE.storageLink}</Link>
         </CardContent>
       </Card>
     </main>

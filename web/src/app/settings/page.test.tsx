@@ -9,10 +9,11 @@ Element.prototype.hasPointerCapture ??= () => false; // jsdom has none; Radix Se
 Element.prototype.scrollIntoView ??= () => {};
 
 describe("Settings page", () => {
-  test("links to the Cluster page and no longer edits the machines list (#319)", () => {
+  test("links to the Machines and Storage pages and no longer edits the machines list (#319)", () => {
     mockApi({});
     renderPage(<SettingsPage />, { route: "/settings" });
-    expect(screen.getByRole("link", { name: "Open the Cluster page" })).toHaveAttribute("href", "/cluster");
+    expect(screen.getByRole("link", { name: "Open the Machines page" })).toHaveAttribute("href", "/cluster/machines");
+    expect(screen.getByRole("link", { name: "Open the Storage page" })).toHaveAttribute("href", "/storage");
     expect(screen.queryByLabelText("Machine to add")).toBeNull();
   });
 

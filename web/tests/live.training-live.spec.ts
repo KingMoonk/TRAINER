@@ -4,8 +4,8 @@ import { expect, test } from "@playwright/test";
 // machine (gpu-box) training in rounds of about six seconds. Nothing is intercepted. These specs only watch the run; they never stop it, since the
 // other live specs share the workspace.
 
-test("/cluster/ opens on the demo run: a banner, two machines of different kinds, and edges to the coordinator", async ({ page }) => {
-  await page.goto("/cluster/");
+test("/cluster/training/ opens on the demo run: a banner, two machines of different kinds, and edges to the coordinator", async ({ page }) => {
+  await page.goto("/cluster/training/");
   await expect(page).toHaveURL(/\/cluster\/training\/?$/);
   const summary = page.getByTestId("run-demo-run");
   await expect(summary.getByTestId("open-run-view-demo-run")).toBeVisible({ timeout: 15_000 });

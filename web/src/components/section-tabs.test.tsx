@@ -5,71 +5,45 @@ import "@/test/navigation";
 import { SectionTabs } from "./section-tabs";
 
 describe("SectionTabs", () => {
-  test("lists the Runs pages in order and leaves run_view out", () => {
+  test("lists the Train pages in order and leaves the hidden ones out", () => {
     renderPage(<SectionTabs />, { route: "/runs" });
-    const nav = screen.getByRole("navigation", { name: "Runs pages" });
+    const nav = screen.getByRole("navigation", { name: "Train pages" });
     const links = within(nav).getAllByRole("link");
-    expect(links.map((a) => a.textContent)).toEqual([
-      "All runs",
-      "New run",
-      "Queue",
-      "Training run",
-      "Cluster training",
-      "Post-training",
-    ]);
+    expect(links.map((a) => a.textContent)).toEqual(["Pretraining", "Post-training", "All runs"]);
     expect(within(nav).getByRole("link", { name: "All runs" })).toHaveAttribute("aria-current", "page");
-    expect(within(nav).queryByRole("link", { name: "Run" })).toBeNull();
+    for (const hidden of ["New run", "Queue", "Training run", "Run"]) expect(within(nav).queryByRole("link", { name: hidden })).toBeNull();
   });
 
   test("marks the current tab with aria-current='page'", () => {
-    renderPage(<SectionTabs />, { route: "/runs/new" });
-    const nav = screen.getByRole("navigation", { name: "Runs pages" });
-    expect(within(nav).getByRole("link", { name: "New run" })).toHaveAttribute("aria-current", "page");
+    renderPage(<SectionTabs />, { route: "/post-training" });
+    const nav = screen.getByRole("navigation", { name: "Train pages" });
+    expect(within(nav).getByRole("link", { name: "Post-training" })).toHaveAttribute("aria-current", "page");
     expect(within(nav).getByRole("link", { name: "All runs" })).not.toHaveAttribute("aria-current");
   });
 
-  test("on a hidden route with a parent (run_view), marks the parent tab", () => {
-    renderPage(<SectionTabs />, { route: "/runs/view" });
-    const nav = screen.getByRole("navigation", { name: "Runs pages" });
+  test.each(["/runs/new", "/queue", "/training-run", "/runs/view"])("on the hidden page %s, marks the parent Runs tab", (route) => {
+    renderPage(<SectionTabs />, { route });
+    const nav = screen.getByRole("navigation", { name: "Train pages" });
     expect(within(nav).getByRole("link", { name: "All runs" })).toHaveAttribute("aria-current", "page");
-    expect(within(nav).queryByRole("link", { name: "Run" })).toBeNull();
+    expect(within(nav).getAllByRole("link")).toHaveLength(3);
   });
 
-  test("renders the Models tabs on /builder with Build your model marked", () => {
-    renderPage(<SectionTabs />, { route: "/builder" });
-    const nav = screen.getByRole("navigation", { name: "Models pages" });
-    const links = within(nav).getAllByRole("link");
-    expect(links.map((a) => a.textContent)).toEqual([
-      "Build your model",
-      "Quick test",
-      "Compare runs",
-    ]);
-    expect(within(nav).getByRole("link", { name: "Build your model" })).toHaveAttribute("aria-current", "page");
+  test("lists the Machines tabs on /cluster/machines and /cluster/training", () => {
+    renderPage(<SectionTabs />, { route: "/cluster/training" });
+    const nav = screen.getByRole("navigation", { name: "Machines pages" });
+    expect(within(nav).getAllByRole("link").map((a) => a.textContent)).toEqual(["Machines", "Cluster training"]);
+    expect(within(nav).getByRole("link", { name: "Cluster training" })).toHaveAttribute("aria-current", "page");
   });
 
-  test("renders the Data tabs on /your-data", () => {
-    renderPage(<SectionTabs />, { route: "/your-data" });
-    const nav = screen.getByRole("navigation", { name: "Data pages" });
-    const links = within(nav).getAllByRole("link");
-    expect(links.map((a) => a.textContent)).toEqual([
-      "Your data",
-      "Pretraining",
-      "Collect data",
-      "Storage",
-    ]);
-    expect(within(nav).getByRole("link", { name: "Your data" })).toHaveAttribute("aria-current", "page");
-  });
-
-  test("renders the Eval tabs on /chat", () => {
+  test("lists the Chat tabs on /chat", () => {
     renderPage(<SectionTabs />, { route: "/chat" });
-    const nav = screen.getByRole("navigation", { name: "Eval pages" });
-    const links = within(nav).getAllByRole("link");
-    expect(links.map((a) => a.textContent)).toEqual(["Chat", "Benchmark"]);
+    const nav = screen.getByRole("navigation", { name: "Chat pages" });
+    expect(within(nav).getAllByRole("link").map((a) => a.textContent)).toEqual(["Chat", "Benchmark"]);
     expect(within(nav).getByRole("link", { name: "Chat" })).toHaveAttribute("aria-current", "page");
   });
 
-  test("renders nothing for a single-page area (Machines)", () => {
-    renderPage(<SectionTabs />, { route: "/cluster/machines" });
+  test.each(["/builder", "/quick-test", "/compare", "/your-data", "/collect", "/storage"])("renders no tab bar on %s: its area has one visible page", (route) => {
+    renderPage(<SectionTabs />, { route });
     expect(screen.queryByTestId("section-tabs")).toBeNull();
   });
 

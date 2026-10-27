@@ -83,6 +83,13 @@ describe("Your data page", () => {
     expect(screen.getByRole("button", { name: "Browse examples" })).toHaveAttribute("aria-expanded", "false");
   });
 
+  test("the header links to Collect and Storage", async () => {
+    server();
+    renderPage(<YourDataPage />, { route: "/your-data/?kind=conversations" });
+    expect(await screen.findByRole("link", { name: "Collect in the background ›" })).toHaveAttribute("href", "/collect");
+    expect(screen.getByRole("link", { name: /^Storage/ })).toHaveAttribute("href", "/storage");
+  });
+
   test("the set cards show each set's name, count and share of the total", async () => {
     server();
     renderPage(<YourDataPage />, { route: "/your-data/?kind=conversations" });

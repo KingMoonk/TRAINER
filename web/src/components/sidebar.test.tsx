@@ -7,11 +7,28 @@ import { Sidebar } from "./sidebar";
 
 describe("Sidebar", () => {
   test("lists the five areas in order, with the open one marked", () => {
-    renderPage(<TrafficProvider><Sidebar /></TrafficProvider>, { route: "/runs/new" });
+    renderPage(<TrafficProvider><Sidebar /></TrafficProvider>, { route: "/runs" });
     const studio = screen.getByRole("navigation", { name: "Studio" });
     const areas = within(studio).getAllByRole("link");
-    expect(areas.map((a) => a.textContent)).toEqual(["Models", "Data", "Runs", "Eval", "Machines"]);
-    expect(within(studio).getByRole("link", { name: "Runs" })).toHaveAttribute("aria-current", "page");
+    expect(areas.map((a) => a.textContent)).toEqual(["Models", "Data", "Train", "Chat", "Machines"]);
+    expect(within(studio).getByRole("link", { name: "Train" })).toHaveAttribute("aria-current", "page");
+  });
+
+  test.each([
+    ["/quick-test", "Models"],
+    ["/compare", "Models"],
+    ["/collect", "Data"],
+    ["/storage", "Data"],
+    ["/runs/new", "Train"],
+    ["/queue", "Train"],
+    ["/training-run", "Train"],
+    ["/runs/view", "Train"],
+    ["/cluster/training", "Machines"],
+  ])("a hidden or moved page (%s) keeps its area %s marked", (route, area) => {
+    renderPage(<TrafficProvider><Sidebar /></TrafficProvider>, { route });
+    const studio = screen.getByRole("navigation", { name: "Studio" });
+    expect(within(studio).getByRole("link", { name: area })).toHaveAttribute("aria-current", "page");
+    expect(studio.querySelectorAll("a[aria-current=page]")).toHaveLength(1);
   });
 
   test("pins Settings and traffic console at the foot of the nav", () => {
@@ -23,11 +40,12 @@ describe("Sidebar", () => {
     expect(consoles.length).toBeGreaterThan(0);
   });
 
-  test("contains only the five area links in the studio navigation", () => {
+  test("contains only the five area links in the studio navigation, each to its area's home", () => {
     renderPage(<TrafficProvider><Sidebar /></TrafficProvider>, { route: "/builder" });
     const studio = screen.getByRole("navigation", { name: "Studio" });
     const links = within(studio).getAllByRole("link");
     expect(links).toHaveLength(5);
+    expect(links.map((a) => a.getAttribute("href"))).toEqual(["/builder", "/your-data", "/pretraining", "/chat", "/cluster/machines"]);
     expect(screen.queryByRole("group", { name: "Pages in this area" })).toBeNull();
   });
 });

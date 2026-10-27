@@ -6,6 +6,7 @@ export const KINDS: Kind[] = ["text", "conversations", "problems"];
 export const T = {
   h1: "Your data",
   lead: "Three kinds, because each one trains a different stage.",
+  collectLink: "Collect in the background ›",
   storageLink: "Storage: free up disk space ›",
   backPretraining: "Back to Pretraining",
   backPost: "Back to Post-training",
