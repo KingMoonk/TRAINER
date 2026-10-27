@@ -16,6 +16,7 @@ import { RoundCard, type Choices, type Live } from "./round-card";
 import { ImportCard, RowsCard, VersionsCard } from "./side-cards";
 import { useEventStream, useJob } from "./use-events";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
+import { Disclosure } from "@/components/disclosure";
 import { optionBox } from "@/components/option-box";
 
 const REFRESH_MS = 600;
@@ -232,11 +233,15 @@ export default function PostTrainingPage() {
         </>
       )}
 
-      <LoopCard version={version?.number} hasCheckpoint={!!version?.best_checkpoint} />
+      <Disclosure title={T.importTitle} defaultOpen={versionsQuery.isSuccess && !versions?.some((v) => v.best_checkpoint)} testId="import-disclosure">
+        <ImportCard ranks={options?.lora_ranks ?? []} onImported={() => setPicked(null)} />
+      </Disclosure>
 
-      <VersionsCard versions={versions} startsFrom={version?.number} loading={versionsQuery.isLoading} />
-      <ImportCard ranks={options?.lora_ranks ?? []} onImported={() => setPicked(null)} />
-      <RowsCard />
+      <Disclosure title={T.advancedTitle} hint={T.advancedHint} testId="advanced-disclosure">
+        <LoopCard version={version?.number} hasCheckpoint={!!version?.best_checkpoint} />
+        <VersionsCard versions={versions} startsFrom={version?.number} loading={versionsQuery.isLoading} />
+        <RowsCard />
+      </Disclosure>
     </main>
   );
 }
