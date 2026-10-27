@@ -5,6 +5,8 @@ import { useTheme } from "next-themes";
 import { useSyncExternalStore } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAccent } from "@/components/theme";
 import { APPEARANCE } from "@/lib/copy/appearance";
@@ -12,6 +14,7 @@ import Link from "next/link";
 import { routeFor } from "@/lib/routes";
 import { ACCENTS, MODES, type Accent, type Mode } from "@/lib/theme";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
+import { useDeveloperTools } from "@/lib/developer-tools";
 import { TTS_VOICES, useTtsVoice, type TtsVoice } from "@/lib/voice";
 
 // The chosen button: the app-wide neutral selected look (globals.css), plus a tick.
@@ -24,6 +27,7 @@ export default function Page() {
   const { theme, resolvedTheme, setTheme } = useTheme();
   const [accent, setAccent] = useAccent();
   const [ttsVoice, setTtsVoice] = useTtsVoice();
+  const [developerTools, setDeveloperTools] = useDeveloperTools();
   // next-themes only knows the stored mode on the client; show nothing selected until then rather than the wrong one.
   const ready = useSyncExternalStore(mounted, () => true, () => false);
   const dark = resolvedTheme !== "light";
@@ -81,6 +85,16 @@ export default function Page() {
               {TTS_VOICES.map(({ id, label }) => <SelectItem key={id} value={id}>{label}</SelectItem>)}
             </SelectContent>
           </Select>
+        </CardContent>
+      </Card>
+      <Card data-testid="settings-developer">
+        <CardHeader>
+          <CardTitle>{APPEARANCE.developerTitle}</CardTitle>
+          <CardDescription>{APPEARANCE.developerDesc}</CardDescription>
+        </CardHeader>
+        <CardContent className="flex items-center gap-2">
+          <Switch id="developer-tools" checked={developerTools} onCheckedChange={setDeveloperTools} />
+          <Label htmlFor="developer-tools">{APPEARANCE.developerLabel}</Label>
         </CardContent>
       </Card>
       <Card data-testid="settings-cluster">

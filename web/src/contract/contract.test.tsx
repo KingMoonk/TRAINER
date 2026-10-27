@@ -72,6 +72,7 @@ describe("pages on recorded responses", () => {
 
   test("the traffic console lists the alert rules the API shipped, each with a switch", async () => {
     replay(["traffic-rules"]);
+    localStorage.setItem("settings.developerTools", "on"); // the sidebar button is hidden until Developer tools is on
     renderPage(<main />, { shell: true });
     await userEvent.setup().click(screen.getAllByRole("button", { name: "API traffic console" })[0]);
     await userEvent.setup().click(await screen.findByRole("button", { name: "Alert rules" }));
