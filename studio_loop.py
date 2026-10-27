@@ -176,21 +176,24 @@ def rule_pair(model, problem, cfg, rng, stop):
     """A pair from a problem with a rule: the shortest passing answer against a failing one. (pairs, info); no pair when all of the
     answers pass or all fail. The rule is the label, so nothing here can be argued with."""
     from studio_rl import _messages, _prompt_text
-    from studio_rlhf import temperature_spread
+    from studio_rlhf import is_cut, temperature_spread
     messages = _messages(problem)
     prompt, rule = _prompt_text(messages), problem["rule"]
     n = cfg["candidates"]
-    answers = model.generate_group(messages, n, max_tokens=studio_rules.max_tokens(rule), top_k=40, stop=stop,
+    budget = studio_rules.max_tokens(rule)
+    answers = model.generate_group(messages, n, max_tokens=budget, top_k=40, stop=stop,
                                    temperature=temperature_spread(n, None, cfg["temperature_low"], cfg["temperature_high"]))
     unique = list(dict.fromkeys(a for a in answers if a.strip()))
-    passed = [a for a in unique if studio_rules.check(rule, prompt, a, problem.get("params"))]
+    cut = {a for a in unique if is_cut(model.tokenizer, a, budget)}   # ran into the budget: never ended, so never a chosen answer
+    passed = [a for a in unique if a not in cut and studio_rules.check(rule, prompt, a, problem.get("params"))]
     failed = [a for a in unique if a not in passed]
     info = {"skip": None, "passed": len(passed), "of": len(unique)}
     if not passed or not failed:
         info["skip"] = "every answer passed" if passed else "no answer passed"
         return [], info
     chosen = min(passed, key=len)
-    return [{"messages": messages, "chosen": chosen, "rejected": rng.choice(failed), "kind": "verified", "reference": None,
+    rejected = rng.choice(failed)
+    return [{"messages": messages, "chosen": chosen, "rejected": rejected, "rejected_cut": rejected in cut, "kind": "verified", "reference": None,
              "source_id": None, "reason": f"rule: {rule}", "scores": [1., 0.], "n_candidates": len(unique)}], info
 
 
