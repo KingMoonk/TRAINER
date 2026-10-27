@@ -25,6 +25,7 @@ its version.
 """
 from __future__ import annotations
 
+import copy
 import logging
 import threading
 import uuid
@@ -38,6 +39,10 @@ ROUND = {"sft": 1, "rlvr": 2, "distill": 3, "dpo": 4}      # the post-training r
 ACTIVE = ("running", "pausing")
 FINISHED = ("done", "failed", "stopped")                    # the queue's statuses for a job that has ended
 CHOICES = ("next", "retry", "stop", "adopt")
+
+
+class PlanLocked(ar.AutorunError):
+    """The plan cannot be changed in the run's state (a conflict, not a bad plan)."""
 
 
 class Orchestrator:
@@ -110,6 +115,51 @@ class Orchestrator:
             self.runs[plan["id"]] = {"plan": plan, "state": state}
             self._put(plan["id"], state)
             return plan["id"]
+
+    def replace_plan(self, run_id, plan):
+        """Replace a draft or paused run's plan and return its view. A draft may be changed freely (its phases are made again from the
+        plan). A paused run keeps its id, version, budget (the deadline is already set) and its phases in order; a phase that has
+        passed, has a job (queued, running or parked by the pause), or comes before the current one is kept as it was, and the others (their settings, policies and
+        enabled) may change. PlanLocked when the run is in any other state; AutorunError lists what is wrong with the plan."""
+        with self.lock:
+            run = self._get(run_id)
+            old, state = run["plan"], run["state"]
+            if state["status"] not in ("draft", "paused"):
+                raise PlanLocked("The plan can only be changed while the run is a draft or paused.")
+            plan = dict(plan, id=plan.get("id") or run_id)
+            problems = ar.validate(plan)
+            if problems:
+                raise ar.AutorunError(" ".join(problems))
+            if plan["id"] != run_id:
+                raise ar.AutorunError("The plan id cannot change.")
+            if state["status"] == "draft":
+                state = ar.new_state(plan)
+            else:
+                state = self._edited_state(old, plan, state)
+            ar.save_plan(self._folder(run_id), plan)
+            run["plan"] = plan
+            self._put(run_id, state)
+        return self.view(run_id)
+
+    def _edited_state(self, old, plan, state):
+        if plan["version"] != old["version"] or plan["budget"] != old["budget"]:
+            raise ar.AutorunError("The version and the budget cannot change once the run has started.")
+        if [p["kind"] for p in plan["phases"]] != [p["kind"] for p in old["phases"]]:
+            raise ar.AutorunError("A started run keeps its phases and their order; switch a phase on or off instead.")
+        first = next((i for i, p in enumerate(old["phases"]) if p["kind"] == state["current"]), len(old["phases"]))
+        state = copy.deepcopy(state)
+        for i, (was, now, entry) in enumerate(zip(old["phases"], plan["phases"], state["phases"])):
+            if was == now:
+                continue
+            if i < first or entry["status"] in ("queued", "running", "passed") or entry["job_id"]:   # (a parked phase keeps its held job)
+                raise ar.AutorunError(f"The {was['kind']} phase can no longer be changed: only the current phase and the ones after it can, "
+                                      "and not one that has passed or has a job.")
+            if was["enabled"] != now["enabled"] and entry["status"] in ("pending", "skipped"):
+                entry["status"] = "pending" if now["enabled"] else "skipped"
+        phase = next((p for p in state["phases"] if p["status"] in ("pending", "queued", "running", "blocked")), None)
+        state["current"] = phase["kind"] if phase else None
+        ar._event(state, "plan_changed", self.now())
+        return state
 
     def start(self, run_id):
         with self.lock:
