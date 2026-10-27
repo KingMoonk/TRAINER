@@ -157,12 +157,8 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
       const id =
         stage === "pretrain"
           ? (await unwrap(api.POST("/pretraining/start", { body: { ...body, version: plan.data?.version ?? version } }))).id
-          : stage === "sft"
-          ? (
-              await unwrap(
-                api.POST("/post-training/rounds", { body: { round: 1, version: sftVersion, lora: null, lora_rank: 8, teacher: "version", teacher_version: null, leash: "Medium" } }),
-              )
-            ).id
+          : stage === "midtrain" || stage === "sft"
+          ? (await unwrap(api.POST("/post-training/stages", { body: { stage, version: sftVersion, steps: null } }))).id
           : (await unwrap(api.POST("/quicktest/run", { body: { dataset, minutes: Number(minutes) as 1 | 3 | 10, shrink: false } }))).job_id;
       if (pin) {
         try {
@@ -190,7 +186,8 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
   const pickStage = (next: Stage) => {
     setStage(next);
     setFailure("");
-    if (next !== "pretrain") setPicked((now) => workersOf(next, now, nodes));
+    if (next === "midtrain" || next === "sft") setPicked(nodes.filter((node) => node.local).map((node) => node.address));
+    else if (next !== "pretrain") setPicked((now) => workersOf(next, now, nodes));
   };
 
   // Why the button is off, in a sentence under it; "" when it is on.
@@ -202,7 +199,7 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
     if (several && !defaults.data) return defaults.isError ? T.settingsDown : T.loadingSettings;
     if (several) return startBody({ ...form, machines: peers }) ? sizingBlocker(sized, localName, confirmedLeaveOut) : T.needSettings;
     if (stage === "pretrain") return plan.data && !plan.data.can_add && !plan.data.estimating ? plan.data.reason : ""; // the server checks the rest on Start
-    return sftVersion === null ? T.noVersions : "";
+    return !versions.some((v) => v.number === sftVersion && v.best_checkpoint) ? T.noVersions : "";
   })();
 
   // Chosen machines that are busy get no slot: say so before the run starts without them.
@@ -250,7 +247,7 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
         )}
       </section>
 
-      {single && mode === "catch_up" && (
+      {single && stage === "pretrain" && mode === "catch_up" && (
         <Sources plan={plan.data} onPick={(n) => { setFromVersion(n); setFailure(""); }} />
       )}
 
@@ -293,6 +290,10 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
         </Slot>
       )}
 
+      {(stage === "midtrain" || stage === "sft") && (
+        <p className="text-sm text-muted-foreground">{T.stageSources} {T.stageLocal}</p>
+      )}
+
       {stage === "ablation" && (
         <fieldset className="flex flex-col gap-4">
           <Pick label={QUICKTEST.tinyDataset} value={dataset} onChange={(v) => setDataset(v as typeof dataset)} options={QUICKTEST.datasets} />
@@ -306,7 +307,7 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
       <Slot query={machines} title={T.workers} loading={T.loadingMachines} failed={T.machinesFailed}>
         {() => (
           <>
-            <Workers nodes={nodes} rows={rows} workers={workers} forced={localForced(stage, picked, nodes)} multiple={stage === "pretrain"} onToggle={toggle} />
+            <Workers nodes={nodes} rows={rows} workers={workers} forced={localForced(stage, picked, nodes)} multiple={stage === "pretrain"} localOnly={stage === "midtrain" || stage === "sft"} onToggle={toggle} />
             <div role="status" className="flex items-center">
               <Hint tip={shape.tip} className="rounded-full border border-border px-3.5 py-2 font-mono text-sm text-highlight">{shape.label}</Hint>
             </div>

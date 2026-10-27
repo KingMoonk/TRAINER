@@ -245,6 +245,12 @@ class JobContext:
     def post_rows(self, kind):
         return self._data().post_rows(kind)
 
+    def stage_rows(self, stage, shares, max_chars=2_000_000):
+        return self._data().stage_rows(stage, shares, max_chars)
+
+    def gate_eval(self, checkpoint, baseline=None):
+        return self._data().gate_eval(checkpoint, baseline)
+
 
 def run(spec_path):
     spec = json.loads(Path(spec_path).read_text(encoding="utf-8"))

@@ -28,7 +28,7 @@ def prepare(job, services):
     p = job.params
     run_dir = Path(services.workspace.run_dir)
     p.pop("result", None)  # a run cut short by a restart starts afresh; an old result must not be recorded again
-    if job.kind in ("pretrain", "compare", "import_pretrained") + ROUNDS:
+    if job.kind in ("pretrain", "compare", "import_pretrained", "midtrain", "sft") + ROUNDS:
         p["output_dir"] = str(output_dir(job, run_dir))
     if job.kind == "pretrain" and not getattr(job, "owner", ""):
         continue_here(job)
@@ -40,7 +40,40 @@ def prepare(job, services):
     if job.kind in ROUNDS:
         import studio_rl
         studio_rl.resolve(studio_rl.number_of(job), job, services)
+    if job.kind in ("midtrain", "sft") and not p.get("checkpoint"):
+        version = next((v for v in services.versions() if v.number == p.get("version")), None)
+        if version is None or not version.best_checkpoint:
+            from studio_versions import NoCheckpoint
+            raise NoCheckpoint(p.get("version"))
+        p["checkpoint"] = str(version.best_checkpoint)
+    if job.kind in ("midtrain", "sft"):
+        _continue_stage(job)
     return {"root": str(services.root), "run_dir": str(run_dir)}
+
+
+def _continue_stage(job):
+    """After a worker crash, gate a complete run or resume the frozen partial one."""
+    import uuid
+    from studio_core import read_json
+
+    p = job.params
+    out = Path(p["output_dir"])
+    if not out.is_dir():
+        return
+    try:
+        record = read_json(out / "run.json") if (out / "run.json").is_file() else {}
+    except (OSError, ValueError):
+        record = {}
+    best, last = out / "best.npz", out / "last.npz"
+    if record.get("status") == "completed" and (best.is_file() or last.is_file()):
+        p["candidate"] = str(best if best.is_file() else last)
+        return
+    if not any(out.iterdir()):
+        return
+    aside = out.with_name(f"{out.name}-interrupted-{uuid.uuid4().hex[:8]}")
+    out.rename(aside)
+    if (aside / "last.npz").is_file() and (aside / "dataset.jsonl").is_file():
+        p["resume"] = str(aside / "last.npz")
 
 
 FOLDER_FILES = ("config.json", "dataset.jsonl", "last.npz", "best.npz")  # what studio_model.train refuses to overwrite
@@ -310,6 +343,17 @@ def rlhf_loop(job, context, emit, stop, pause):
     studio_loop.run_job(job, context, emit, stop, pause)
 
 
+def training_stage(job, context, emit, stop, pause):
+    """A mid-training or SFT job; adoption is decided by its gate in the app."""
+    import studio_training_stages
+    p = job.params
+    result = studio_training_stages.run_stage(job.kind, p["checkpoint"], context, output_dir(job, context.run_dir),
+                                              emit, stop, pause, config=p.get("config"), datasets=p.get("datasets"),
+                                              resume=p.get("resume"), candidate=p.get("candidate"))
+    p["result"] = result
+    return result
+
+
 def quicktest(job, context, emit, stop, pause):
     import studio_quicktest
     p = job.params
@@ -341,4 +385,4 @@ def not_built(job, context, emit, stop, pause):
 HANDLERS = {"pretrain": pretrain, "checkpoint_now": checkpoint_now, "quicktest": quicktest, "compare": compare,
             "post_round": post_round, "restore_answers": restore_answers, "import_pretrained": import_pretrained,
             "pretrain_distributed": pretrain_distributed, "diloco_member": diloco_member, "rlhf_loop": rlhf_loop,
-            "mlperf": mlperf}
+            "midtrain": training_stage, "sft": training_stage, "mlperf": mlperf}
