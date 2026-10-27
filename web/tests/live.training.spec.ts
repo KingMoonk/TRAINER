@@ -22,8 +22,8 @@ test("starts a run with an unreachable machine, shows why it is out, then stops 
   expect((await request.post("/versions", { data: { spec: presets[0].spec, change: "Training tab fixture" } })).ok()).toBeTruthy();
   expect((await request.put("/cluster/nodes", { data: { addresses: [NOBODY] } })).ok()).toBeTruthy();
 
-  await page.goto("/cluster/");
-  await expect(page).toHaveURL(/\/cluster\/training\/?$/); // Training is the default tab
+  await page.goto("/cluster/training/");
+  await expect(page).toHaveURL(/\/cluster\/training\/?$/); // the Training page opens directly
   await expect(page.getByLabel("Rounds", { exact: true })).toHaveCount(0); // a run is going, so the form is folded
   await page.getByRole("button", { name: "Start a run" }).click();
   await expect(page.getByLabel("Rounds", { exact: true })).toHaveValue("10");
@@ -60,5 +60,5 @@ test("the Queue links to the Training tab once other machines are listed", async
   await expect(page.getByTestId("queue-training-link")).toBeVisible({ timeout: 10_000 });
   await page.getByTestId("queue-training-link").click();
   await expect(page).toHaveURL(/\/cluster\/training\/?$/);
-  await expect(page.getByRole("navigation", { name: "Runs pages" }).getByRole("link", { name: "Cluster training" })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("navigation", { name: "Machines pages" }).getByRole("link", { name: "Cluster training" })).toHaveAttribute("aria-current", "page");
 });

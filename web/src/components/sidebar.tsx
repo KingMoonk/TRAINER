@@ -17,7 +17,7 @@ const gearClass = (active: boolean) =>
     focusClass,
     active && "border-surface-border bg-surface-raised text-foreground",
   );
-const icons = { models: Network, data: Database, runs: Layers3, eval: MessageSquare, machines: Server };
+const icons = { models: Network, data: Database, train: Layers3, eval: MessageSquare, machines: Server };
 
 export function Sidebar() {
   const pathname = (usePathname() || "").replace(/\/$/, "");

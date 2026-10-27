@@ -193,6 +193,9 @@ function YourData() {
     <main className={PAGE_MAIN}>
       <PageHeader title={T.h1} lead={T.lead}>
         <div className="flex flex-wrap gap-6 text-sm">
+          <Link href="/collect" className="text-highlight hover:underline">
+            {T.collectLink}
+          </Link>
           <Link href="/storage" className="text-highlight hover:underline">
             {T.storageLink}
           </Link>
