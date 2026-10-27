@@ -4,6 +4,186 @@
  */
 
 export interface paths {
+    "/auto-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Runs */
+        get: operations["list_runs_auto_runs_get"];
+        put?: never;
+        /** Create */
+        post: operations["create_auto_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto-runs/defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Defaults
+         * @description The plan a new Auto Run starts from for `version`: every phase on except mid-training, continue on a pass, pause on a failure.
+         */
+        get: operations["defaults_auto_runs_defaults_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto-runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Run */
+        get: operations["get_run_auto_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto-runs/{run_id}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Continue Run */
+        post: operations["continue_run_auto_runs__run_id__continue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto-runs/{run_id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pause */
+        post: operations["pause_auto_runs__run_id__pause_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto-runs/{run_id}/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change Plan
+         * @description Only a draft or paused run (else 409), and for a paused one only the current and later phases that have no job yet (else 422).
+         */
+        put: operations["change_plan_auto_runs__run_id__plan_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto-runs/{run_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume */
+        post: operations["resume_auto_runs__run_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto-runs/{run_id}/skip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Skip
+         * @description Skip the current phase (a failed, stopped, blocked or not yet started one). The run stays as it is; resume it.
+         */
+        post: operations["skip_auto_runs__run_id__skip_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto-runs/{run_id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start */
+        post: operations["start_auto_runs__run_id__start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto-runs/{run_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop */
+        post: operations["stop_auto_runs__run_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/benchmark/compare-plan": {
         parameters: {
             query?: never;
@@ -3940,6 +4120,219 @@ export interface components {
              * @default
              */
             run_label: string;
+        };
+        /** AutoRunBudget */
+        AutoRunBudget: {
+            /** Hours */
+            hours?: number | null;
+        };
+        /** AutoRunChoice */
+        AutoRunChoice: {
+            /**
+             * Choice
+             * @enum {string}
+             */
+            choice: "next" | "retry" | "stop" | "adopt";
+        };
+        /**
+         * AutoRunJobProgress
+         * @description The queue job of the phase that is queued or running. phase, step, total and fraction are set only while it is the job training.
+         */
+        AutoRunJobProgress: {
+            /** Eta S */
+            eta_s?: number | null;
+            /** Fraction */
+            fraction?: number | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Label
+             * @default
+             */
+            label: string;
+            /**
+             * Phase
+             * @default
+             */
+            phase: string;
+            /** Status */
+            status: string;
+            /** Step */
+            step?: number | null;
+            /** Total */
+            total?: number | null;
+        };
+        /** AutoRunJournalLine */
+        AutoRunJournalLine: {
+            /** Current */
+            current?: string | null;
+            /** Event */
+            event: string;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /**
+             * Status
+             * @default
+             */
+            status: string;
+            /** T */
+            t: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** AutoRunNewRun */
+        AutoRunNewRun: {
+            plan: components["schemas"]["AutoRunPlanModel"];
+        };
+        /**
+         * AutoRunPhasePlan
+         * @description One phase of a plan. kind: data | pretrain | midtrain | sft | rlvr | distill | dpo, each at most once, in that order.
+         *     on_pass: continue | pause. on_fail: pause | stop | skip. `settings` are the phase's own (the pretraining or round settings).
+         */
+        AutoRunPhasePlan: {
+            /** Enabled */
+            enabled: boolean;
+            /** Kind */
+            kind: string;
+            /**
+             * On Fail
+             * @default pause
+             */
+            on_fail: string;
+            /**
+             * On Pass
+             * @default continue
+             */
+            on_pass: string;
+            /**
+             * Settings
+             * @default {}
+             */
+            settings: {
+                [key: string]: unknown;
+            };
+        };
+        /** AutoRunPhaseState */
+        AutoRunPhaseState: {
+            /**
+             * Attempt
+             * @default 1
+             */
+            attempt: number;
+            /** Checkpoint */
+            checkpoint?: string | null;
+            /** Ended */
+            ended?: string | null;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Job Id */
+            job_id?: string | null;
+            /** Kind */
+            kind: string;
+            /** Result */
+            result?: {
+                [key: string]: unknown;
+            } | null;
+            /** Started */
+            started?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "queued" | "running" | "passed" | "failed" | "skipped" | "stopped" | "blocked";
+        } & {
+            [key: string]: unknown;
+        };
+        /** AutoRunPlanBody */
+        AutoRunPlanBody: {
+            plan: components["schemas"]["AutoRunPlanModel"];
+        };
+        /** AutoRunPlanModel */
+        AutoRunPlanModel: {
+            budget: components["schemas"]["AutoRunBudget"];
+            /**
+             * Id
+             * @default
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Phases */
+            phases: components["schemas"]["AutoRunPhasePlan"][];
+            /** Version */
+            version: number;
+        };
+        /** AutoRunRunState */
+        AutoRunRunState: {
+            /** Current */
+            current?: string | null;
+            /** Deadline */
+            deadline?: string | null;
+            /** Id */
+            id: string;
+            /** Phases */
+            phases: components["schemas"]["AutoRunPhaseState"][];
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Started */
+            started?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "draft" | "running" | "pausing" | "paused" | "waiting_user" | "stopped" | "done" | "failed";
+            /** Updated */
+            updated?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** AutoRunRunSummary */
+        AutoRunRunSummary: {
+            /** Current */
+            current?: string | null;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Phases */
+            phases: components["schemas"]["AutoRunPhaseState"][];
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Started */
+            started?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "draft" | "running" | "pausing" | "paused" | "waiting_user" | "stopped" | "done" | "failed";
+            /** Updated */
+            updated?: string | null;
+            /** Version */
+            version: number;
+        };
+        /** AutoRunRunView */
+        AutoRunRunView: {
+            /** Id */
+            id: string;
+            /** Journal */
+            journal: components["schemas"]["AutoRunJournalLine"][];
+            plan: components["schemas"]["AutoRunPlanModel"];
+            progress?: components["schemas"]["AutoRunJobProgress"] | null;
+            state: components["schemas"]["AutoRunRunState"];
         };
         /** Block */
         Block: {
@@ -9730,6 +10123,346 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    list_runs_auto_runs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRunRunSummary"][];
+                };
+            };
+        };
+    };
+    create_auto_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoRunNewRun"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRunRunView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    defaults_auto_runs_defaults_get: {
+        parameters: {
+            query: {
+                version: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRunPlanModel"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_auto_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRunRunView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continue_run_auto_runs__run_id__continue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoRunChoice"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRunRunView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pause_auto_runs__run_id__pause_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRunRunView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_plan_auto_runs__run_id__plan_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoRunPlanBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRunRunView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_auto_runs__run_id__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRunRunView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    skip_auto_runs__run_id__skip_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRunRunView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_auto_runs__run_id__start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRunRunView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_auto_runs__run_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoRunRunView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     compare_plan_benchmark_compare_plan_post: {
         parameters: {
             query?: never;

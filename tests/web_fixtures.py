@@ -73,6 +73,8 @@ STEPS = [
     ("design-registry", "GET", "/design/registry", None),
     ("design-presets", "GET", "/design/presets", None),
     ("voice-status", "GET", "/voice", None),
+    ("auto-runs-empty", "GET", "/auto-runs", None),
+    ("auto-run-defaults", "GET", "/auto-runs/defaults?version=1", None),
 ]
 
 # (fixture name, beat of the demo run's clock): the demo run's first round is about five beats, a second round follows at six
