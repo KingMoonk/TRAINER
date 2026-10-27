@@ -113,6 +113,7 @@ describe("Post-training page", () => {
     const { state } = server();
     const user = userEvent.setup();
     renderPage(<PostTrainingPage />);
+    await user.click(await screen.findByText("Start from a pretrained model", { selector: "summary" }));
     await user.click(await screen.findByRole("combobox", { name: "Pretrained model" }));
     await user.click(await screen.findByRole("option", { name: "New server model" }));
     expect(await screen.findByText("About 12 MB to download once.")).toBeVisible();
@@ -126,6 +127,7 @@ describe("Post-training page", () => {
     server({ "GET /post-training/import-models": { status: 503, body: { detail: "Catalogue unavailable" } } });
     const user = userEvent.setup();
     renderPage(<PostTrainingPage />);
+    await user.click(await screen.findByText("Start from a pretrained model", { selector: "summary" }));
     expect(await screen.findByText(/Could not load importable models: Catalogue unavailable/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Import model" })).toBeDisabled();
 
@@ -165,7 +167,9 @@ describe("Post-training page", () => {
 
     // Importing a model saves a new version, which is listed at once.
     expect(screen.queryByTestId("version-2")).toBeNull();
+    await user.click(await screen.findByText("Start from a pretrained model", { selector: "summary" }));
     await user.click(await screen.findByRole("button", { name: /^Import GPT-2/ }));
+    await user.click(screen.getByText("Advanced", { selector: "summary" }));
     expect(await screen.findByTestId("version-2")).toHaveTextContent("Started from GPT-2 (124M)");
     expect(state.imports).toHaveLength(1);
   });
@@ -193,5 +197,29 @@ describe("Post-training page", () => {
     await user.click(await screen.findByRole("tab", { name: /Your votes/ }));
     expect(await screen.findByText("Rate at least 2 pairs in Chat first.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Add votes round to the queue" })).toBeDisabled();
+  });
+
+  test("the loop, versions and rows cards sit in one closed Advanced disclosure", async () => {
+    server();
+    renderPage(<PostTrainingPage />);
+    await screen.findByText("Version 1 · best checkpoint from Pretraining");
+    const advanced = screen.getByTestId("advanced-disclosure") as HTMLDetailsElement;
+    expect(advanced.open).toBe(false);
+    expect(within(advanced).getByRole("list", { name: "Versions" })).toBeInTheDocument();
+    expect(within(advanced).getByText("Look at the data")).toBeInTheDocument();
+  });
+
+  test("the import card starts collapsed once a version has a checkpoint", async () => {
+    server();
+    renderPage(<PostTrainingPage />);
+    await screen.findByText("Version 1 · best checkpoint from Pretraining");
+    expect((screen.getByTestId("import-disclosure") as HTMLDetailsElement).open).toBe(false);
+  });
+
+  test("the import card starts open while no version has a checkpoint", async () => {
+    server({ "GET /versions": { body: [version(1, false)] } });
+    renderPage(<PostTrainingPage />);
+    await screen.findByText("Version 1 · no checkpoint yet");
+    await waitFor(() => expect((screen.getByTestId("import-disclosure") as HTMLDetailsElement).open).toBe(true));
   });
 });
