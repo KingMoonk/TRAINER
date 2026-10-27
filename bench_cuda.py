@@ -14,7 +14,7 @@ Synthetic text only: no data/ folder, no network, nothing outside a temporary fo
       but more than the offloaded run needs, the plain run is tried (expected to run out of memory), then the real
       studio_jobs.pretrain handler trains it end to end; studio_memory.offload_wanted must choose offload by itself.
 
-Checkpoint files are not written (np.savez_compressed is stubbed): compressing gigabytes of state is not what is measured."""
+Checkpoint files are not written (np.savez is stubbed): writing gigabytes of state is not what is measured."""
 from __future__ import annotations
 
 import argparse
@@ -157,7 +157,7 @@ def timed_run(cfg, examples, steps, warmup, sync=lambda: None, plain=False, offl
     clock, events = StepClock(sync), [] if events is None else events
     cfg = dict(cfg, steps=steps)
     patches = [mock.patch.object(studio_model, "build_optimizer", clock.wrap(studio_model.build_optimizer)),
-               mock.patch.object(np, "savez_compressed", lambda *a, **k: None)]
+               mock.patch.object(np, "savez", lambda *a, **k: None)]
     if plain:
         patches.append(mock.patch.object(studio_model, "batch_stage", lambda device: None))
     with tempfile.TemporaryDirectory() as root:

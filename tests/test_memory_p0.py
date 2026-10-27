@@ -251,7 +251,7 @@ class FailedRun(unittest.TestCase):
 
     def test_a_failing_save_does_not_hide_the_original_error(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(ScratchTransformer, "forward", self.failing_after(2)), \
-                mock.patch.object(studio_model.np, "savez_compressed", side_effect=OSError("disk full")):
+                mock.patch.object(studio_model.np, "savez", side_effect=OSError("disk full")):
             with self.assertRaisesRegex(OSError, "No space left"):
                 train(dict(CONFIG, steps=5, eval_every=5), EXAMPLES, Path(d) / "r", telemetry_every=0)
             record = json.loads((Path(d) / "r" / "run.json").read_text(encoding="utf-8"))

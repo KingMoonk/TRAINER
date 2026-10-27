@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import studio_jobs
 import studio_loop
 import studio_rlhf
+import studio_rules
 from studio_model import train
 from studio_rlhf import TeacherError
 
@@ -205,8 +206,17 @@ class Rounds(LoopCase):
         self.assertIn("out of memory", self.journal()[0]["error"])
 
 
+class CharTokenizer:
+    """One token per character."""
+
+    def encode(self, text):
+        return list(range(len(text)))
+
+
 class PassingModel:
     """Half of the answers to 'Copy: x' are right."""
+
+    tokenizer = CharTokenizer()
 
     def __init__(self):
         self.n = 0
@@ -329,17 +339,35 @@ class Pairs(unittest.TestCase):
         import random
 
         class Model:
+            tokenizer = CharTokenizer()
+
             def generate_group(self, messages, n, **kwargs):
                 return ["harbor", "harbor ", "harbor     ", "wrong", "x"][:n]
         pairs, info = studio_loop.rule_pair(Model(), PROBLEMS[0], studio_loop.clean_config({"candidates": 5}), random.Random(1), threading.Event())
         self.assertEqual(pairs[0]["chosen"], "harbor ")
         self.assertIn(pairs[0]["rejected"], ("wrong", "x"))
         self.assertEqual(pairs[0]["kind"], "verified")
+        self.assertFalse(pairs[0]["rejected_cut"])
+
+    def test_a_cut_off_answer_is_never_chosen_and_a_cut_rejected_is_marked(self):
+        import random
+        budget = studio_rules.max_tokens(PROBLEMS[0]["rule"])
+        cut = "x" * budget          # runs into the budget: one character is one token here
+
+        class Model:
+            tokenizer = CharTokenizer()
+
+            def generate_group(self, messages, n, **kwargs):
+                return ["harbor", cut][:n]
+        pairs, _ = studio_loop.rule_pair(Model(), PROBLEMS[0], studio_loop.clean_config({"candidates": 2}), random.Random(1), threading.Event())
+        self.assertEqual((pairs[0]["chosen"], pairs[0]["rejected"], pairs[0]["rejected_cut"]), ("harbor", cut, True))
 
     def test_no_pair_when_every_answer_passes_or_fails(self):
         import random
         for answers, skip in ((["harbor", "harbor "], "every answer passed"), (["a", "b"], "no answer passed")):
             class Model:
+                tokenizer = CharTokenizer()
+
                 def generate_group(self, messages, n, **kwargs):
                     return answers
             pairs, info = studio_loop.rule_pair(Model(), PROBLEMS[0], studio_loop.clean_config({"candidates": 2}), random.Random(1), threading.Event())

@@ -669,6 +669,17 @@ class PlanScalingTests(ApiCase):
         self.assertNotIn("token_budget", kept["job"]["params"])
         self.assertGreater(kept["scaling"]["hours"], .25)
 
+    def test_an_existing_token_cache_raises_the_token_budget_the_disk_allows(self):
+        tight = self.machine(vram=80, free=78, disk=3.6)
+        cold = self.plan_for(tight)
+        self.assertEqual(cold["job"]["params"]["fit"]["cached_pieces"], 0)
+        cold_budget = cold["scaling"]["token_budget"]
+        self.assertTrue(cold_budget and cold_budget < 40_000_000)  # the disk caps the read
+        self.services.cached = 40_000_000
+        warm = self.plan_for(tight)
+        self.assertGreater(warm["scaling"]["token_budget"], cold_budget)
+        self.assertEqual(warm["job"]["params"]["fit"]["cached_pieces"], 40_000_000)
+
     def test_the_hardware_route_returns_the_profile(self):
         self.services.hardware = self.machine()
         got = self.call("GET", "/pretraining/hardware")

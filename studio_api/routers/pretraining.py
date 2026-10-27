@@ -388,7 +388,7 @@ def _sizing(services, v, mode, preview, steps, body, measured):
     return Sizing.model_validate(found)
 
 
-def _fitted(services, v, config, body, mode, pieces, readout, measured):
+def _fitted(services, v, config, body, mode, pieces, readout, measured, source=None):
     """The run fitted to this computer (studio_fit.fit_solo), with the figures the queue needs to fit it again at start; None when the
     hardware cannot be read or the design cannot be fitted. A solo run is scaled; a run over several machines is sized per member elsewhere."""
     profile = services.hardware_profile()
@@ -397,9 +397,15 @@ def _fitted(services, v, config, body, mode, pieces, readout, measured):
     limit = ((v.spec.get("train", {}).get("run", {}) or {}).get("token_limit_millions") or 0) * 1_000_000 or None
     speed = measured["tokens_per_second"] if measured else profile.tokens_per_second
     chars = readout.chars_per_piece if readout else plan.CHARS_PER_PIECE
+    init = _absolute(services, source.best_checkpoint) if mode == "catch_up" and source is not None and source.best_checkpoint else None
+    try:
+        cached = services.cached_tokens(list(dict.fromkeys(body.dataset_ids)), config, init)  # tokens already in the token cache: no disk charged for them
+    except (NotImplementedError, OSError, ValueError, KeyError, TypeError):
+        cached = 0
     try:
         fit = studio_fit.fit_solo(config, profile, share=services.memory_share(), pieces=pieces, chars_per_piece=chars, token_budget=limit,
-                                  window_hours=body.window_hours, speed=speed, keep_mine=body.keep_my_settings, fixed_architecture=mode == "catch_up")
+                                  window_hours=body.window_hours, speed=speed, keep_mine=body.keep_my_settings, fixed_architecture=mode == "catch_up",
+                                  cached_pieces=cached)
     except (ValueError, KeyError, TypeError):
         return None
     shown = fit.to_dict()
@@ -407,7 +413,7 @@ def _fitted(services, v, config, body, mode, pieces, readout, measured):
                       window_hours=body.window_hours, hours=shown["hours"], token_budget=shown["token_budget"], offload=shown["offload"],
                       refusal=shown["refusal"], blocker=shown["blocker"], hardware=Hardware.model_validate(profile.to_dict()))
     record = studio_fit.record(fit, config, limit, window_hours=body.window_hours, keep_mine=body.keep_my_settings, speed=speed,
-                               pieces=pieces, chars_per_piece=chars)
+                               pieces=pieces, chars_per_piece=chars, cached_pieces=cached)
     return {"fit": fit, "scaling": scaling, "record": record}
 
 
@@ -472,7 +478,7 @@ def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
     config = fitted = scaling = None
     if v is not None and steps and not unusable:
         config = plan.pretrain_config(v.spec, steps, body.rows, body.hold)
-        fitted = _fitted(services, v, config, body, mode, pieces, readout, measured)
+        fitted = _fitted(services, v, config, body, mode, pieces, readout, measured, source)
         if fitted is not None:
             scaling = fitted["scaling"]
             if not fitted["fit"].refusal:

@@ -157,6 +157,17 @@ class Kinds(unittest.TestCase):
         self.assertEqual(dk.text_characters(ws, [disk, small], exclude={"held back"}), sum(map(len, docs)) + len("a short note kept whole"))
         self.assertEqual(dk.text_characters(ws, []), 0)
 
+    def test_text_fingerprints_are_those_of_the_text_characters_counts(self):
+        import studio_core
+        ws = workspace()
+        disk, small = ws.create_dataset("disk", storage="sqlite"), ws.create_dataset("small")
+        docs = [f"document {i:03d} " + "x" * 40 for i in range(30)]
+        ws.add(disk, docs + [{"user": "q", "assistant": "a"}, {"text": "an unreviewed draft", "quality": "Review", "synthetic": True}])
+        ws.add(small, ["a short note kept whole", "held back"])
+        found = list(dk.text_fingerprints(ws, [disk, small], exclude={"held back", docs[0]}))
+        self.assertEqual(sorted(found), sorted(studio_core.fingerprint({"text": t}) for t in docs[1:] + ["a short note kept whole"]))
+        self.assertEqual(list(dk.text_fingerprints(ws, [])), [])
+
     def test_text_characters_counts_only_training_text_of_disk_sets(self):
         ws = workspace()
         plain, heavy = ws.create_dataset("plain", storage="sqlite"), ws.create_dataset("heavy", storage="sqlite")

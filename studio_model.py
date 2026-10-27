@@ -1029,7 +1029,7 @@ def train(config, examples, output_dir, emit=None, stop=None, pause=None, resume
         path = directory / filename
         temporary = path.with_suffix(".tmp")
         with temporary.open("wb") as stream:
-            np.savez_compressed(stream, **arrays)
+            np.savez(stream, **arrays)
         replace_file(temporary, path)
 
     def evaluate(samples):

@@ -28,13 +28,14 @@ from studio_backend import empty_cache
 from studio_core import atomic_json, now
 from studio_core import messages_of
 from studio_model import DEFAULT_CONFIG, AdamW, LocalModel, ScratchTransformer, Tokenizer, batch_arrays, encode_example, load_checkpoint, train
-from studio_rlhf import _encode_pair, _save, token_logps
+from studio_rlhf import _encode_pair, _save, is_cut, token_logps
 
 RUBRIC_WEIGHT = .3   # the teacher's rubric adds at most this much; a failed rule is always the minimum, 0
 MEASURE_PROBLEMS = 200  # held-back problems answered per before/after measurement
 PROBE_PROBLEMS = 8      # problems answered before round 2 to see whether it can learn anything
 PROBE_ANSWERS = 4       # answers sampled per probe problem (the k of pass@k)
 MEASURE_CONVERSATIONS = 200  # held-back conversations scored and answered per measurement (a fixed sample, so before/after compare)
+CUT_REWARD = -.5       # an answer that hit its token budget without stopping (DAPO-style overlong shaping)
 EOS_TOKENS = 96         # a greedy reply that has not stopped by this many tokens counts as not stopping
 SFT_MAX_LR = 1e-4       # round 1 (answers from conversations) never trains faster than this ...
 SFT_LR_SHARE = .1       # ... nor than this share of the peak rate the base was pretrained at
@@ -171,12 +172,14 @@ def practice_with_checks(checkpoint, problems, output_dir, group=6, steps=20, le
             budget = max_tokens or studio_rules.max_tokens(problem["rule"])  # sized by the rule unless the caller fixes it
             answers = local.generate_group(messages, group, max_tokens=budget, temperature=temperature)   # one prompt prefill for the group
             passed = [studio_rules.check(problem["rule"], prompt, a, problem.get("params")) for a in answers]
-            rewards = [float(ok) + (RUBRIC_WEIGHT * float(rubric(prompt, a)) if rubric and ok else 0.) for a, ok in zip(answers, passed)]
+            cut = [is_cut(tokenizer, a, budget) for a in answers]   # ran out of tokens: penalised, and trained without an end token
+            rewards = [CUT_REWARD if c else float(ok) + (RUBRIC_WEIGHT * float(rubric(prompt, a)) if rubric and ok else 0.)
+                       for a, ok, c in zip(answers, passed, cut)]
             flat = not has_spread(rewards)   # all pass or all fail: nothing to learn
             step_rewards.append(rewards)
             adv = np.zeros(group) if flat else advantages(rewards, divide_by_std)
             if not flat:
-                rows += [_encode_pair(tokenizer, messages, a, cfg["context"]) for a in answers]
+                rows += [_encode_pair(tokenizer, messages, a, cfg["context"], eos=not c) for a, c in zip(answers, cut)]
                 adv_all += list(adv)
             shown.append({"prompt": prompt, "rule": problem["rule"], "mean": float(np.mean(rewards)), "skipped": flat,
                           "answers": [{"text": a, "pass": ok, "score": r, "push": float(d)} for a, ok, r, d in zip(answers, passed, rewards, adv)]})
@@ -355,15 +358,18 @@ def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learn
     if memory_share is not None:
         _decide_residency(teacher, local, tokenizer, min(prompts_per_step, len(prompts)), memory_share, emit)
 
-    def encode(item, answer):
+    def encode(item, answer, budget):
         messages, correction = item
-        return _encode_pair(tokenizer, messages, answer, cfg["context"]), _encode_pair(tokenizer, teacher.messages(messages, correction), answer, cfg["context"])
+        eos = not is_cut(tokenizer, answer, budget)   # an answer cut off at its budget gets no end token, student or teacher side
+        return (_encode_pair(tokenizer, messages, answer, cfg["context"], eos=eos),
+                _encode_pair(tokenizer, teacher.messages(messages, correction), answer, cfg["context"], eos=eos))
 
     def probe_gaps():
         with torch.no_grad():
             return reverse_kl(student, fixed_logps, [r[0] for r in fixed])[1]
 
-    fixed = [encode(m, local.generate(m[0], max_tokens=max_tokens or studio_rules.max_tokens(), temperature=temperature)) for m in prompts[:probe]]
+    budget = max_tokens or studio_rules.max_tokens()
+    fixed = [encode(m, local.generate(m[0], max_tokens=budget, temperature=temperature), budget) for m in prompts[:probe]]
     fixed_logps = teacher.score([r[1] for r in fixed])   # the same answers are measured before and after, so the teacher scores them once
     before = probe_gaps()
     words = [tokenizer.decode([t]) for t in fixed[0][0][1] if t != -100]
@@ -376,7 +382,7 @@ def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learn
     while step < steps and not stop.is_set():
         while pause.is_set() and not stop.is_set():
             threading.Event().wait(.05)
-        pairs = [encode(m, local.generate(m[0], max_tokens=max_tokens or studio_rules.max_tokens(), temperature=temperature))
+        pairs = [encode(m, local.generate(m[0], max_tokens=budget, temperature=temperature), budget)
                  for m in rng.sample(prompts, min(prompts_per_step, len(prompts)))]
         teacher_logps = teacher.score([p[1] for p in pairs])   # the teacher's phase: it is off the device again before the student's update
         student.zero_grad()
@@ -619,7 +625,7 @@ def run_round(number, job, context, emit, stop, pause):
         after = measure(candidate, docs, held, stop, held_conversations)
     except studio_eval.Stopped:
         return {"round": number, "ok": False, "checkpoint": checkpoint, "stopped": True}
-    ok, checks = studio_gate.passes(before, after, band, number=number)
+    ok, checks = studio_gate.passes(before, after, band, number=number, record=record)
     result = {"round": number, "ok": ok, "checks": checks, "verdict": verdict_for(verdict, ok, checks), "before": before, "after": after,
               "band": band, "checkpoint": candidate}
     if number == 2:   # groups that taught something: the share of reward groups with any spread

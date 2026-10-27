@@ -322,13 +322,20 @@ def prompts_from(examples):
 
 # --------------------------------------------------------------------------- DPO / IPO
 
-def _encode_pair(tokenizer, messages, response, context):
+def is_cut(tokenizer, text, max_tokens):
+    """True when a sampled answer ran into its token budget (a reply that stopped on its own is shorter than max_tokens - 1
+    once re-encoded), so it never ended and must not be trained with an end token."""
+    return len(tokenizer.encode(text)) >= int(max_tokens) - 1
+
+
+def _encode_pair(tokenizer, messages, response, context, eos=True):
+    """(inputs, targets). eos=False leaves off the end token: an answer cut off at its budget did not end there."""
     prefix = [BOS]
     for message in messages:
         if message["role"] in ROLE_TOKENS:
             prefix += [ROLE_TOKENS[message["role"]]] + tokenizer.encode(message["content"]) + [EOS]
     prefix.append(ASSISTANT)
-    answer = tokenizer.encode(response) + [EOS]
+    answer = tokenizer.encode(response) + ([EOS] if eos else [])
     window = context + 1
     # Keep the answer (what DPO scores) and as much recent prompt context as fits.
     answer = answer[:max(1, window - 8)]
@@ -450,8 +457,8 @@ def dpo_train(base_checkpoint, pairs, output_dir, config=None, emit=None, stop=N
     model_cfg = dict(data["config"], device=cfg["device"], dropout=0)
     tokenizer = Tokenizer.restore(data["tokenizer"])
     rng = random.Random(cfg["seed"])
-    encoded = [(_encode_pair(tokenizer, p["messages"], p["chosen"], model_cfg["context"]),
-                _encode_pair(tokenizer, p["messages"], p["rejected"], model_cfg["context"])) for p in pairs]
+    encoded = [(_encode_pair(tokenizer, p["messages"], p["chosen"], model_cfg["context"], eos=not p.get("chosen_cut")),
+                _encode_pair(tokenizer, p["messages"], p["rejected"], model_cfg["context"], eos=not p.get("rejected_cut"))) for p in pairs]
     # The reference never changes, so it scores every pair once, in a phase of its own, and is gone before the policy exists.
     reference = ScratchTransformer(model_cfg, tokenizer.vocab_size)
     reference.load_weights(data["model"])
