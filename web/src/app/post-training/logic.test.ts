@@ -36,10 +36,10 @@ describe("roundBlocker", () => {
     expect(roundBlocker(2, { conversations: 9 }, false, false, true)).toBe("Make problems a rule can check first.");
     expect(roundBlocker(2, { problems: 1 }, false, false, true)).toBeNull();
   });
-  it("round 4 needs at least two rated pairs", () => {
-    expect(roundBlocker(4, { pairs: 1 }, false, false, true)).toBe("Rate at least 2 pairs in Chat first.");
-    expect(roundBlocker(4, {}, false, false, true)).toBe("Rate at least 2 pairs in Chat first.");
-    expect(roundBlocker(4, { pairs: 2 }, false, false, true)).toBeNull();
+  it("round 4 needs at least twenty rated pairs", () => {
+    expect(roundBlocker(4, { pairs: 19 }, false, false, true)).toBe("Rate at least 20 pairs in Chat first: fewer are memorised, not learned.");
+    expect(roundBlocker(4, {}, false, false, true)).toBe("Rate at least 20 pairs in Chat first: fewer are memorised, not learned.");
+    expect(roundBlocker(4, { pairs: 20 }, false, false, true)).toBeNull();
   });
   it("round 3 learns from another version, or from corrections", () => {
     expect(roundBlocker(3, {}, true, false, true)).toBe("There is no other trained version to learn from yet.");
