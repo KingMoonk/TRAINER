@@ -145,7 +145,7 @@ export default function Page() {
 
   return (
     <main className={PAGE_MAIN}>
-      <PageHeader breadcrumb="Network designer" title={COMPARE.h1} lead={COMPARE.lead} />
+      <PageHeader breadcrumb="Build your model" title={COMPARE.h1} lead={COMPARE.lead} />
 
       <Card>
         <CardHeader>

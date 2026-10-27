@@ -12,6 +12,7 @@ export const BUILDER = {
   your_text_title: "Your text, cut into pieces",
   model_controls: "Model controls",
   training_settings: "Training settings",
+  training_settings_hint: "Batch size, learning rate, precision and the other numbers a run starts from.",
   training_precision: "Precision",
   training_precision_help: "The number format the model trains in.",
   training_precision_unavailable: "{name} is not available here: {reason}",
