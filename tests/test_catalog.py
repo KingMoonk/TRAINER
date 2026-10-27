@@ -342,8 +342,8 @@ class CheckableProblemTests(unittest.TestCase):
 
     def test_numeric_keys(self):
         ex, rule, key = self._problem("gsm8k_check", {"question": "How many?", "answer": "48/2 = <<48/2=24>>24\n#### 1,072"})
-        self.assertEqual((rule, key, ex["assistant"]), ("final_number", "1072", "1072"))
-        self.assertTrue(ex["user"].startswith("How many?") and ex["user"].endswith("as a number."))
+        self.assertEqual((rule, key, ex["assistant"]), ("final_number", "1072", "Answer: 1072"))
+        self.assertTrue(ex["user"].startswith("How many?") and ex["user"].endswith("'Answer: <number>'."))
         self.assertEqual(self._problem("svamp_check", {"ID": "s1", "question_concat": "Some apples?", "Answer": 145.0})[2], "145")
         self.assertEqual(self._problem("metamath_check", {"query": "Q", "response": "Work.\nThe answer is: 2.5"})[2], "2.5")
         for raw in ({"query": "Q", "response": "The answer is: \\frac{1}{2}"}, {"query": "Q", "response": "no key"}):

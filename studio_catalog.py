@@ -998,7 +998,7 @@ def _mmlu_auxiliary(raw):
             "assistant": lines[index], "intent": "multiple_choice", "sourceId": "mmlu_auxiliary:" + digest, "groupId": "mmlu_auxiliary:" + digest}
 
 
-NUMBER_ASK = "\n\nGive the final answer as a number."
+NUMBER_ASK = "\n\nShow brief working, then end with 'Answer: <number>'."
 CHOICE_ASK = "Reply with the letter and the option text.\n\n"
 PLAIN_NUMBER = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 
@@ -1066,15 +1066,15 @@ def _checkable(raw, parser):
     if parser == "gsm_check":
         key = _number_key(str(raw.get("answer", "")).rpartition("####")[2])
         question = str(raw.get("question") or "").strip()
-        return _keyed(question + NUMBER_ASK, key, "final_number", key, "math_problem", group=group_id(question)) if key and question else None
+        return _keyed(question + NUMBER_ASK, f"Answer: {key}", "final_number", key, "math_problem", group=group_id(question)) if key and question else None
     if parser == "svamp_check":
         key = _number_key(raw.get("Answer"))
         question = str(raw.get("question_concat") or f"{raw.get('Body', '')} {raw.get('Question', '')}").strip()
-        return _keyed(question + NUMBER_ASK, key, "final_number", key, "math_problem", str(raw.get("ID", ""))) if key and question else None
+        return _keyed(question + NUMBER_ASK, f"Answer: {key}", "final_number", key, "math_problem", str(raw.get("ID", ""))) if key and question else None
     if parser == "metamath_check":
         query, response = str(raw.get("query") or "").strip(), str(raw.get("response") or "")
         key = _number_key(response.rpartition("The answer is:")[2]) if "The answer is:" in response else None
-        return (_keyed(query + NUMBER_ASK, key, "final_number", key, "math_problem", group=group_id(raw.get("original_question") or query))
+        return (_keyed(query + NUMBER_ASK, f"Answer: {key}", "final_number", key, "math_problem", group=group_id(raw.get("original_question") or query))
                 if key and query else None)
     if parser == "aqua_check":
         options = [re.sub(r"^\s*[A-E]\s*\)\s*", "", str(o)).strip() for o in raw.get("options") or []]

@@ -42,6 +42,30 @@ def decimal(text):
     return float(found[-1]) if found else None
 
 
+VALUE = re.compile(r"(-?\d+(?:\.\d+)?)(?:/(\d+))?%?")
+ANSWER_LINE = re.compile(r"answer\s*(?:is)?\s*:", re.I)
+
+
+def answer_value(text):
+    """The number a worked answer ends on, as a float, else None. A final 'Answer: <number>' wins; without one the
+    last number in the text counts. Commas and the unicode minus are understood, 'a/b' is a fraction and '50%' is 50."""
+    text = str(text).replace("−", "-").replace(",", "")
+    marks = list(ANSWER_LINE.finditer(text))
+    if marks:
+        m = VALUE.search(text, marks[-1].end())
+        if m:
+            return _value(m)
+    found = list(VALUE.finditer(text))
+    return _value(found[-1]) if found else None
+
+
+def _value(m):
+    top, bottom = float(m.group(1)), m.group(2)
+    if bottom is None:
+        return top
+    return top / int(bottom) if int(bottom) else None
+
+
 def _tail(prompt, label):
     m = re.match(rf"\s*{label}\s*:\s*(.*)", prompt, re.S | re.I)
     return m.group(1).strip() if m else None
@@ -124,7 +148,7 @@ def _ends(prompt, answer):
 CHECKS = {"copy": _copy, "reverse": _reverse, "sort": _sort, "count": _count, "small_addition": _small_addition,
           "max_length": _max_length, "ends_cleanly": _ends}
 def _final_number(prompt, answer, params):
-    want, got = decimal(params.get("answer", "")), decimal(answer)
+    want, got = decimal(params.get("answer", "")), answer_value(answer)
     return want is not None and got is not None and abs(got - want) <= 1e-6 * max(1., abs(want))
 
 
@@ -144,7 +168,8 @@ CHECKABLE = RULES + KEYED
 # Tokens an answer may use before it is cut off. Most rules check a short answer; the rest (a sentence, a length
 # limit, an unknown rule or a free prompt) get room to finish, because a cut-off answer fails ends_cleanly and max_length.
 DEFAULT_MAX_TOKENS = 96
-MAX_TOKENS = {rule: 32 for rule in ("copy", "reverse", "sort", "count", "small_addition", "final_number", "choice")}
+MAX_TOKENS = {rule: 32 for rule in ("copy", "reverse", "sort", "count", "small_addition", "choice")}
+MAX_TOKENS["final_number"] = 160   # room to show brief working before 'Answer: <number>'
 
 
 def max_tokens(rule=None):
