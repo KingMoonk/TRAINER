@@ -13,7 +13,7 @@ from studio_api.hosts import ANY
 from studio_collect import config, register, view
 from studio_collect.manager import Manager
 from studio_collect.pipeline import shard_dir
-from studio_collect.store import State
+from studio_collect.store import Journal, State
 from studio_ia.services import FakeServices, WorkspaceServices
 from tests.api_tap import EventTap
 from tests.collect_fakes import prose
@@ -117,6 +117,45 @@ class ManagerTick(unittest.TestCase):
             self.assertEqual(workspace._dataset("collect_topic-science")["recordCount"], 1)
             self.assertTrue((folder / "b.jsonl.part").exists())
             self.assertEqual(register.totals(root)["collect_topic-science"]["records"], 1)
+
+
+class RegisterIsolation(unittest.TestCase):
+    def shard(self, root, group, name, text):
+        folder = shard_dir(root, group)
+        folder.mkdir(parents=True, exist_ok=True)
+        row = studio_core.normalize({"text": text, "provenance": {"source_url": "https://x"}, "license": "mit", "source_url": "https://x"})
+        for key in ("id", "datasetId", "updatedAt"):
+            row.pop(key)
+        (folder / name).write_text(json.dumps(row) + "\n", encoding="utf-8")
+        return folder / name
+
+    def test_an_unreadable_shard_in_one_group_does_not_block_the_next(self):
+        with tempfile.TemporaryDirectory() as root:
+            workspace = studio_core.Workspace(root)
+            bad = self.shard(root, "topic-a", "a.jsonl", prose(1))
+            bad.write_text("{not json\n", encoding="utf-8")
+            self.shard(root, "topic-b", "b.jsonl", prose(2))
+            report = register.register(workspace)
+            self.assertEqual((report["shards"], report["added"], report["failed"]), (1, 1, 1))
+            self.assertEqual(workspace._dataset("collect_topic-b")["recordCount"], 1)
+            errors = [row for row in Journal(root).tail() if row["type"] == "error"]
+            self.assertEqual(len(errors), 1)
+            self.assertEqual((errors[0]["source"], errors[0]["file"]), ("topic-a", str(bad)))
+            self.assertIn("a.jsonl", errors[0]["message"])
+            self.assertIn("JSONDecodeError", errors[0]["message"])
+            self.assertEqual(register.pending(root), {})                                              # set aside, so it does not repeat every pass
+            self.assertTrue(bad.with_name("a.jsonl.failed").exists())
+            self.assertTrue(any("a.jsonl" in row["text"] for row in view.state(root, running=False)["journal"]))   # the Collect page's data
+
+    def test_a_failed_tick_is_journaled_and_the_loop_survives(self):
+        with tempfile.TemporaryDirectory() as root:
+            manager = Manager(studio_core.Workspace(root), interval=0.01, ensure=lambda r: None, running=lambda r: False)
+            def explode():
+                manager.stop.set()                                                                    # one pass, then the loop ends
+                raise RuntimeError("boom")
+            with mock.patch.object(manager, "tick", side_effect=explode):
+                manager._loop()
+            self.assertIn("boom", Journal(root).tail()[0]["message"])
 
 
 class ManagerSession(unittest.TestCase):
