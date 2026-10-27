@@ -118,6 +118,24 @@ class SoloFitTests(unittest.TestCase):
         self.assertIn("disk", note.text)
         self.assertLess(found.token_budget, PIECES)
 
+    def test_an_existing_token_cache_raises_the_disk_budget(self):
+        cfg = config(width=256, layers=4, context=256)
+        cold = F.fit_solo(cfg, machine(disk=20), pieces=PIECES, token_budget=PIECES)
+        warm = F.fit_solo(cfg, machine(disk=20), pieces=PIECES, token_budget=PIECES, cached_pieces=PIECES)
+        part = F.fit_solo(cfg, machine(disk=20), pieces=PIECES, token_budget=PIECES, cached_pieces=PIECES // 4)
+        self.assertGreater(warm.token_budget, cold.token_budget)
+        self.assertGreater(part.token_budget, cold.token_budget)
+        self.assertLess(part.token_budget, warm.token_budget)
+        self.assertEqual(F.fit_solo(cfg, machine(disk=20), pieces=PIECES, token_budget=PIECES, cached_pieces=0).token_budget, cold.token_budget)
+
+    def test_the_cache_bytes_are_dropped_only_for_cached_tokens(self):
+        text = F.TEXT_COPIES * 4.
+        self.assertEqual(F._disk_cost(100, text, 0) - F._disk_cost(100, text, 100), 100 * F.CACHE_BYTES_PER_TOKEN)
+        self.assertEqual(F._disk_cost(100, text, 500), F._disk_cost(100, text, 100))  # a cache larger than the read saves no more
+        for cached in (0, 40, 1000):
+            room = F._disk_cost(777, text, cached)
+            self.assertAlmostEqual(F._disk_tokens(room, text, cached), 777, delta=1)
+
     def test_no_disk_for_even_the_smallest_run_is_refused(self):
         cfg = config(width=256, layers=4, context=256)
         found = F.fit_solo(cfg, machine(disk=.5), pieces=PIECES, token_budget=PIECES)
@@ -179,6 +197,16 @@ class MembersTests(unittest.TestCase):
 class RefitTests(unittest.TestCase):
     def params(self, **kw):
         return {"config": config(rows=8, context=2048), "mode": "from_scratch", **kw}
+
+    def test_refit_uses_the_cached_count_the_plan_recorded(self):
+        cfg = config(width=256, layers=4, context=256)
+        fit = F.fit_solo(cfg, machine(disk=20), pieces=PIECES, token_budget=PIECES, cached_pieces=PIECES)
+        saved = F.record(fit, cfg, PIECES, window_hours=72., keep_mine=False, speed=None, pieces=PIECES, chars_per_piece=4., cached_pieces=PIECES)
+        self.assertEqual(saved["cached_pieces"], PIECES)
+        again = F.refit({"config": cfg, F.RECORD: saved}, machine(disk=20), 1.)
+        cold = F.refit({"config": cfg, F.RECORD: {**saved, "cached_pieces": 0}}, machine(disk=20), 1.)
+        self.assertEqual(again.token_budget, fit.token_budget)
+        self.assertGreater(again.token_budget, cold.token_budget)
 
     def test_refit_scales_a_fresh_job_from_what_was_declared(self):
         found = F.refit(self.params(), machine(), 1.)

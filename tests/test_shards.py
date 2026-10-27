@@ -285,6 +285,55 @@ class TrainFromShards(unittest.TestCase):
         self.assertEqual(losses["disk"], losses["memory"])
         self.assertEqual(max(step for step, *_ in losses["disk"]), TINY["steps"])
 
+    def test_the_preflight_lookup_counts_cached_tokens_without_tokenizing(self):
+        from studio_core import fingerprint
+        cfg, tokenizer = config(), Tokenizer("byte")
+        shard_windows(TRAINING, VALIDATION, tokenizer, cfg, "one", self.root)
+        digest, vocab = studio_model._tokenizer_hash(tokenizer), tokenizer.vocab_size
+        examples = TRAINING + VALIDATION
+        expected = sum(len(studio_model._encode_arrays(e, tokenizer, True)[0]) for e in examples)
+        with mock.patch.object(studio_model, "_encode_arrays") as encode, mock.patch.object(Tokenizer, "encode") as encoded:
+            found = studio_shards.cached_tokens(self.root, digest, vocab, cfg["objective"] == "assistant", [fingerprint(e) for e in examples])
+            half = studio_shards.cached_tokens(self.root, digest, vocab, cfg["objective"] == "assistant", [fingerprint(e) for e in TRAINING[:5]])
+        self.assertFalse(encode.called or encoded.called)
+        self.assertEqual(found, expected)
+        self.assertGreater(half, 0)
+        self.assertLess(half, found)
+        unseen = [fingerprint({"text": "never encoded"}), fingerprint(TRAINING[0]), fingerprint(TRAINING[0])]
+        self.assertEqual(studio_shards.cached_tokens(self.root, digest, vocab, cfg["objective"] == "assistant", unseen),
+                         studio_shards.cached_tokens(self.root, digest, vocab, cfg["objective"] == "assistant", [fingerprint(TRAINING[0])]))
+
+    def test_the_lookup_is_zero_for_another_tokenizer_or_no_cache(self):
+        from studio_core import fingerprint
+        cfg, tokenizer = config(), Tokenizer("byte")
+        shard_windows(TRAINING, VALIDATION, tokenizer, cfg, "one", self.root)
+        prints = [fingerprint(e) for e in TRAINING]
+        self.assertEqual(studio_shards.cached_tokens(self.root, "another tokenizer", 256, False, prints), 0)
+        self.assertEqual(studio_shards.cached_tokens(self.root / "nothing", studio_model._tokenizer_hash(tokenizer), 256, False, prints), 0)
+        self.assertFalse((self.root / "nothing").exists())  # looking writes nothing
+
+
+class PreflightCachedTokens(unittest.TestCase):
+    """WorkspaceServices.cached_tokens: the tokens a warm start would find cached, from the checkpoint's tokenizer and the chosen sets' fingerprints."""
+
+    def test_a_warm_start_counts_its_cache_and_a_fresh_run_counts_nothing(self):
+        from types import SimpleNamespace
+        import studio_core
+        from studio_ia.services import WorkspaceServices
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            first = root / "first"
+            train(dict(TINY, steps=2), TRAINING + VALIDATION, first, telemetry_every=0, shard_dir=root / "data" / "shards", stream_chars=0)
+            texts = [e["text"] for e in TRAINING if e.get("text")]
+            stub = SimpleNamespace(_abs=lambda p: p, _preview_ids=lambda ids: list(ids), _heldout_set=lambda: frozenset(),
+                                   workspace=object())
+            with mock.patch("studio_data_kinds.text_fingerprints", lambda ws, ids, exclude=(): (studio_core.fingerprint({"text": t}) for t in texts)),                     mock.patch.object(studio_core, "ROOT", root):
+                warm = WorkspaceServices.cached_tokens(stub, ["x"], dict(TINY), str(first / "last.npz"))
+                fresh = WorkspaceServices.cached_tokens(stub, ["x"], dict(TINY), None)
+                refit = WorkspaceServices.cached_tokens(stub, ["x"], dict(TINY, refit_tokenizer=True), str(first / "last.npz"))
+        self.assertGreater(warm, 0)
+        self.assertEqual((fresh, refit), (0, 0))
+
 
 if __name__ == "__main__":
     unittest.main()
