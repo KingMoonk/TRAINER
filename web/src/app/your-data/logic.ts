@@ -26,9 +26,10 @@ export function shownLine(loaded: number, count: number, query: string, more: bo
     : fill(T.shown, { shown: loaded.toLocaleString("en-US"), count: count.toLocaleString("en-US") });
 }
 
-/** The recommended collection is first-run guidance: it shows while the open kind has no sets. */
-export function collectionShown(summary: Summary | undefined): boolean {
-  return !!summary && summary.sets.length === 0;
+/** The recommended collection is first-run guidance: a card while the open kind has no sets, then tucked into "Download more" once it has some. */
+export function collectionShown(summary: Summary | undefined): "card" | "tucked" | null {
+  if (!summary) return null;
+  return summary.sets.length === 0 ? "card" : "tucked";
 }
 
 export const STATUS_CLASS: Record<string, string> = {

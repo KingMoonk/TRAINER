@@ -3,7 +3,10 @@
 export const T = {
   title: "Post-training",
   lead: "Four rounds, always in this order. Same design throughout; only the weights shift.",
-  noVersions: "No versions yet. Build one in the Network designer, or start from a pretrained model below.",
+  noVersions: "No versions yet. Build one in the Build your model, or start from a pretrained model below.",
+  importTitle: "Start from a pretrained model",
+  advancedTitle: "Advanced",
+  advancedHint: "The automatic loop, the versions list and the rows behind each round.",
   startsFrom: "Starts from",
   noVersion: "No trained version yet",
   atThisSize: "At this size the gain from each round is small. The shape of the pipeline is what you are learning.",

@@ -4,6 +4,8 @@ import { Copy } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
+import { TrainingSpeed } from "@/app/benchmark/training-speed";
+import { Disclosure } from "@/components/disclosure";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -119,6 +121,9 @@ export default function MachinesPage() {
             </div>
           </section>
           <AccessCard />
+          <Disclosure title="Training speed (MLPerf)" hint="Time each machine on a fixed reference task." testId="training-speed">
+            <TrainingSpeed />
+          </Disclosure>
         </>
       )}
     </main>

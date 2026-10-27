@@ -31,7 +31,20 @@ describe("Sidebar", () => {
     expect(studio.querySelectorAll("a[aria-current=page]")).toHaveLength(1);
   });
 
+  test("hides the traffic console button until Developer tools is on", () => {
+    renderPage(<TrafficProvider><Sidebar /></TrafficProvider>, { route: "/builder" });
+    expect(screen.queryByRole("button", { name: /traffic/i })).toBeNull();
+    expect(screen.getAllByRole("link", { name: "Settings" }).length).toBeGreaterThan(0);
+  });
+
+  test("shows the traffic console button once Developer tools is on", () => {
+    localStorage.setItem("settings.developerTools", "on");
+    renderPage(<TrafficProvider><Sidebar /></TrafficProvider>, { route: "/builder" });
+    expect(screen.getAllByRole("button", { name: /traffic/i }).length).toBeGreaterThan(0);
+  });
+
   test("pins Settings and traffic console at the foot of the nav", () => {
+    localStorage.setItem("settings.developerTools", "on");
     renderPage(<TrafficProvider><Sidebar /></TrafficProvider>, { route: "/builder" });
     const gears = screen.getAllByRole("link", { name: "Settings" });
     expect(gears.length).toBeGreaterThan(0);

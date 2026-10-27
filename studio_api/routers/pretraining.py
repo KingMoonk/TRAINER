@@ -738,3 +738,23 @@ def gate_result(number: int, services: Services) -> GateModel | None:
     """Services.gate_result: null when Chat did not weigh the version."""
     found = services.gate_result(_version(services, number))
     return None if found is None else GateModel.model_validate(found)
+
+
+def auto_run_pretrain(services, settings, version):
+    """The pretrain Job an Auto Run's pretrain phase enqueues: the plan POST /pretraining/start builds for the same answers (sizing
+    and fitting included). `settings` holds PlanRequest fields (hours, passes, steps, mode, ...; dataset_ids defaults to every text set
+    that is not held back). When the size of the text is not known yet it is worked out here, on the caller's thread. ValueError with
+    the plan's own sentence when the run cannot be added."""
+    from studio_ia.services import Job
+
+    fields = {k: v for k, v in settings.items() if k in PlanRequest.model_fields and k != "version"}
+    if not fields.get("dataset_ids"):
+        fields["dataset_ids"] = [s["id"] for s in _sets(services) if not plan.held_out(s["id"])]
+    body = PlanRequest(version=version, **fields)
+    made = pretrain_plan(body, services)
+    if not made.can_add and made.estimating:
+        services.pretrain_preview(list(dict.fromkeys(body.dataset_ids)), body.preview_rows)
+        made = pretrain_plan(body, services)
+    if not made.can_add:
+        raise ValueError(made.reason)
+    return Job(id="", note="", **made.job.model_dump())

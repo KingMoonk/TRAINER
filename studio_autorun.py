@@ -261,6 +261,23 @@ def resume(plan, state, now):
     return state
 
 
+def park(plan, state, phase, now):
+    """A pause was asked for and the phase's job is only waiting in the queue (the orchestrator has held it): the phase goes back to
+    pending, keeping its job id and attempt, and the run is paused once nothing else is queued or running. `resume` then asks for the
+    same job again (the orchestrator releases the held one)."""
+    if state["status"] != "pausing":
+        raise AutorunError("Only a pausing run can park a phase.")
+    state = _copy(state)
+    entry = state["phases"][_index(plan, phase)]
+    if entry["status"] != "queued":
+        raise AutorunError(f"The {phase} phase is {entry['status']}, not queued.")
+    entry["status"] = "pending"
+    _event(state, "parked", now, phase=phase, job_id=entry["job_id"])
+    if not any(p["status"] in ("queued", "running") for p in state["phases"]):
+        _set(state, "paused", "Paused by you.", now, "paused")
+    return state
+
+
 def skip_phase(plan, state, phase, now):
     """The person skips a failed, stopped or blocked phase instead of retrying it."""
     state = _copy(state)
