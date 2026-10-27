@@ -43,7 +43,7 @@ export function roundBlocker(
   const need: Record<number, [string, number, string]> = {
     1: ["conversations", 1, "Add conversations in Your data first."],
     2: ["problems", 1, "Make problems a rule can check first."],
-    4: ["pairs", 2, "Rate at least 2 pairs in Chat first."],
+    4: ["pairs", 20, "Rate at least 20 pairs in Chat first: fewer are memorised, not learned."],
   };
   const [key, least, why] = need[round];
   return (counts[key] ?? 0) >= least ? null : why;

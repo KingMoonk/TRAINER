@@ -195,7 +195,7 @@ describe("Post-training page", () => {
     const user = userEvent.setup();
     renderPage(<PostTrainingPage />);
     await user.click(await screen.findByRole("tab", { name: /Your votes/ }));
-    expect(await screen.findByText("Rate at least 2 pairs in Chat first.")).toBeVisible();
+    expect(await screen.findByText("Rate at least 20 pairs in Chat first: fewer are memorised, not learned.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Add votes round to the queue" })).toBeDisabled();
   });
 

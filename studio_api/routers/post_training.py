@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 import studio_registry as registry
 import studio_rl
+import studio_rlhf
 from studio_api.app import get_services
 from studio_api.models_work import JobOut, VersionOut, start_job, version_out
 
@@ -330,7 +331,7 @@ def round_blocker(round_number, counts, teacher_is_version, has_teacher, checkpo
     """Why a round cannot be queued yet (plain words), or None. counts = post_training()["counts"]."""
     need = {1: ("conversations", 1, "Add conversations in Your data first."),
             2: ("problems", 1, "Make problems a rule can check first."),
-            4: ("pairs", 2, "Rate at least 2 pairs in Chat first.")}
+            4: ("pairs", studio_rlhf.MIN_PAIRS_TO_TRAIN, f"Rate at least {studio_rlhf.MIN_PAIRS_TO_TRAIN} pairs in Chat first: fewer are memorised, not learned.")}
     if not checkpoint:
         return "Train this version in Pretraining first."
     if round_number == 3:
