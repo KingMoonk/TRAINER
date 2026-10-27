@@ -73,6 +73,15 @@ class Store(unittest.TestCase):
         self.store.set_verdict(2, "better")
         self.assertEqual((self.store.get(2)["runs"], self.store.get(2)["verdict"]), (["runs/a"], "better"))
 
+    def test_new_weights_invalidate_the_old_assistant_card(self):
+        self.store.save_version(make_spec())
+        self.store.set_best_checkpoint(1, "first/best.npz")
+        self.store.set_scorecard(1, {"bpc": 2.0, "assistant_card": {"suite": "frozen"}})
+        self.store.set_best_checkpoint(1, "first/best.npz")
+        self.assertEqual(self.store.get(1)["scorecard"]["assistant_card"]["suite"], "frozen")
+        self.store.set_best_checkpoint(1, "second/best.npz")
+        self.assertEqual(self.store.get(1)["scorecard"], {"bpc": 2.0})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -369,6 +369,25 @@ class Lineage(unittest.TestCase):
         self.assertEqual((out[2], out[3]), (("chain-1", 1), ("chain-1", 2)))
         self.assertNotIn("chain", out[4][0])
 
+    def test_scored_assistant_card_is_kept_on_the_version_record(self):
+        from studio_spec import default_spec
+
+        saved = self.services.store.save_version(default_spec())
+        checkpoint = self.root / "best.npz"
+        checkpoint.write_bytes(b"weights")
+        self.services.store.set_best_checkpoint(saved["number"], checkpoint)
+        version = SimpleNamespace(number=saved["number"], parent=None, best_checkpoint=str(checkpoint), runs=[])
+        self.services.versions = lambda: [version]
+        self.services._bench_skip = lambda _version, _versions: studio_decontam.Index()
+        self.services._bench_tokens = lambda _version, _checkpoint: 10
+        suite = studio_bench.build_suite(docs=["held back text"], choice=[], pool=[], problems=[])
+        result = {"suite": suite["id"], "stages": list(studio_bench.STAGES), "bpc": 2., "bpc_band": [1.9, 2.1],
+                  "doc_scores": [[1., 1.]], "decontam": "checked", "seconds": 1.2, "few_shot": None, "problems": None}
+        with mock.patch.object(studio_bench, "benchmark", return_value=result):
+            self.services._bench_run(version, str(checkpoint), suite)
+        card = self.services.store.get(saved["number"])["scorecard"]["assistant_card"]
+        self.assertEqual((card["suite"], card["entries"]["heldout_bpc"]["value"], card["seconds"]), (suite["id"], 2., 1.2))
+
     def test_a_trained_version_is_scored_on_a_worker_once(self):
         scored = []
         started, release = threading.Event(), threading.Event()

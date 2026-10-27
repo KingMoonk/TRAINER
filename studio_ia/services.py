@@ -3269,11 +3269,23 @@ class WorkspaceServices(Services):
 
     def _bench_run(self, v, checkpoint, suite, number=None):
         import studio_bench
+        import studio_eval
         versions = self.versions()
         index = self._bench_skip(v, versions)
         skip = studio_bench.contaminated(suite, index) if index is not None else None
         result = studio_bench.benchmark(self.root, (v.number if number is None else number, checkpoint), suite,
                                         self._bench_tokens(v, checkpoint), skip=skip)
+        if number is None and set(result.get("stages") or ()) == set(studio_bench.STAGES):
+            current = self.store.get(v.number)
+            if current.get("best_checkpoint") and Path(self._abs(current["best_checkpoint"])) == Path(checkpoint):
+                prior = [row for row in versions if row.number < v.number and row.best_checkpoint
+                         and isinstance((row.scorecard or {}).get("bpc"), (int, float))]
+                best_before = min(prior, key=lambda row: row.scorecard["bpc"], default=None)
+                earlier = studio_bench.cached(self.root, best_before, suite) if best_before else None
+                card = studio_eval.assistant_card_from_results(result, earlier)
+                seconds = result.get("seconds", 0.)
+                card.update({"seconds": seconds, "target_seconds": 120, "within_target": seconds <= 120})
+                self.store.set_scorecard(v.number, {**(current.get("scorecard") or {}), "assistant_card": card})
         return result
 
     def mlperf_board(self, task_id):

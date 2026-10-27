@@ -18,6 +18,7 @@ import { fill, STATUS, T } from "./copy";
 import { bits, chartSeries, last, phaseBands, progressLine, sampleRows, switchText, type JobParams } from "./logic";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 import { ContinueCard } from "./continue-card";
+import { AssistantReportCard } from "@/components/assistant-report-card";
 
 const REFRESH_MS = 1500; // live events redraw at most this often, as the Tk page does
 
@@ -197,6 +198,8 @@ export default function Page() {
               </p>
             </CardContent>
           </Card>
+
+          <AssistantReportCard card={run?.report_card} trend={run?.report_card_trend} />
 
           {run && (
             <div className="rounded-lg border border-info/50 bg-info/10 p-4" data-testid="switch">

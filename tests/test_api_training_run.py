@@ -75,6 +75,16 @@ class TrainingRunRouterTests(ApiCase):
         self.assertEqual(self.services.curve_of, [])
         self.assertIsNone(page["ended"])
 
+    def test_report_card_and_same_suite_version_trend_are_returned(self):
+        self.add_versions()
+        one = {"suite": "a", "entries": {"choice_accuracy": {"value": .3}}}
+        two = {"suite": "a", "entries": {"choice_accuracy": {"value": .5}}}
+        self.services._versions[0].scorecard = {"assistant_card": one}
+        self.services._versions[1].scorecard = {"assistant_card": two}
+        page = self.call("GET", "/training-run")
+        self.assertEqual(page["report_card"], two)
+        self.assertEqual([point["version"] for point in page["report_card_trend"]], [1, 2])
+
     def test_a_run_that_ended_itself_says_why(self):
         import json
         import tempfile
