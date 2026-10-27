@@ -50,10 +50,28 @@ class Checks(unittest.TestCase):
         self.assertEqual(set(rules.CHECKABLE), set(rules.RULES) | {"final_number", "choice"})
 
     def test_ends_cleanly_details(self):
-        for ok in ("Done.", "Really?", "He said (quietly).", "Done.\n", "It's fine."):
+        for ok in ("Done now.", "Really now?", "He said (quietly).", "Done here.\n", "Wait... what?", "It's fine."):
             self.assertTrue(rules.check("ends_cleanly", "", ok), ok)
-        for bad in ("Done", "Done,", "(Done.", "Say \"hi."):
+        for bad in ("Done", "Done,", "(Done.", "Say \"hi.", ".", "!", "Ok.", "?!.", "1 2.", "Aaaa is here.", "go go go.", "Yes yes yes yes."):
             self.assertFalse(rules.check("ends_cleanly", "", bad), bad)
+
+    def test_trivial_answers_fail_max_length(self):
+        prompt = "Describe rain in under 60 characters."
+        for bad in (".", "x", "ab", "Rain.", "Rain falls on the old grey roofs and the streets and the sea all night long"):
+            self.assertFalse(rules.check("max_length", prompt, bad), bad)
+        self.assertTrue(rules.check("max_length", prompt, "Soft grey water."))
+
+    def test_sort_numbers_numerically(self):
+        prompt = "Sort these numbers: 10 9 100 2"
+        self.assertTrue(rules.check("sort", prompt, "2 9 10 100"))
+        self.assertTrue(rules.check("sort", prompt, "2, 9, 10, 100"))
+        self.assertFalse(rules.check("sort", prompt, "10 100 2 9"))
+        self.assertTrue(rules.check("sort", "Sort these words: pear apple", "apple pear"))
+
+    def test_word_pool_is_large_and_unique(self):
+        self.assertGreaterEqual(len(rules.WORDS), 500)
+        self.assertEqual(len(set(rules.WORDS)), len(rules.WORDS))
+        self.assertTrue(all(w.isalpha() and w.islower() for w in rules.WORDS))
 
 
 class Generators(unittest.TestCase):
