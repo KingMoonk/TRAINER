@@ -40,6 +40,13 @@ class Checks(unittest.TestCase):
         for bad in ("120", "1200 then 3", "twelve hundred", ""):
             self.assertFalse(rules.check("final_number", "q", bad, number), bad)
         self.assertTrue(rules.check("final_number", "q", "about 0.5", {"answer": "0.5"}))
+        # a worked answer: the 'Answer:' line wins over other numbers, whatever order they come in
+        for ok, key in (("2 + 3 = 5, so 5 * 2 = 10.\nAnswer: -3", "-3"), ("Answer: \u22123", "-3"), ("Answer: 1/2", "0.5"),
+                        ("Answer: 50%", "50"), ("Answer: 1,200 apples", "1200"), ("Answer: 4\nI checked 7 times.", "4"),
+                        ("It is \u22123", "-3"), ("Answer: 4. Answer: 6", "6")):
+            self.assertTrue(rules.check("final_number", "q", ok, {"answer": key}), ok)
+        for bad in ("Answer: 3", "Answer: 1/0", "Answer:"):
+            self.assertFalse(rules.check("final_number", "q", bad, {"answer": "-3"}), bad)
         for ok in ("B) water", "B", " (B) water", "B. water"):
             self.assertTrue(rules.check("choice", "q", ok, {"answer": "B"}), ok)
         for bad in ("A) rock", "water", "Because B", ""):

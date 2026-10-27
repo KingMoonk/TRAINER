@@ -113,8 +113,9 @@ class RefreshDownloads(unittest.TestCase):
 
 class TokenBudgets(unittest.TestCase):
     def test_9_budget_comes_from_the_rule(self):
-        for rule in ("copy", "reverse", "sort", "count", "small_addition", "final_number", "choice"):
+        for rule in ("copy", "reverse", "sort", "count", "small_addition", "choice"):
             self.assertEqual(studio_rules.max_tokens(rule), 32, rule)
+        self.assertEqual(studio_rules.max_tokens("final_number"), 160)
         for rule in ("ends_cleanly", "max_length", "something_new", None):
             self.assertEqual(studio_rules.max_tokens(rule), studio_rules.DEFAULT_MAX_TOKENS, rule)
         self.assertEqual(studio_rules.DEFAULT_MAX_TOKENS, 96)
