@@ -325,15 +325,15 @@ class Adoption(unittest.TestCase):
 
 
 class Pairs(unittest.TestCase):
-    def test_rule_pairs_pick_the_shortest_pass_against_a_fail(self):
+    def test_rule_pairs_pick_the_median_length_pass_against_a_fail(self):
         import random
 
         class Model:
             def generate_group(self, messages, n, **kwargs):
-                return ["harbor", "harbor and more", "wrong", "x", "harbor  "][:n]
+                return ["harbor", "harbor ", "harbor     ", "wrong", "x"][:n]
         pairs, info = studio_loop.rule_pair(Model(), PROBLEMS[0], studio_loop.clean_config({"candidates": 5}), random.Random(1), threading.Event())
-        self.assertEqual(pairs[0]["chosen"], "harbor")
-        self.assertIn(pairs[0]["rejected"], ("harbor and more", "wrong", "x"))
+        self.assertEqual(pairs[0]["chosen"], "harbor ")
+        self.assertIn(pairs[0]["rejected"], ("wrong", "x"))
         self.assertEqual(pairs[0]["kind"], "verified")
 
     def test_no_pair_when_every_answer_passes_or_fails(self):

@@ -28,6 +28,7 @@ import json
 import math
 import random
 import shutil
+import statistics
 import threading
 import time
 from pathlib import Path
@@ -173,7 +174,7 @@ def list_loops(run_dir):
 # --------------------------------------------------------------------------- collect (the placeable phase)
 
 def rule_pair(model, problem, cfg, rng, stop):
-    """A pair from a problem with a rule: the shortest passing answer against a failing one. (pairs, info); no pair when all of the
+    """A pair from a problem with a rule: the passing answer of median length against a failing one. (pairs, info); no pair when all of the
     answers pass or all fail. The rule is the label, so nothing here can be argued with."""
     from studio_rl import _messages, _prompt_text
     from studio_rlhf import temperature_spread
@@ -189,7 +190,8 @@ def rule_pair(model, problem, cfg, rng, stop):
     if not passed or not failed:
         info["skip"] = "every answer passed" if passed else "no answer passed"
         return [], info
-    chosen = min(passed, key=len)
+    by_length = sorted(passed, key=len)  # the median, not the shortest: the shortest passer drifts toward degenerate answers
+    chosen = min(by_length, key=lambda a: abs(len(a) - statistics.median(len(p) for p in by_length)))
     return [{"messages": messages, "chosen": chosen, "rejected": rng.choice(failed), "kind": "verified", "reference": None,
              "source_id": None, "reason": f"rule: {rule}", "scores": [1., 0.], "n_candidates": len(unique)}], info
 
