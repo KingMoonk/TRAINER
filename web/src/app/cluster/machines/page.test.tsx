@@ -259,4 +259,13 @@ describe("Cluster page", () => {
     const studio = within(await screen.findByRole("navigation", { name: "Studio" }));
     expect(studio.getByRole("link", { name: "Machines" })).toHaveAttribute("href", "/cluster/machines");
   });
+
+  test("training speed sits in a collapsed section", async () => {
+    server({ addresses: [] });
+    renderPage(<MachinesPage />, { route: "/cluster/machines" });
+    const section = await screen.findByTestId("training-speed");
+    expect(section.tagName).toBe("DETAILS");
+    expect(section).not.toHaveAttribute("open");
+    expect(within(section).getByText("Training speed (MLPerf)")).toBeInTheDocument();
+  });
 });
