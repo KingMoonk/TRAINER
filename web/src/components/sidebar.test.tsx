@@ -58,7 +58,7 @@ describe("Sidebar", () => {
     const studio = screen.getByRole("navigation", { name: "Studio" });
     const links = within(studio).getAllByRole("link");
     expect(links).toHaveLength(5);
-    expect(links.map((a) => a.getAttribute("href"))).toEqual(["/builder", "/your-data", "/pretraining", "/chat", "/cluster/machines"]);
+    expect(links.map((a) => a.getAttribute("href"))).toEqual(["/builder", "/your-data", "/auto-run", "/chat", "/cluster/machines"]);
     expect(screen.queryByRole("group", { name: "Pages in this area" })).toBeNull();
   });
 });

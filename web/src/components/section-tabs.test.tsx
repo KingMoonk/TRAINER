@@ -9,7 +9,7 @@ describe("SectionTabs", () => {
     renderPage(<SectionTabs />, { route: "/runs" });
     const nav = screen.getByRole("navigation", { name: "Train pages" });
     const links = within(nav).getAllByRole("link");
-    expect(links.map((a) => a.textContent)).toEqual(["Pretraining", "Post-training", "All runs"]);
+    expect(links.map((a) => a.textContent)).toEqual(["Auto Run", "Pretraining", "Post-training", "All runs"]);
     expect(within(nav).getByRole("link", { name: "All runs" })).toHaveAttribute("aria-current", "page");
     for (const hidden of ["New run", "Queue", "Training run", "Run"]) expect(within(nav).queryByRole("link", { name: hidden })).toBeNull();
   });
@@ -25,7 +25,7 @@ describe("SectionTabs", () => {
     renderPage(<SectionTabs />, { route });
     const nav = screen.getByRole("navigation", { name: "Train pages" });
     expect(within(nav).getByRole("link", { name: "All runs" })).toHaveAttribute("aria-current", "page");
-    expect(within(nav).getAllByRole("link")).toHaveLength(3);
+    expect(within(nav).getAllByRole("link")).toHaveLength(4);
   });
 
   test("lists the Machines tabs on /cluster/machines and /cluster/training", () => {

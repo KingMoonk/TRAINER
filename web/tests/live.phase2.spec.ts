@@ -23,8 +23,9 @@ test("import text, queue pretraining, watch progress and see the trained version
   await page.getByRole("button", { name: "Browse examples", exact: true }).click();
   await expect(page.getByRole("main").getByText(text, { exact: true })).toBeVisible();
 
-  // Pretraining is the home of the Train area: open it from the sidebar.
+  // Auto Run is the home of the Train area: open it from the sidebar, then the Pretraining tab.
   await page.getByRole("navigation", { name: "Studio" }).getByRole("link", { name: "Train", exact: true }).click();
+  await page.getByRole("navigation", { name: "Train pages" }).getByRole("link", { name: "Pretraining", exact: true }).click();
   await expect(page).toHaveURL(/\/pretraining\/?$/);
   const sets = page.getByRole("list", { name: "Text sets" });
   const imported = sets.getByRole("checkbox", { name: new RegExp(source) });
