@@ -38,7 +38,7 @@ describe("SectionTabs", () => {
   test("lists the Chat tabs on /chat", () => {
     renderPage(<SectionTabs />, { route: "/chat" });
     const nav = screen.getByRole("navigation", { name: "Chat pages" });
-    expect(within(nav).getAllByRole("link").map((a) => a.textContent)).toEqual(["Chat", "Benchmark"]);
+    expect(within(nav).getAllByRole("link").map((a) => a.textContent)).toEqual(["Chat", "Benchmark", "Export"]);
     expect(within(nav).getByRole("link", { name: "Chat" })).toHaveAttribute("aria-current", "page");
   });
 
