@@ -17,7 +17,8 @@ import studio_rules
 from studio_jobs import post_round
 from studio_model import AdamW, ScratchTransformer, Tokenizer, load_checkpoint, train, validate_config
 from studio_queue import Job, Plan, Runner
-from studio_rlhf import _encode_pair
+from studio_model import EOS
+from studio_rlhf import _encode_pair, is_cut
 from tests.fixtures.ia_workspace import _generate_problems
 from tests.torchcheck import counting_backward, watched_models
 
@@ -124,6 +125,34 @@ class RLChecks(unittest.TestCase):
         self.assertEqual((metrics[-1]["groups_total"], metrics[-1]["taught_total"]), (record["groups"], record["taught"]))
         self.assertEqual(record["taught"], sum(1 for e in events if e["type"] == "group" and not e["skipped"]))
         self.assertLessEqual(record["taught"], record["groups"])
+
+    def test_a_cut_off_answer_gets_no_end_token_and_a_penalty(self):
+        _, tokenizer = self.model()
+        budget = 8
+        cut, done = "yes yes yes yes yes yes yes yes yes", "yes"
+        self.assertTrue(is_cut(tokenizer, cut, budget))
+        self.assertFalse(is_cut(tokenizer, done, budget))
+        self.assertEqual(_encode_pair(tokenizer, USER, cut, 64, eos=False)[1][-1], tokenizer.encode(cut)[-1])
+        self.assertEqual(_encode_pair(tokenizer, USER, cut, 64)[1][-1], EOS)
+        self.assertEqual(_encode_pair(tokenizer, USER, done, 64), _encode_pair(tokenizer, USER, done, 64, eos=True))
+        events, encoded = [], []
+        real = studio_rl._encode_pair
+
+        def spy(tok, messages, answer, context, eos=True):
+            encoded.append((answer, eos))
+            return real(tok, messages, answer, context, eos=eos)
+
+        def generate_group(self_, messages, n, **kwargs):
+            word = messages[-1]["content"].split(": ", 1)[1]
+            return [word, "a " * 40, word, "b " * 40][:n]
+        problems = [{"prompt": f"Copy: {w}", "rule": "copy"} for w in WORDS[:2]]
+        with mock.patch.object(studio_rl, "_encode_pair", spy), mock.patch.object(studio_rl.LocalModel, "generate_group", generate_group):
+            studio_rl.practice_with_checks(self.ckpt, problems, self.dir / "r2cut", group=4, steps=1, prompts_per_step=2, max_tokens=8,
+                                           emit=events.append)
+        self.assertTrue(encoded)
+        self.assertTrue(all(eos is (not a.startswith(("a", "b"))) for a, eos in encoded))
+        group = next(e for e in events if e["type"] == "group")
+        self.assertEqual([a["score"] for a in group["answers"]], [1., studio_rl.CUT_REWARD, 1., studio_rl.CUT_REWARD])
 
     def test_pass_at_k_counts_solved_problems(self):
         problems = [{"prompt": f"Copy: {w}", "rule": "copy"} for w in WORDS[:3]]
