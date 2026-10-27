@@ -34,6 +34,9 @@ RUBRIC_WEIGHT = .3   # the teacher's rubric adds at most this much; a failed rul
 MEASURE_PROBLEMS = 200  # held-back problems answered per before/after measurement
 PROBE_PROBLEMS = 8      # problems answered before round 2 to see whether it can learn anything
 PROBE_ANSWERS = 4       # answers sampled per probe problem (the k of pass@k)
+ROUND2_DEFAULTS = {"steps": 200, "prompts_per_step": 8, "group": 8, "temperature": 1.0}   # what Round 2 uses unless the job says otherwise
+ROUND2_KEYS = ("steps", "learning_rate", "prompts_per_step", "group", "temperature", "max_tokens", "divide_by_std")   # job.params that reach practice_with_checks
+RESAMPLE_CAP = 3       # Round 2 draws at most this many times prompts_per_step prompts to find prompts_per_step groups with spread
 MEASURE_CONVERSATIONS = 200  # held-back conversations scored and answered per measurement (a fixed sample, so before/after compare)
 CUT_REWARD = -.5       # an answer that hit its token budget without stopping (DAPO-style overlong shaping)
 EOS_TOKENS = 96         # a greedy reply that has not stopped by this many tokens counts as not stopping
@@ -70,9 +73,9 @@ def _begin(output_dir, local, checkpoint, stage):
     return directory, cfg, {"stage": stage, "base_checkpoint": str(checkpoint), "data_hash": ""}
 
 
-def _finish(directory, local, optimizer, cfg, step, base_step, best, history, extra, record, stop):
+def _finish(directory, local, optimizer, cfg, step, base_step, best, history, extra, record, stop, keep_best=True):
     _save(directory / "last.npz", local.model, optimizer, cfg, local.tokenizer, base_step + step, best, history, extra)
-    if not (directory / "best.npz").exists():
+    if keep_best and not (directory / "best.npz").exists():
         _save(directory / "best.npz", local.model, optimizer, cfg, local.tokenizer, base_step + step, best, history, extra)
     record.update(status="stopped" if stop.is_set() else "completed", step=step, finishedAt=now(), checkpoint=str(directory / "last.npz"),
                   directory=str(directory))
@@ -82,8 +85,9 @@ def _finish(directory, local, optimizer, cfg, step, base_step, best, history, ex
 
 # --------------------------------------------------------------------------- round 2
 
-def advantages(rewards, divide_by_std=True):
-    """reward - group mean (divided by the group std when that is > 0). All-equal groups give all zeros."""
+def advantages(rewards, divide_by_std=False):
+    """reward - group mean. All-equal groups give all zeros. Dividing by the group std (divide_by_std) is off by default: it
+    blows up near-flat groups, where one odd answer would weigh as much as a clear difference."""
     r = np.asarray(rewards, dtype=np.float64)
     a = r - r.mean()
     std = r.std()
@@ -124,12 +128,14 @@ def reinforce_loss(policy, rows, adv, backward=False):
 
 def pass_at_k(checkpoint, problems, count=PROBE_PROBLEMS, k=PROBE_ANSWERS, temperature=.8, seed=7):
     """Sample k answers for `count` checkable problems: {"problems", "k", "solved" (problems with any passing answer),
-    "passed" (passing answers), "answers"}. With solved == 0 every group in round 2 would be all-fail and teach nothing."""
+    "passed" (passing answers), "answers", "useful" (the problems with 0 < passing answers < k, which Round 2 draws first: the
+    others give all-pass or all-fail groups)}. With solved == 0 every group in round 2 would be all-fail and teach nothing."""
     problems = [p for p in problems if p.get("rule") in studio_rules.CHECKABLE]
     problems = random.Random(seed).sample(problems, min(count, len(problems)))
     local = LocalModel(checkpoint, device="cpu")
     local.rng = np.random.default_rng(seed)
     solved = passed = 0
+    useful = []
     for problem in problems:
         messages = _messages(problem)
         prompt = _prompt_text(messages)
@@ -138,14 +144,21 @@ def pass_at_k(checkpoint, problems, count=PROBE_PROBLEMS, k=PROBE_ANSWERS, tempe
                  for answer in local.generate_group(messages, k, max_tokens=budget, temperature=temperature))
         passed += ok
         solved += ok > 0
-    return {"problems": len(problems), "k": k, "solved": solved, "passed": passed, "answers": len(problems) * k}
+        if 0 < ok < k:
+            useful.append(problem)
+    return {"problems": len(problems), "k": k, "solved": solved, "passed": passed, "answers": len(problems) * k, "useful": useful}
 
 
-def practice_with_checks(checkpoint, problems, output_dir, group=6, steps=20, learning_rate=1e-4, prompts_per_step=4,
-                         divide_by_std=True, rubric=None, max_tokens=None, temperature=.8, seed=7, device="auto",
-                         emit=None, stop=None, pause=None):
+def practice_with_checks(checkpoint, problems, output_dir, group=ROUND2_DEFAULTS["group"], steps=ROUND2_DEFAULTS["steps"],
+                         learning_rate=1e-4, prompts_per_step=ROUND2_DEFAULTS["prompts_per_step"], divide_by_std=False, rubric=None,
+                         max_tokens=None, temperature=ROUND2_DEFAULTS["temperature"], seed=7, device="auto", emit=None, stop=None,
+                         pause=None, useful=None):
     """Round 2. problems: [{"prompt", "rule", ...}]. rubric: optional callable (prompt, answer) -> 0..1, a smaller
-    second reward that only counts for answers that pass the rule. Saves last.npz and best.npz (best mean reward)."""
+    second reward that only counts for answers that pass the rule. Saves last.npz.
+
+    Dynamic sampling: a prompt whose group is all pass or all fail gives no gradient, so it is replaced by drawing another
+    prompt, until prompts_per_step groups have spread or RESAMPLE_CAP x prompts_per_step prompts were drawn (the step then
+    trains on what it found). `useful` (from pass_at_k) are the problems worth drawing first; the rest follow."""
     emit, stop, pause = emit or (lambda event: None), stop or threading.Event(), pause or threading.Event()
     problems = [p for p in problems if p.get("rule") in studio_rules.CHECKABLE]
     if not problems:
@@ -160,13 +173,18 @@ def practice_with_checks(checkpoint, problems, output_dir, group=6, steps=20, le
     atomic_json(directory / "run.json", record)
     history, best, means = [], -math.inf, []
     groups_total = taught_total = 0
-    emit({"type": "info", "text": f"round 2 · {len(problems)} problems · groups of {group}"})
+    emit({"type": "info", "text": f"round 2 · {len(problems)} problems · groups of {group} · {prompts_per_step} prompts a step"})
     step = 0
     while step < steps and not stop.is_set():
         while pause.is_set() and not stop.is_set():
             threading.Event().wait(.05)
         rows, adv_all, shown, step_rewards = [], [], [], []
-        for problem in rng.sample(problems, min(prompts_per_step, len(problems))):
+        favoured = [p for p in problems if p in (useful or [])]
+        order = rng.sample(favoured, len(favoured)) + rng.sample([p for p in problems if p not in favoured], len(problems) - len(favoured))
+        drawn = kept = 0
+        while kept < prompts_per_step and drawn < min(len(order), prompts_per_step * RESAMPLE_CAP) and not stop.is_set():
+            problem = order[drawn]
+            drawn += 1
             messages = _messages(problem)
             prompt = _prompt_text(messages)
             budget = max_tokens or studio_rules.max_tokens(problem["rule"])  # sized by the rule unless the caller fixes it
@@ -175,15 +193,18 @@ def practice_with_checks(checkpoint, problems, output_dir, group=6, steps=20, le
             cut = [is_cut(tokenizer, a, budget) for a in answers]   # ran out of tokens: penalised, and trained without an end token
             rewards = [CUT_REWARD if c else float(ok) + (RUBRIC_WEIGHT * float(rubric(prompt, a)) if rubric and ok else 0.)
                        for a, ok, c in zip(answers, passed, cut)]
-            flat = not has_spread(rewards)   # all pass or all fail: nothing to learn
+            flat = not has_spread(rewards)   # all pass or all fail: nothing to learn, so another prompt is drawn in its place
             step_rewards.append(rewards)
             adv = np.zeros(group) if flat else advantages(rewards, divide_by_std)
             if not flat:
+                kept += 1
                 rows += [_encode_pair(tokenizer, messages, a, cfg["context"], eos=not c) for a, c in zip(answers, cut)]
                 adv_all += list(adv)
             shown.append({"prompt": prompt, "rule": problem["rule"], "mean": float(np.mean(rewards)), "skipped": flat,
                           "answers": [{"text": a, "pass": ok, "score": r, "push": float(d)} for a, ok, r, d in zip(answers, passed, rewards, adv)]})
             means.append(float(np.mean(rewards)))
+        if not shown:
+            break
         loss = None
         if rows:
             policy.zero_grad()
@@ -200,13 +221,11 @@ def practice_with_checks(checkpoint, problems, output_dir, group=6, steps=20, le
         for visual in shown:
             emit({"type": "group", **visual})
         emit({"type": "metric", **row, "total": steps})
-        if mean > best:
-            best = mean
-            _save(directory / "best.npz", policy, optimizer, cfg, tokenizer, base_step + step, -best, history, extra)
+        best = max(best, mean)
     half = max(1, len(history) // 2)
     record.update(groups=groups_total, taught=taught_total, first_mean=float(np.mean([h["mean_reward"] for h in history[:half]])) if history else None,
                   last_mean=float(np.mean([h["mean_reward"] for h in history[half:] or history])) if history else None)
-    return _finish(directory, local, optimizer, cfg, step, base_step, -best if math.isfinite(best) else None, history, extra, record, stop)
+    return _finish(directory, local, optimizer, cfg, step, base_step, -best if math.isfinite(best) else None, history, extra, record, stop, keep_best=False)
 
 
 # --------------------------------------------------------------------------- round 3
@@ -369,11 +388,12 @@ def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learn
             return reverse_kl(student, fixed_logps, [r[0] for r in fixed])[1]
 
     budget = max_tokens or studio_rules.max_tokens()
-    fixed = [encode(m, local.generate(m[0], max_tokens=budget, temperature=temperature), budget) for m in prompts[:probe]]
+    probed = prompts if len(prompts) <= probe else random.Random(seed).sample(prompts, probe)   # a random few, not always the first ones in the list
+    fixed = [encode(m, local.generate(m[0], max_tokens=budget, temperature=temperature), budget) for m in probed]
     fixed_logps = teacher.score([r[1] for r in fixed])   # the same answers are measured before and after, so the teacher scores them once
     before = probe_gaps()
     words = [tokenizer.decode([t]) for t in fixed[0][0][1] if t != -100]
-    emit({"type": "heat", "prompt": _prompt_text(prompts[0][0]), "words": words, "surprise": [float(-t) for t in before[0][1]]})
+    emit({"type": "heat", "prompt": _prompt_text(probed[0][0]), "words": words, "surprise": [float(-t) for t in before[0][1]]})
     record = {"name": "learn from a teacher", "createdAt": now(), "status": "training", "stage": "teacher", "steps": steps,
               "base_checkpoint": str(checkpoint), "privileged": bool(teacher.correction)}
     atomic_json(directory / "run.json", record)
@@ -392,9 +412,7 @@ def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learn
         row = {"step": step, "loss": kl, "reverse_kl": kl}
         history.append(row)
         emit({"type": "metric", **row, "total": steps})
-        if kl < best:
-            best = kl
-            _save(directory / "best.npz", student, optimizer, cfg, tokenizer, base_step + step, best, history, extra)
+        best = min(best, kl)
     if teacher.resident:
         teacher.release()
     after = probe_gaps()
@@ -404,7 +422,7 @@ def learn_from_teacher(checkpoint, prompts, teacher, output_dir, steps=20, learn
                   kl_before=float(np.mean([float(np.sum(s - t)) / max(1, len(s)) for s, t in before])),
                   kl_after=float(np.mean([float(np.sum(s - t)) / max(1, len(s)) for s, t in after])))
     emit({"type": "moved", "k": record["moved"], "n": record["words"]})
-    return _finish(directory, local, optimizer, cfg, step, base_step, best if math.isfinite(best) else None, history, extra, record, stop)
+    return _finish(directory, local, optimizer, cfg, step, base_step, best if math.isfinite(best) else None, history, extra, record, stop, keep_best=False)
 
 
 # --------------------------------------------------------------------------- queue handlers (post_round, restore_answers)
@@ -561,6 +579,37 @@ def resolve(number, job, services):
         p["teacher"] = str(teacher) if teacher else None
 
 
+ROUND_NAMES = ("Practice answers", "Practice with checks", "Learn from a teacher", "Your votes")
+TUNING = {1: ("steps", "learning_rate"), 2: ROUND2_KEYS, 3: ("steps", "learning_rate"), 4: ("steps", "learning_rate")}   # settings each round reads
+
+
+def round_job(number, version, settings=None):
+    """The queue job (kind post_round) for round `number` on `version`, built from `settings` alone, so the API route and the Auto Run
+    make the same job. Nothing is looked up here: the caller has already checked the round can run and resolved its choices.
+
+    settings: "lora" (round 1; a rank, or None for every weight; absent = the version's own), "teacher" (round 3: the teacher's
+    checkpoint path) with "teacher_choice" ("previous best" | "correction"), "beta" (round 4), and the round's tuning (TUNING;
+    a missing or None one stays at the round's default)."""
+    from studio_queue import Job
+    settings = settings or {}
+    if not 1 <= number <= len(ROUND_NAMES):
+        raise ValueError(f"Unknown round: {number}")
+    name = ROUND_NAMES[number - 1]
+    params = {"round": number, "version": version.number, "checkpoint": version.best_checkpoint}
+    if number == 1 and "lora" in settings:
+        rank = settings["lora"]
+        params["config"] = {"lora": {"rank": rank} if rank else None}
+        if rank:
+            name += f" · LoRA rank {rank}"
+    if number == 3:
+        params["teacher"] = settings.get("teacher")
+        params["teacher_choice"] = settings.get("teacher_choice", "previous best")
+    if number == 4 and "beta" in settings:
+        params["beta"] = settings["beta"]
+    params.update({k: settings[k] for k in TUNING[number] if settings.get(k) is not None})
+    return Job("post_round", f"Round {number} · {name}", f"post-training round {number}", params=params)
+
+
 def run_round(number, job, context, emit, stop, pause):
     """Run round 1-4 from job.params (resolve() has filled in the checkpoint and teacher), measure before/after, apply the gate
     and emit {"type": "gate", ...}. The result is left in job.params["result"]; the app records it when the job ends."""
@@ -575,7 +624,8 @@ def run_round(number, job, context, emit, stop, pause):
     job.params["output_dir"] = str(out)
     if number == 2:   # a model that solves nothing writes all-fail groups, which give no gradient: say so instead of running
         problems = _rows(job, context, "problems", "problems")
-        probe = pass_at_k(checkpoint, problems, seed=p.get("seed", 7))
+        probe = pass_at_k(checkpoint, problems, temperature=p.get("temperature", ROUND2_DEFAULTS["temperature"]), seed=p.get("seed", 7))
+        useful = probe.pop("useful", [])   # drawn first by the round; not part of the result
         if probe["problems"] and not probe["solved"]:
             result = skipped_round(probe, checkpoint)
             emit({"type": "gate", **result})
@@ -590,7 +640,7 @@ def run_round(number, job, context, emit, stop, pause):
         before = measure(checkpoint, docs, held, stop, held_conversations, scores)
     except studio_eval.Stopped:   # stopped while measuring: no result to gate or record
         return {"round": number, "ok": False, "checkpoint": checkpoint, "stopped": True}
-    kw = {k: p[k] for k in ("steps", "learning_rate") if p.get(k) is not None}
+    kw = {k: p[k] for k in (ROUND2_KEYS if number == 2 else ("steps", "learning_rate")) if p.get(k) is not None}
     verdict = VERDICTS.get(number, "")
     if number == 1:   # the version's own settings carry on, LoRA included: a LoRA version stays LoRA unless the job says {"config": {"lora": None}}
         data = load_checkpoint(checkpoint)
@@ -599,7 +649,7 @@ def run_round(number, job, context, emit, stop, pause):
         record = train(cfg, conversations, out, emit=emit, stop=stop, pause=pause, init_from=checkpoint,
                        token_budget=p.get("token_budget"), wall_seconds=p.get("wall_seconds"))
     elif number == 2:
-        record = practice_with_checks(checkpoint, problems, out, group=p.get("group", 6), emit=emit, stop=stop, pause=pause, **kw)
+        record = practice_with_checks(checkpoint, problems, out, useful=useful, emit=emit, stop=stop, pause=pause, **kw)
         if (record.get("last_mean") or 0) < (record.get("first_mean") or 0):
             verdict = "Answers that passed the check did not become more likely than ones that failed."
         if record.get("groups") and not record.get("taught"):

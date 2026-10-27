@@ -8,9 +8,11 @@ import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { T, fill, type RoundSpec } from "./copy";
-import { count, spreadText, type Options, type Status } from "./logic";
+import { Input } from "@/components/ui/input";
+import { ROUND2_SETTINGS, count, settingValue, spreadText, type Options, type Round2Key, type Status } from "./logic";
 
 export type Choices = {
+  round2: Record<Round2Key, string>; // text as typed; empty = the server's default
   lora: boolean | null; // null = follow the version's own setting
   rank: number;
   teacher: "version" | "correction";
@@ -137,13 +139,45 @@ export type RoundProps = {
   loading: boolean;
 };
 
-function Round2({ live, gate }: RoundProps) {
+function Round2Settings({ choices, set }: Pick<RoundProps, "choices" | "set">) {
+  return (
+    <details className="text-sm">
+      <summary className="cursor-pointer select-none text-muted-foreground">Settings</summary>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {ROUND2_SETTINGS.map((spec) => {
+          const text = choices.round2[spec.key];
+          const invalid = text.trim() !== "" && settingValue(text, spec) === null;
+          return (
+            <label key={spec.key} className="flex flex-col gap-1">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{spec.label}</span>
+              <Input
+                type="number"
+                inputMode={spec.integer ? "numeric" : "decimal"}
+                step={spec.integer ? 1 : 0.1}
+                min={spec.min}
+                max={spec.max}
+                value={text}
+                placeholder={spec.fallback == null ? "by the rule" : String(spec.fallback)}
+                aria-invalid={invalid}
+                onChange={(e) => set({ round2: { ...choices.round2, [spec.key]: e.target.value } })}
+              />
+              <span className="text-xs text-muted-foreground">{invalid ? `Between ${spec.min} and ${spec.max}; empty uses the default.` : spec.hint}</span>
+            </label>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
+function Round2({ live, gate, choices, set }: RoundProps) {
   const group = live.group;
   const taught = live.spread?.taught_total ?? gate?.taught ?? 0;
   const groups = live.spread?.groups_total ?? gate?.groups ?? 0;
   const line = spreadText(taught, groups);
   return (
     <div className="flex flex-col gap-3">
+      <Round2Settings choices={choices} set={set} />
       {group ? (
         <>
           <p className="text-xs text-muted-foreground">

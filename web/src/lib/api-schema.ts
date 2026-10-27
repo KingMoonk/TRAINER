@@ -7788,6 +7788,8 @@ export interface components {
         };
         /** RoundRequest */
         RoundRequest: {
+            /** Group */
+            group?: number | null;
             /**
              * Leash
              * @default Medium
@@ -7801,8 +7803,14 @@ export interface components {
              * @default 8
              */
             lora_rank: number;
+            /** Max Tokens */
+            max_tokens?: number | null;
+            /** Prompts Per Step */
+            prompts_per_step?: number | null;
             /** Round */
             round: number;
+            /** Steps */
+            steps?: number | null;
             /**
              * Teacher
              * @default version
@@ -7811,6 +7819,8 @@ export interface components {
             teacher: "version" | "correction";
             /** Teacher Version */
             teacher_version?: number | null;
+            /** Temperature */
+            temperature?: number | null;
             /** Version */
             version?: number | null;
         };
