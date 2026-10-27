@@ -485,24 +485,27 @@ def conversation_checks(local, conversations, stop=None):
 
 
 def measure(checkpoint, docs, problems, stop=None, heldout_conversations=None, scores=None):
-    """{bpc, conv_loss, eos_rate, pass_k, pass_n}: bits per character on held-back text; the loss on the assistant tokens of
+    """{bpc, conv_loss, eos_rate, pass_k, pass_n, letters}: bits per character on held-back text; the loss on the assistant tokens of
     held-back conversations and the share of their prompts answered with a reply that ends; greedy answers to held-back problems
-    checked by each problem's rule. `scores` are `doc_scores` already in hand (not scored again); `stop` ends the work early with
+    checked by each problem's rule (letters: how often each option letter began a choice problem's answer). `scores` are `doc_scores` already in hand (not scored again); `stop` ends the work early with
     studio_eval.Stopped. Without `heldout_conversations` conv_loss and eos_rate are None."""
     import studio_eval
     local = LocalModel(checkpoint, device="cpu")
     if len(problems) > MEASURE_PROBLEMS:  # imported sets hold back thousands; a fixed sample keeps before/after comparable
         problems = random.Random(0).sample(list(problems), MEASURE_PROBLEMS)
-    k = 0
+    k, letters = 0, {}
     for q in problems:
         if stop is not None and stop.is_set():
             raise studio_eval.Stopped("scoring was stopped")
         answer = local.generate([{"role": "user", "content": q["prompt"]}], max_tokens=studio_rules.max_tokens(q["rule"]), temperature=0, stop=stop)
         k += studio_rules.check(q["rule"], q["prompt"], answer, q.get("params"))
+        if q["rule"] == "choice" and (m := studio_rules.LETTER.match(answer.strip())):   # which letter the model reaches for: all one letter means a shortcut, not skill
+            letters[m[1]] = letters.get(m[1], 0) + 1
     if docs and scores is None:
         scores = studio_eval.score_docs(local, [_doc(d) for d in docs], stop=stop)
     conv_loss, eos_rate = conversation_checks(local, heldout_conversations, stop)
-    return {"bpc": studio_eval.corpus_bpc(scores) if docs else None, "conv_loss": conv_loss, "eos_rate": eos_rate, "pass_k": k, "pass_n": len(problems)}
+    return {"bpc": studio_eval.corpus_bpc(scores) if docs else None, "conv_loss": conv_loss, "eos_rate": eos_rate, "pass_k": k, "pass_n": len(problems),
+            "letters": dict(sorted(letters.items()))}
 
 
 def verdict_for(trained, ok, checks):

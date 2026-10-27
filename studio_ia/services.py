@@ -3064,16 +3064,9 @@ class WorkspaceServices(Services):
             return index
         return self._fresh("train_index", make)
 
-    def post_rows(self, kind):
+    def _kind_rows(self, want, held):
+        """The workspace's non-draft examples of `want` ("problems" | "conversations") on one side of the held-back split."""
         import studio_data_kinds as dk
-        if kind == "heldout_docs":
-            return self._heldout()
-        if kind == "pairs":
-            return self._human_pairs()
-        if kind == "corrections":
-            return self._json("corrections.json", [])
-        want = "problems" if kind.endswith("problems") else "conversations"
-        held = kind in ("heldout_problems", "heldout_conversations")
         datasets = list(self.workspace.state["datasets"])
         # disk datasets: one indexed query on the kind and holdout columns; in-memory ones (under 10,000 rows each) carry the same two stamps
         on_disk = self.workspace.pick(want, held, [d["id"] for d in datasets if d.get("storage") == "sqlite"])
@@ -3085,13 +3078,44 @@ class WorkspaceServices(Services):
                 rows = [e for e in self.workspace.iter_examples(d["id"]) if dk.stamp(e)["kind"] == want and bool(e["holdout"]) == held]
             out.extend({"prompt": e.get("user", ""), "rule": dk.rule_of(e), "params": e.get("params") or (e.get("metadata") or {}).get("params", {})}
                        if want == "problems" else e for e in rows if not dk.is_draft(e))   # synthetic drafts are not the user's data
+        return out
+
+    def post_rows(self, kind, seed=0, binary=False):
+        """Rows for a post_round job (see Services.post_rows). Lettered choice problems come with their options shuffled and re-lettered
+        by (seed, prompt), the key following: the stored order never decides the answer letter. `binary` keeps 2-option sets in the
+        "problems" rows reinforcement learning trains on; by default they are left out (a majority class passes half of them)."""
+        import studio_catalog
+        import studio_eval
+        if kind == "heldout_docs":
+            return self._heldout()
+        if kind == "pairs":
+            return self._human_pairs()
+        if kind == "corrections":
+            return self._json("corrections.json", [])
+        want = "problems" if kind.endswith("problems") else "conversations"
+        held = kind in ("heldout_problems", "heldout_conversations")
+        out = self._kind_rows(want, held)
         if want == "conversations" and (mixed := self._chat_mix_ids()):   # pretraining read these as chat: Round 1 must not train on them
             out = [e for e in out if e.get("id") not in mixed]
-        if held:  # a held-back problem whose text also appears in training would be answered from memory: leave it out and say how many
+        if held:  # a held-back prompt that is also a training prompt would be answered from memory: leave it out (exact text; the index below catches near copies)
+            train = {(e["prompt"] if want == "problems" else e.get("user", "")) for e in self._kind_rows(want, False)}
+            out = [e for e in out if (e["prompt"] if want == "problems" else e.get("user", "")) not in train]
             import studio_decontam
             out, report = studio_decontam.exclude_overlap(out, self._train_index(), (lambda row: row["prompt"]) if want == "problems" else _doc)
             if want == "problems":   # the page shows this note for problems and text only
                 self._note_overlap("problems", report)
+        if want == "problems":
+            shuffled = []
+            for row in out:
+                if row["rule"] != "choice":
+                    shuffled.append(row)
+                    continue
+                key = str((row.get("params") or {}).get("answer") or "")
+                prompt, key = studio_catalog.reletter_choice(row["prompt"], key, 0 if held else seed)   # held-back questions keep one order: before and after compare
+                if kind == "problems" and not binary and len((studio_eval.choice_item(row) or {}).get("choices", ())) == 2:
+                    continue
+                shuffled.append({**row, "prompt": prompt, "params": {**(row.get("params") or {}), "answer": key}})
+            out = shuffled
         return out
 
     def post_loops(self):
