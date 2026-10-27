@@ -26,6 +26,7 @@ test("the terminal button opens the traffic console on any page; it filters, exp
     }),
   );
 
+  await page.addInitScript(() => window.localStorage.setItem("settings.developerTools", "on")); // the button is hidden until Developer tools is on
   await page.goto("/queue/");
   await page.getByRole("button", { name: "API traffic console" }).locator("visible=true").click();
   const drawer = page.getByRole("region", { name: "API traffic" });
@@ -42,6 +43,21 @@ test("the terminal button opens the traffic console on any page; it filters, exp
   await page.getByRole("link", { name: "Settings" }).locator("visible=true").click();
   await expect(drawer).toBeVisible();
 
+  await page.keyboard.press("Control+`");
+  await expect(drawer).toBeHidden();
+});
+
+test("with Developer tools off (the default) there is no console button, and Ctrl+` still opens the console", async ({ page }) => {
+  await mockApi(page, { "GET /traffic/rules": () => ({ body: { rules: [] } }) });
+  await page.route("**/traffic", (route) =>
+    route.fulfill({ status: 200, contentType: "text/event-stream", body: frame("hello", { node: "mac", size: 2000, count: 0, started: 1_700_000_000 }) }),
+  );
+  await page.goto("/queue/");
+  await expect(page.getByRole("button", { name: "API traffic console" })).toHaveCount(0);
+
+  await page.keyboard.press("Control+`");
+  const drawer = page.getByRole("region", { name: "API traffic" });
+  await expect(drawer).toBeVisible();
   await page.keyboard.press("Control+`");
   await expect(drawer).toBeHidden();
 });

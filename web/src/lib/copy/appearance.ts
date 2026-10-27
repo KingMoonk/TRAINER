@@ -20,5 +20,8 @@ export const APPEARANCE = {
   accentDesc: "The colour of buttons, links, highlights and charts. It works in both modes.",
   accents: { neutral: "Neutral", ocean: "Ocean", ember: "Ember", forest: "Forest" } satisfies Record<Accent, string>,
   voiceTitle: "Reply voice",
+  developerTitle: "Developer tools",
+  developerLabel: "Show the API traffic console button",
+  developerDesc: "Adds a button to the sidebar that opens a live list of the requests this computer makes and answers. Ctrl+` opens it either way. Kept in this browser.",
   voiceDesc: "Choose the voice used when you play a spoken reply. Kept in this browser.",
 };
