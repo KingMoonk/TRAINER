@@ -2,15 +2,16 @@
 
 // The training settings of the model setup page: batch size, accumulation, learning rate, weight decay, warm-up, dropout,
 // evaluate-every, seed and precision. They edit the draft like the model controls; a value that is not allowed stays in the box
-// with a sentence under it and is never sent on, so the draft always holds what the server can write.
+// with a sentence under it and is never sent on, so the draft always holds what the server can write. They sit in a closed
+// disclosure that keeps them mounted, so a typed value is kept while it is shut.
 
 import { useId, useState } from "react";
+import { Disclosure } from "@/components/disclosure";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { Choices, Registry } from "@/lib/builder";
 import { BUILDER, fill } from "@/lib/copy/builder";
 import { TRAINING_FIELDS, checkSetting, settingValue, showNumber, type TrainingField } from "@/lib/training-settings";
-import { Panel } from "./side";
 
 type SettingProps = {
   field: TrainingField;
@@ -85,7 +86,7 @@ export function TrainingSettings({ registry, cur, draft, onChange }: Props) {
   const picked = precisions.find((p) => p.short === draft.precision);
   const savedPrecision = precisions.find((p) => p.short === cur.precision);
   return (
-    <Panel title={BUILDER.training_settings} testId="training-settings">
+    <Disclosure title={BUILDER.training_settings} hint={BUILDER.training_settings_hint} testId="training-settings">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
         {TRAINING_FIELDS.map((field) => (
           <Setting
@@ -126,6 +127,6 @@ export function TrainingSettings({ registry, cur, draft, onChange }: Props) {
         </div>
       </div>
       <p className="text-xs text-muted-foreground">{BUILDER.training_note}</p>
-    </Panel>
+    </Disclosure>
   );
 }
