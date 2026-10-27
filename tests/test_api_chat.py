@@ -85,8 +85,8 @@ class ChatApiTest(unittest.TestCase):
         stopped, started = threading.Event(), threading.Event()
 
         def slow(version, messages, on_text, stop, ablate=None):
+            started.set()  # before the first text: the client only leaves after seeing that text, so this is set by the time the app returns
             on_text("Hel")
-            started.set()
             stopped.set() if stop.wait(5) else None
             return "Hel"
         self.services.chat = slow
