@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
+import AutoRunPage from "@/app/auto-run/page";
 import RunViewPage from "@/app/runs/view/page";
 import StoragePage from "@/app/storage/page";
 import QueuePage from "@/app/queue/page";
@@ -86,6 +87,20 @@ describe("pages on recorded responses", () => {
     renderPage(<StoragePage />, { route: "/storage/" });
     expect(await screen.findByRole("heading", { name: "Storage" })).toBeVisible();
     expect(await screen.findByText(/free on this computer's disk/)).toBeVisible();
+  });
+});
+
+describe("Auto Run on recorded responses", () => {
+  test("with no runs, offers a card for each phase of the plan the API ships (mid-training stays off)", async () => {
+    replay(["auto-runs-empty", "auto-run-defaults"], { "GET /versions": { body: [{ number: 1, name: "tiny", best_checkpoint: null }] } });
+    renderPage(<AutoRunPage />);
+    expect(await screen.findByTestId("plan-editor")).toBeVisible();
+    const phases = (fixtures["auto-run-defaults"].body as { phases: { kind: string; enabled: boolean }[] }).phases;
+    expect(phases.length).toBeGreaterThan(5);
+    for (const { kind, enabled } of phases) {
+      if (enabled) expect(screen.getByTestId(`plan-${kind}`)).toBeVisible();
+      else expect(screen.queryByTestId(`plan-${kind}`)).toBeNull();
+    }
   });
 });
 

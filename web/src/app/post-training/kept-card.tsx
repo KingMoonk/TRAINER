@@ -26,7 +26,18 @@ export function BaseWarning({ text }: { text: string }) {
  * A round that failed its gate keeps its checkpoint without making it live. Here it can be tried in a short chat (Chat itself keeps
  * following the live checkpoint) and, if it is good enough, adopted: it becomes the version's best checkpoint.
  */
-export function KeptCard({ round, version, onAdopted }: { round: number; version: number | undefined; onAdopted: () => void }) {
+export function KeptCard({
+  round,
+  version,
+  onAdopted,
+  adoptWith,
+}: {
+  round: number;
+  version: number | undefined;
+  onAdopted: () => void;
+  /** Adopt some other way (the Auto Run page adopts through its run, which then goes on); it says what to toast. */
+  adoptWith?: () => Promise<string>;
+}) {
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState("");
   const [thread, setThread] = useState<Message[]>([]);
@@ -36,9 +47,13 @@ export function KeptCard({ round, version, onAdopted }: { round: number; version
   useEffect(() => () => control.current?.abort(), []);
 
   const adopt = useMutation({
-    mutationFn: () => unwrap(api.POST("/post-training/rounds/{round}/adopt", { params: { path: { round } }, body: { version: version ?? null } })),
-    onSuccess: (adopted) => {
-      toast.success(`Version ${adopted.version} now uses Round ${adopted.round}'s checkpoint. Chat follows it from the next message.`);
+    mutationFn: async () => {
+      if (adoptWith) return await adoptWith();
+      const adopted = await unwrap(api.POST("/post-training/rounds/{round}/adopt", { params: { path: { round } }, body: { version: version ?? null } }));
+      return `Version ${adopted.version} now uses Round ${adopted.round}'s checkpoint. Chat follows it from the next message.`;
+    },
+    onSuccess: (message) => {
+      toast.success(message);
       queryClient.invalidateQueries({ queryKey: ["versions"] });
       onAdopted();
     },

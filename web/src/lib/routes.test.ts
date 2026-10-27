@@ -36,7 +36,7 @@ describe("areaHome", () => {
   test("names the expected homes", () => {
     expect(areaHome("models").route).toBe("builder");
     expect(areaHome("data").route).toBe("your_data");
-    expect(areaHome("train").route).toBe("pretraining");
+    expect(areaHome("train").route).toBe("auto_run");
     expect(areaHome("eval").route).toBe("chat");
     expect(areaHome("machines").route).toBe("machines");
   });
@@ -54,18 +54,18 @@ describe("the five sidebar areas", () => {
   test("group the routes as the design does", () => {
     expect(pagesIn("models")).toEqual(["builder", "quicktest", "compare"]);
     expect(pagesIn("data")).toEqual(["your_data", "collect", "storage"]);
-    expect(pagesIn("train")).toEqual(["pretraining", "post_training", "runs", "new_run", "queue", "training_run", "run_view"]);
+    expect(pagesIn("train")).toEqual(["auto_run", "pretraining", "post_training", "runs", "new_run", "queue", "training_run", "run_view"]);
     expect(pagesIn("eval")).toEqual(["chat", "benchmark", "export"]);
     expect(pagesIn("machines")).toEqual(["machines", "cluster_training"]);
   });
 
-  test("the section tabs are the visible pages, ten in all", () => {
+  test("the section tabs are the visible pages, eleven in all", () => {
     expect(tabsIn("models")).toEqual(["builder"]);
     expect(tabsIn("data")).toEqual(["your_data"]);
-    expect(tabsIn("train")).toEqual(["pretraining", "post_training", "runs"]);
+    expect(tabsIn("train")).toEqual(["auto_run", "pretraining", "post_training", "runs"]);
     expect(tabsIn("eval")).toEqual(["chat", "benchmark", "export"]);
     expect(tabsIn("machines")).toEqual(["machines", "cluster_training"]);
-    expect(ROUTES.filter((r) => !r.hidden)).toHaveLength(10);
+    expect(ROUTES.filter((r) => !r.hidden)).toHaveLength(11);
   });
 
   test("the hidden pages are the ones reached from elsewhere, each with a visible parent in its own area", () => {
