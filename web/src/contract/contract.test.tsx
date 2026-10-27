@@ -28,7 +28,7 @@ function replay(names: string[], extra: Parameters<typeof mockApi>[0] = {}) {
   const handlers: Parameters<typeof mockApi>[0] = {};
   for (const name of names) {
     const { request, status, body } = fixtures[name];
-    handlers[`${request.method} ${request.path.replace(/\{[^}]+\}/g, "*")}`] = () => json(body, status);
+    handlers[`${request.method} ${request.path.split("?")[0].replace(/\{[^}]+\}/g, "*")}`] = () => json(body, status);
   }
   return mockApi({ ...handlers, ...extra });
 }
