@@ -8183,6 +8183,8 @@ export interface components {
         RoundRequest: {
             /** Group */
             group?: number | null;
+            /** Kl */
+            kl?: number | null;
             /**
              * Leash
              * @default Medium

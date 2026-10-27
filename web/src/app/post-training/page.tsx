@@ -24,7 +24,7 @@ const REFRESH_MS = 600;
 export default function PostTrainingPage() {
   const queryClient = useQueryClient();
   const [picked, setPicked] = useState<number | null>(null);
-  const [choices, setChoices] = useState<Choices>({ lora: null, rank: 8, teacher: "version", teacherVersion: null, leash: "Medium", round2: { steps: "", prompts_per_step: "", group: "", temperature: "", max_tokens: "" } });
+  const [choices, setChoices] = useState<Choices>({ lora: null, rank: 8, teacher: "version", teacherVersion: null, leash: "Medium", round2: { steps: "", prompts_per_step: "", group: "", temperature: "", max_tokens: "", kl: "" } });
   const [live, setLive] = useState<Live>({});
   const [liveGates, setLiveGates] = useState<Record<number, Gate>>({});
 

@@ -206,6 +206,7 @@ class RoundRequest(BaseModel):
     group: int | None = Field(default=None, ge=2, le=32)  # round 2: answers sampled per prompt
     temperature: float | None = Field(default=None, gt=0, le=2)  # round 2: sampling temperature
     max_tokens: int | None = Field(default=None, ge=1, le=2048)  # round 2: answer length cap; None = sized by the rule
+    kl: float | None = Field(default=None, ge=0, le=1)  # round 2: pull back to the start weights; None = studio_rl.KL_DEFAULT (0 for LoRA), 0 = off
 
 
 class RoundQueued(BaseModel):
@@ -408,7 +409,7 @@ def queue_round(body: RoundRequest, services=Depends(get_services)):
         settings["beta"] = next(beta for label, beta, _note in LEASH if label == body.leash)
     if body.round == 2:
         settings.update(steps=body.steps, prompts_per_step=body.prompts_per_step, group=body.group, temperature=body.temperature,
-                        max_tokens=body.max_tokens)
+                        max_tokens=body.max_tokens, kl=body.kl)
     job = studio_rl.round_job(body.round, version, settings)   # the Auto Run builds its rounds the same way
     params = job.params
     services.enqueue(job)

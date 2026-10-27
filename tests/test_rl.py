@@ -88,6 +88,48 @@ class RLChecks(unittest.TestCase):
             optimizer.update(model, 2e-3)
         self.assertLess(studio_rl.reinforce_loss(model, rows, adv), start)
 
+    def test_kl_term_adds_the_k3_gradient_and_reports_the_mean_kl(self):
+        model, tokenizer = self.model()
+        reference = studio_rl.reference_rows(studio_rl.Teacher(self.ckpt, device="cpu"), self.rows(tokenizer, ["yes", "no", "cat"]))
+        rows, adv = self.rows(tokenizer, ["yes", "no", "cat"]), [1., -1., .5]
+        stats = {}
+        studio_rl.reinforce_loss(model, rows, adv, reference=reference, kl=.5, stats=stats)
+        self.assertAlmostEqual(stats["kl"], 0., places=5)   # the policy is still the reference
+        for key in ("block0.f1.w", "token"):   # move the policy off the reference so the KL has a gradient
+            model.p[key] += .05 * torch.randn_like(model.p[key])
+        zero_adv = [0., 0., 0.]
+        model.zero_grad()
+        studio_rl.reinforce_loss(model, rows, zero_adv, backward=True, reference=reference, kl=.5, stats=stats)
+        self.assertGreater(stats["kl"], 0.)
+        index = tuple(np.unravel_index(np.argmax(np.abs(model.g["block0.f1.w"].numpy())), model.g["block0.f1.w"].shape))
+        original = float(model.p["block0.f1.w"][index])
+        losses = []
+        for delta in (1e-2, -1e-2):
+            model.p["block0.f1.w"][index] = original + delta
+            losses.append(studio_rl.reinforce_loss(model, rows, zero_adv, reference=reference, kl=.5))
+        model.p["block0.f1.w"][index] = original
+        numeric = (losses[0] - losses[1]) / 2e-2
+        self.assertAlmostEqual(float(model.g["block0.f1.w"][index]), numeric, delta=max(2e-3, abs(numeric) * .05))
+        self.assertNotEqual(float(model.g["block0.f1.w"][index]), 0.)
+        off = studio_rl.reinforce_loss(model, rows, zero_adv, reference=reference, kl=0.)
+        self.assertEqual(off, 0.)   # kl 0: reported but not added
+
+    def test_practice_with_checks_leash_defaults_and_result(self):
+        problems = [{"prompt": f"Copy: {w}", "rule": "copy"} for w in WORDS[:4]]
+        record = studio_rl.practice_with_checks(self.ckpt, problems, self.dir / "r2kl", group=4, steps=2, learning_rate=1e-3)
+        self.assertEqual(record["kl"], studio_rl.KL_DEFAULT)
+        self.assertIsNotNone(record["mean_kl"])
+        off = studio_rl.practice_with_checks(self.ckpt, problems, self.dir / "r2nokl", group=4, steps=1, kl=0)
+        self.assertEqual((off["kl"], off["mean_kl"]), (0., None))
+        lora = dict(load_checkpoint(self.ckpt), config=dict(load_checkpoint(self.ckpt)["config"], lora={"rank": 4}))
+        with mock.patch.object(studio_rl, "_setup", wraps=studio_rl._setup) as setup:
+            local = studio_rl.LocalModel(self.ckpt, device="cpu")
+            local.config["lora"] = {"rank": 4}
+            setup.side_effect = lambda checkpoint, device, data=None: (local, AdamW(local.model, 0.))
+            record = studio_rl.practice_with_checks(self.ckpt, problems, self.dir / "r2lora", group=4, steps=1)
+        self.assertEqual(record["kl"], 0.)
+        del lora
+
     def test_advantages(self):
         self.assertTrue(np.allclose(studio_rl.advantages([1, 1, 1]), 0))
         self.assertTrue(np.allclose(studio_rl.advantages([1, 0], divide_by_std=False), [.5, -.5]))
@@ -214,14 +256,14 @@ class RLChecks(unittest.TestCase):
             return {"checkpoint": str(self.ckpt), "groups": 0, "taught": 0}
 
         job = Job("post_round", "r", params={"round": 2, "checkpoint": str(self.ckpt), "steps": 5, "group": 3, "prompts_per_step": 2,
-                                             "temperature": .5, "max_tokens": 9, "problems": [{"prompt": "Copy: yes", "rule": "copy"}],
+                                             "temperature": .5, "max_tokens": 9, "kl": 0.1, "problems": [{"prompt": "Copy: yes", "rule": "copy"}],
                                              "heldout_docs": [], "heldout_problems": []})
         with (mock.patch.object(studio_rl, "practice_with_checks", practice), mock.patch.object(studio_rl, "pass_at_k", return_value={"problems": 1, "k": 4, "solved": 1, "passed": 1, "answers": 4, "useful": []}),
               mock.patch.object(studio_rl, "doc_scores", return_value=[]), mock.patch.object(studio_rl, "measure", return_value={}),
               mock.patch("studio_gate.passes", return_value=(False, [])), mock.patch.object(studio_rl, "verdict_for", return_value="")):
             studio_rl.run_round(2, job, mock.Mock(run_dir=self.dir), lambda e: None, None, None)
-        self.assertEqual({k: seen[k] for k in ("steps", "group", "prompts_per_step", "temperature", "max_tokens")},
-                         {"steps": 5, "group": 3, "prompts_per_step": 2, "temperature": .5, "max_tokens": 9})
+        self.assertEqual({k: seen[k] for k in ("steps", "group", "prompts_per_step", "temperature", "max_tokens", "kl")},
+                         {"steps": 5, "group": 3, "prompts_per_step": 2, "temperature": .5, "max_tokens": 9, "kl": .1})
 
     def test_round_job_builds_the_same_job_for_every_round(self):
         version = mock.Mock(number=3, best_checkpoint="v3.npz")

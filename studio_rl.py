@@ -35,7 +35,8 @@ MEASURE_PROBLEMS = 200  # held-back problems answered per before/after measureme
 PROBE_PROBLEMS = 8      # problems answered before round 2 to see whether it can learn anything
 PROBE_ANSWERS = 4       # answers sampled per probe problem (the k of pass@k)
 ROUND2_DEFAULTS = {"steps": 200, "prompts_per_step": 8, "group": 8, "temperature": 1.0}   # what Round 2 uses unless the job says otherwise
-ROUND2_KEYS = ("steps", "learning_rate", "prompts_per_step", "group", "temperature", "max_tokens", "divide_by_std")   # job.params that reach practice_with_checks
+ROUND2_KEYS = ("steps", "learning_rate", "prompts_per_step", "group", "temperature", "max_tokens", "divide_by_std", "kl")   # job.params that reach practice_with_checks
+KL_DEFAULT = .02       # Round 2's pull back to the start weights on a full-weight run; a LoRA run defaults to 0 (its adapters already stay close)
 RESAMPLE_CAP = 3       # Round 2 draws at most this many times prompts_per_step prompts to find prompts_per_step groups with spread
 MEASURE_CONVERSATIONS = 200  # held-back conversations scored and answered per measurement (a fixed sample, so before/after compare)
 CUT_REWARD = -.5       # an answer that hit its token budget without stopping (DAPO-style overlong shaping)
@@ -115,12 +116,40 @@ def length_normalised(logp, valid, weights):
     return -(weights * logp.sum(dim=1) / counts).sum() / len(weights)
 
 
-def reinforce_loss(policy, rows, adv, backward=False):
-    """-mean(advantage * mean token log-prob) over encoded (x, y) rows (see length_normalised); accumulates gradients when backward."""
+def kl_k3(logp, valid, reference):
+    """Per-answer mean of the k3 estimate of KL(policy || reference), exp(r) - r - 1 with r = reference - policy log-prob, over the
+    sampled answer tokens: never negative, zero when the two agree. reference is [rows, tokens] aligned with logp."""
+    ratio = reference - logp
+    k3 = (torch.exp(ratio) - ratio - 1) * valid
+    return k3.sum(dim=1) / valid.sum(dim=1).clamp(min=1).to(logp.dtype)
+
+
+def reference_rows(reference, rows):
+    """The frozen reference's answer-token log-probs of each encoded row, as a [rows, tokens] tensor aligned with token_logps."""
+    x, y = batch_arrays(rows)
+    scores = reference.score(rows)
+    out = torch.zeros(y.shape, dtype=torch.float32)
+    valid = torch.as_tensor(np.asarray(y) != -100)
+    for i, row in enumerate(scores):
+        out[i][valid[i]] = row.to(torch.float32)
+    return out
+
+
+def reinforce_loss(policy, rows, adv, backward=False, reference=None, kl=0., stats=None):
+    """-mean(advantage * mean token log-prob) over encoded (x, y) rows (see length_normalised); accumulates gradients when backward.
+
+    reference: [rows, tokens] log-probs of the same answers under the frozen start weights (reference_rows). With kl > 0 the loss
+    adds kl x the mean k3 KL to them; the mean KL itself is left in stats["kl"] (also measured with kl == 0 when reference is given)."""
     x, y = batch_arrays(rows)
     logp, valid, cache = token_logps(policy, x, y, tape=backward)
     weights = torch.as_tensor(np.asarray(adv), dtype=logp.dtype, device=logp.device)
     loss = length_normalised(logp, valid, weights)
+    if reference is not None:
+        drift = kl_k3(logp, valid, reference.to(logp.device, logp.dtype)).mean()
+        if stats is not None:
+            stats["kl"] = float(drift.detach())
+        if kl:
+            loss = loss + kl * drift
     if backward:
         policy.backward_loss(loss, cache)
     return float(loss.detach())
@@ -152,13 +181,16 @@ def pass_at_k(checkpoint, problems, count=PROBE_PROBLEMS, k=PROBE_ANSWERS, tempe
 def practice_with_checks(checkpoint, problems, output_dir, group=ROUND2_DEFAULTS["group"], steps=ROUND2_DEFAULTS["steps"],
                          learning_rate=1e-4, prompts_per_step=ROUND2_DEFAULTS["prompts_per_step"], divide_by_std=False, rubric=None,
                          max_tokens=None, temperature=ROUND2_DEFAULTS["temperature"], seed=7, device="auto", emit=None, stop=None,
-                         pause=None, useful=None):
+                         pause=None, useful=None, kl=None):
     """Round 2. problems: [{"prompt", "rule", ...}]. rubric: optional callable (prompt, answer) -> 0..1, a smaller
     second reward that only counts for answers that pass the rule. Saves last.npz.
 
     Dynamic sampling: a prompt whose group is all pass or all fail gives no gradient, so it is replaced by drawing another
     prompt, until prompts_per_step groups have spread or RESAMPLE_CAP x prompts_per_step prompts were drawn (the step then
-    trains on what it found). `useful` (from pass_at_k) are the problems worth drawing first; the rest follow."""
+    trains on what it found). `useful` (from pass_at_k) are the problems worth drawing first; the rest follow.
+
+    kl: the weight of a k3 KL leash to the start weights (a frozen copy scores each step's sampled answers under no_grad). None =
+    KL_DEFAULT, or 0 when the model is LoRA; 0 turns it off. The record and each metric carry the mean KL ("mean_kl", "kl")."""
     emit, stop, pause = emit or (lambda event: None), stop or threading.Event(), pause or threading.Event()
     problems = [p for p in problems if p.get("rule") in studio_rules.CHECKABLE]
     if not problems:
@@ -166,12 +198,16 @@ def practice_with_checks(checkpoint, problems, output_dir, group=ROUND2_DEFAULTS
     local, optimizer = _setup(checkpoint, device)
     local.rng = np.random.default_rng(seed)
     policy, tokenizer = local.model, local.tokenizer
+    kl = (0. if local.config.get("lora") else KL_DEFAULT) if kl is None else float(kl)
+    leash = Teacher(checkpoint, device=device) if kl > 0 else None   # the start weights, frozen; resident so each step does not reload them
+    if leash:
+        leash.resident = True
     directory, cfg, extra = _begin(output_dir, local, checkpoint, "rl_checks")
     base_step, rng = load_checkpoint(checkpoint)["step"], random.Random(seed)
     record = {"name": "practice with checks", "createdAt": now(), "status": "training", "stage": "rl_checks", "steps": steps,
-              "group": group, "base_checkpoint": str(checkpoint)}
+              "group": group, "base_checkpoint": str(checkpoint), "kl": kl}
     atomic_json(directory / "run.json", record)
-    history, best, means = [], -math.inf, []
+    history, best, means, kls = [], -math.inf, [], []
     groups_total = taught_total = 0
     emit({"type": "info", "text": f"round 2 · {len(problems)} problems · groups of {group} · {prompts_per_step} prompts a step"})
     step = 0
@@ -205,10 +241,11 @@ def practice_with_checks(checkpoint, problems, output_dir, group=ROUND2_DEFAULTS
             means.append(float(np.mean(rewards)))
         if not shown:
             break
-        loss = None
+        loss, drift = None, {}
         if rows:
             policy.zero_grad()
-            loss = reinforce_loss(policy, rows, adv_all, backward=True)
+            reference = reference_rows(leash, rows) if leash else None
+            loss = reinforce_loss(policy, rows, adv_all, backward=True, reference=reference, kl=kl, stats=drift)
             rate = learning_rate * min(1., (step + 1) / max(1, min(10, steps // 10)))
             optimizer.update(policy, rate)
         step += 1
@@ -217,13 +254,16 @@ def practice_with_checks(checkpoint, problems, output_dir, group=ROUND2_DEFAULTS
         taught_total, groups_total = taught_total + taught, groups_total + groups
         row = {"step": step, "loss": loss, "mean_reward": mean, "groups": groups, "taught": taught,
                "groups_total": groups_total, "taught_total": taught_total}
+        if "kl" in drift:
+            row["kl"] = drift["kl"]
+            kls.append(drift["kl"])
         history.append(row)
         for visual in shown:
             emit({"type": "group", **visual})
         emit({"type": "metric", **row, "total": steps})
         best = max(best, mean)
     half = max(1, len(history) // 2)
-    record.update(groups=groups_total, taught=taught_total, first_mean=float(np.mean([h["mean_reward"] for h in history[:half]])) if history else None,
+    record.update(groups=groups_total, taught=taught_total, mean_kl=float(np.mean(kls)) if kls else None, first_mean=float(np.mean([h["mean_reward"] for h in history[:half]])) if history else None,
                   last_mean=float(np.mean([h["mean_reward"] for h in history[half:] or history])) if history else None)
     return _finish(directory, local, optimizer, cfg, step, base_step, -best if math.isfinite(best) else None, history, extra, record, stop, keep_best=False)
 
@@ -682,7 +722,7 @@ def run_round(number, job, context, emit, stop, pause):
     result = {"round": number, "ok": ok, "checks": checks, "verdict": verdict_for(verdict, ok, checks), "before": before, "after": after,
               "band": band, "checkpoint": candidate}
     if number == 2:   # groups that taught something: the share of reward groups with any spread
-        result.update(groups=record.get("groups"), taught=record.get("taught"), probe=probe)
+        result.update(groups=record.get("groups"), taught=record.get("taught"), probe=probe, kl=record.get("kl"), mean_kl=record.get("mean_kl"))
     emit({"type": "gate", **result})
     job.params["result"] = result   # the app keeps it and moves Chat only when ok (WorkspaceServices.record_round)
     return {"round": number, "ok": ok, "checkpoint": candidate}

@@ -95,6 +95,7 @@ export const ROUND2_SETTINGS = [
   { key: "group", label: "Answers per prompt", hint: "How many answers it writes to each prompt, to compare them with each other.", fallback: 8, min: 2, max: 32, integer: true },
   { key: "temperature", label: "Temperature", hint: "How adventurous its answers are. Higher gives more varied answers to compare.", fallback: 1, min: 0.1, max: 2, integer: false },
   { key: "max_tokens", label: "Longest answer (tokens)", hint: "Empty sizes it by the rule being checked.", fallback: null, min: 1, max: 2048, integer: true },
+  { key: "kl", label: "Stay close to the start", hint: "How hard it is pulled back to the weights the round started from, so a long round does not drift. 0 turns it off; empty uses 0.02 (0 for a LoRA model).", fallback: 0.02, min: 0, max: 1, integer: false },
 ] as const;
 export type Round2Key = (typeof ROUND2_SETTINGS)[number]["key"];
 
