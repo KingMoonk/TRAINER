@@ -348,6 +348,14 @@ class Services:
     def resume_queue_at_start(self):
         """Carry on the queue the last run of the app left going (no-op where there is no real queue)."""
 
+    def find_job(self, job_id):
+        """The queue's job with this id, in any status (waiting, held, running, or ended and still remembered), else None."""
+        raise NotImplementedError
+
+    def live_jobs(self):
+        """The jobs that are waiting, held or running."""
+        raise NotImplementedError
+
     def refresh_downloads(self):
         """Rebuild catalogue downloads converted by an older app version; returns the ids rebuilt (no-op without a workspace)."""
         return []
@@ -799,6 +807,8 @@ class FakeServices(Services):
         self.hardware = None  # a studio_fit.Profile a test gives the plan; None: the plan does not scale (as `studio_api --fake`)
         self.share = 1.  # what memory_share answers
         self.conversations_in_text = 40  # how many conversations a cluster run's teacher can answer are in the data
+        self._ended = {}  # id -> the jobs that finished, kept as the real queue keeps its history (find_job)
+        self._autorun = None
 
     def inspect_landscape(self, version, snapshot=None, mode="random", grid=21, span=1.0, seed=0, live=False, new_anchor=False, stop=None):
         """A made-up bowl with two ripples and a path that walks into it one point longer per call, so a live page has something to show."""
@@ -954,6 +964,37 @@ class FakeServices(Services):
                 return
             self._worker = start_thread(self._run_jobs, job)
 
+    @property
+    def autorun(self):
+        """The Auto Run orchestrator over this fake queue, made on first use with a folder of its own."""
+        if self._autorun is None:
+            from studio_ia.autorun import Orchestrator
+            self._autorun = Orchestrator(self, tempfile.mkdtemp(prefix="fake_auto_runs_"))
+            self.watch(self._autorun.on_event)
+        return self._autorun
+
+    def find_job(self, job_id):
+        q = self._queue
+        return next((j for j in [*([q.job] if q.job else []), *q.up_next, *q.failed, *self._ended.values()] if j.id == job_id), None)
+
+    def live_jobs(self):
+        q = self._queue
+        return [j for j in [*([q.job] if q.job else []), *q.up_next] if j.status in ("waiting", "held", "running")]
+
+    def finish_job(self, job_id, status="done", result=None, error=""):
+        """Test hook: end a waiting or running job the way the real runner does, with the result a round leaves in its params."""
+        q = self._queue
+        job = self.find_job(job_id)
+        q.up_next = [j for j in q.up_next if j.id != job_id]
+        if q.job is not None and q.job.id == job_id:
+            q.job = None
+        job.status, job.error = status, error
+        if result is not None:
+            job.params["result"] = result
+        self._ended[job_id] = job
+        self.emit("job", {"job": job_id, "status": status, "error": error})
+        self.emit("queue", q)
+
     def wait_idle(self, timeout=10.0):
         """Test hook: block until the worker has run every waiting job; True when it has."""
         worker = self._worker
@@ -1054,6 +1095,7 @@ class FakeServices(Services):
             if self.snapshot_every and step % self.snapshot_every == 0:
                 self.emit("train", {"job": job.id, "type": "viz_snapshot", "step": step, "path": f"viz/step_{step:08d}.npz", "markers": []})
         job.status = "done"
+        self._ended[job.id] = job
         q.job, q.step, q.total, q.phase, q.prepare, q.lr, q.eta_s = None, 0, 0, "", None, None, None
         self.emit("job", {"job": job.id, "status": "done", "error": ""})
         number = job.params.get("version")
@@ -1669,6 +1711,8 @@ class WorkspaceServices(Services):
                                           profile=lambda: studio_fit.hardware_profile(self.root))
         self.runner.subscribe(self.emit)
         self.runner.subscribe(self._record_job)
+        self._make_autorun()
+        self.runner.subscribe(self.autorun.on_event)  # after _record_job: a round's result is recorded before the Auto Run reads it
         for job in self.runner.ended_on_load:  # a distributed run the restart could not resume: its version is not training any more
             self._record_job("job", {"job": job.id, "status": job.status})
         workspace.progress = self.note
@@ -2130,6 +2174,19 @@ class WorkspaceServices(Services):
         was running continues from its own checkpoint, studio_jobs.continue_here). A pause or stop the person made is saved in
         queue.json and still holds: the runner starts but runs nothing while paused."""
         self.start_queue()
+        self.autorun.reconcile()  # an Auto Run the last run of the app left going finds its job again, or asks for the same one
+
+    def _make_autorun(self):
+        from studio_ia.autorun import Orchestrator
+        self.autorun = Orchestrator(self, self.root / "data" / "auto_runs", spawn=start_thread)
+
+    def find_job(self, job_id):
+        with self.runner.lock:
+            return next((j for j in self.runner.jobs if j.id == job_id), None)
+
+    def live_jobs(self):
+        with self.runner.lock:
+            return [j for j in self.runner.jobs if j.status in ("waiting", "held", "running")]
 
     @timed("services.refresh_downloads")
     def refresh_downloads(self):
