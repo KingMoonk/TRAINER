@@ -10210,6 +10210,19 @@
             ],
             "title": "Group"
           },
+          "kl": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kl"
+          },
           "leash": {
             "default": "Medium",
             "enum": [

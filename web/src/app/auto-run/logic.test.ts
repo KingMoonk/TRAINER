@@ -39,7 +39,7 @@ describe("buildPlan", () => {
 
   test("only settings the server reads are offered", () => {
     expect(PHASES.pretrain.settings.map((s) => s.key)).toEqual(["hours", "passes"]);
-    expect(PHASES.rlvr.settings.map((s) => s.key)).toEqual(["steps", "prompts_per_step", "group", "temperature", "max_tokens"]);
+    expect(PHASES.rlvr.settings.map((s) => s.key)).toEqual(["steps", "prompts_per_step", "group", "temperature", "max_tokens", "kl"]);
     expect(PHASES.data.settings).toEqual([]);
   });
 });

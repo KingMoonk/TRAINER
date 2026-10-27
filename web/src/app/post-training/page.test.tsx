@@ -185,9 +185,12 @@ describe("Post-training page", () => {
     expect(screen.getByLabelText(/^Prompts per step/)).toHaveAttribute("placeholder", "8");
     await user.type(steps, "50");
     await user.type(screen.getByLabelText(/^Temperature/), "0.7");
+    const kl = screen.getByLabelText(/^Stay close to the start/);
+    expect(kl).toHaveAttribute("placeholder", "0.02");
+    await user.type(kl, "0.05");
     await user.click(screen.getByRole("button", { name: "Add to the queue" }));
     await waitFor(() => expect(state.rounds).toHaveLength(1));
-    expect(state.rounds[0]).toEqual(expect.objectContaining({ round: 2, steps: 50, temperature: 0.7, group: null, prompts_per_step: null, max_tokens: null }));
+    expect(state.rounds[0]).toEqual(expect.objectContaining({ round: 2, steps: 50, temperature: 0.7, group: null, prompts_per_step: null, max_tokens: null, kl: 0.05 }));
   });
 
   test("a round that has nothing to learn from yet says why and cannot be queued", async () => {

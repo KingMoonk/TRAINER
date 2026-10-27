@@ -154,10 +154,10 @@ class PostTrainingApiTest(unittest.TestCase):
 
     def test_round_two_settings_are_queued_and_bounded(self):
         version = trained(self.services)
-        queued = self.client.post("/post-training/rounds", json={"round": 2, "steps": 50, "group": 4, "prompts_per_step": 6, "temperature": .7, "max_tokens": 32})
+        queued = self.client.post("/post-training/rounds", json={"round": 2, "steps": 50, "group": 4, "prompts_per_step": 6, "temperature": .7, "max_tokens": 32, "kl": 0})
         self.assertEqual(queued.status_code, 200, queued.text)
         self.assertEqual(self.queued()[-1].params, {"round": 2, "version": version.number, "checkpoint": "best.npz", "steps": 50, "group": 4,
-                                                    "prompts_per_step": 6, "temperature": .7, "max_tokens": 32})
+                                                    "prompts_per_step": 6, "temperature": .7, "max_tokens": 32, "kl": 0})
         self.client.post("/post-training/rounds", json={"round": 2})
         self.assertEqual(self.queued()[-1].params, {"round": 2, "version": version.number, "checkpoint": "best.npz"})   # the round's own defaults apply
         self.assertEqual(self.client.post("/post-training/rounds", json={"round": 2, "group": 1}).status_code, 422)
