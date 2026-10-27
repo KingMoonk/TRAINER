@@ -453,6 +453,12 @@ class Services:
         """studio_backend.gpu_status(): {available, kind, name, ...} of the GPU this computer offers, or None when it cannot say."""
         return None
 
+    def cached_tokens(self, dataset_ids, config, init_from=None):
+        """How many tokens of the chosen text the token cache already holds for the tokenizer this run will use (studio_shards.cached_tokens),
+        so the fit does not charge the disk for them again. Never tokenizes. The tokenizer is only known before the run when it keeps the
+        checkpoint's (`init_from`, a warm start); a fresh run fits its own on the data, so nothing counts as cached (0)."""
+        return 0
+
     def hardware_profile(self):
         """studio_fit.Profile of this computer as it is now (GPU memory total and free, free RAM and disk, cores, the newest measured
         speed), or None when it cannot say. The free figures are read on each call, so a plan or a start decides on fresh ones."""
@@ -789,6 +795,7 @@ class FakeServices(Services):
         self.heldout_docs: list = []  # the held-back text
         self.live: list[dict] = []  # a test's runs in progress: [{version, step, total, saved_at, file}]
         self.reviewed_text = True  # whether the text sets hold an example marked Good
+        self.cached = 0  # the tokens a test says the token cache already holds (cached_tokens)
         self.hardware = None  # a studio_fit.Profile a test gives the plan; None: the plan does not scale (as `studio_api --fake`)
         self.share = 1.  # what memory_share answers
         self.conversations_in_text = 40  # how many conversations a cluster run's teacher can answer are in the data
@@ -831,6 +838,9 @@ class FakeServices(Services):
 
     def hardware_profile(self):
         return self.hardware
+
+    def cached_tokens(self, dataset_ids, config, init_from=None):
+        return self.cached
 
     def memory_share(self):
         return self.share
@@ -2780,6 +2790,27 @@ class WorkspaceServices(Services):
             return gpu_status()
         except Exception:  # noqa: BLE001 - a broken driver is "no GPU" here
             return None
+
+    def cached_tokens(self, dataset_ids, config, init_from=None):
+        import studio_core
+        import studio_data_kinds as dk
+        import studio_model
+        import studio_shards
+        if not init_from:
+            return 0  # a fresh run fits its tokenizer on the data: its hash is unknown before the run, so none of the cache is counted
+        try:
+            cfg = studio_model.validate_config(config)
+            with np.load(self._abs(init_from), allow_pickle=False) as archive:  # the metadata only: not the weights
+                data = json.loads(str(archive["metadata"].item()))
+            if (studio_model.effective_spec(cfg)["tokenizer"] != studio_model.effective_spec(studio_model.validate_config(data["config"]))["tokenizer"]
+                    or config.get("refit_tokenizer")):
+                return 0  # the run fits a new tokenizer
+            tokenizer = studio_model.Tokenizer.restore(data["tokenizer"])
+            prints = dk.text_fingerprints(self.workspace, self._preview_ids(dataset_ids), exclude=self._heldout_set())
+            return studio_shards.cached_tokens(studio_core.ROOT / "data" / "shards", studio_model._tokenizer_hash(tokenizer), tokenizer.vocab_size,
+                                               cfg["objective"] == "assistant", prints)
+        except Exception:  # noqa: BLE001 - an unreadable checkpoint or cache is "nothing cached", the conservative answer
+            return 0
 
     def hardware_profile(self):
         import studio_fit

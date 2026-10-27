@@ -32,7 +32,9 @@ MIN_STEPS = 100  # a scaled run still trains at least this many optimizer steps
 MAX_ACCUMULATION = 64  # studio_model.validate_config's limit
 MAX_STEPS = 20_000_000  # studio_model.MAX_STEPS
 RESIDENT_BYTES_PER_TOKEN = .5  # host memory a streamed text holds per token read: a few hundred bytes a row (studio_corpus), rows of about a thousand tokens
-DISK_BYTES_PER_TOKEN = 6  # per token read, beside its text: the token cache (2 bytes + 1 of mask) and the shards (2 + 1)
+CACHE_BYTES_PER_TOKEN = 3  # per token read, beside its text: the token cache (2 bytes + 1 of mask)...
+SHARD_BYTES_PER_TOKEN = 3  # ...and the shards (2 + 1)
+DISK_BYTES_PER_TOKEN = CACHE_BYTES_PER_TOKEN + SHARD_BYTES_PER_TOKEN
 TEXT_COPIES = 2  # the spool of the rows read, and the snapshot the run keeps beside its checkpoint
 CORPUS_CHARS = 6  # studio_corpus.CHARS_PER_TOKEN: reading for a token budget may take this many characters a token
 HEADROOM = 2 ** 30  # disk left alone when a run is sized to the free space
@@ -277,8 +279,22 @@ def _split(b0, a0, micro):
     return micro, a0 if micro == b0 else min(MAX_ACCUMULATION, math.ceil(effective / micro))
 
 
+def _disk_cost(tokens, text_bytes, cached):
+    """Bytes `tokens` read take on the disk when `cached` of them are already in the token cache: the text copies and the shards of every
+    token, and the cache's bytes only for the ones it lacks."""
+    return tokens * (text_bytes + SHARD_BYTES_PER_TOKEN) + max(0, tokens - cached) * CACHE_BYTES_PER_TOKEN
+
+
+def _disk_tokens(room, text_bytes, cached):
+    """The most tokens that fit `room` bytes of disk by _disk_cost (the inverse of it)."""
+    full = text_bytes + SHARD_BYTES_PER_TOKEN
+    if room <= cached * full:
+        return max(0, int(room / full))
+    return int(cached + (room - cached * full) / (full + CACHE_BYTES_PER_TOKEN))
+
+
 def fit_solo(config, profile, *, share=1., pieces=None, chars_per_piece=4., token_budget=None, window_hours=DEFAULT_WINDOW_HOURS,
-             speed=None, keep_mine=False, fixed_architecture=False, device=None, vocab=None):
+             speed=None, keep_mine=False, fixed_architecture=False, device=None, vocab=None, cached_pieces=0):
     """Fit the solo pretraining run `config` (an engine config with its design in "architecture") to `profile`.
 
     `share`: the part of the device's memory the queue's plan gives the run. `pieces`: the word pieces of the chosen text, when known;
@@ -286,7 +302,9 @@ def fit_solo(config, profile, *, share=1., pieces=None, chars_per_piece=4., toke
     `window_hours`: the wall-clock time the person allows; with `speed` (tokens a second, measured for this design here) the tokens are
     scaled to it. `keep_mine`: the person pressed "use my settings anyway" (drops the advisory notes). `fixed_architecture`: the run
     continues weights (a catch-up, a resume), so its context and size cannot change. `device` overrides the one the config and the
-    profile imply. Returns a Fit; a run that fits comes back with its config as given and no notes."""
+    profile imply. `cached_pieces`: how many of the run's tokens the token cache already holds (studio_shards.cached_tokens, found
+    without tokenizing): the disk does not take the cache's bytes for them again, so an existing cache raises the allowed token budget.
+    Returns a Fit; a run that fits comes back with its config as given and no notes."""
     import studio_memory
     from studio_model import validate_config, vocabulary_guess
     cfg = validate_config(config)
@@ -343,20 +361,22 @@ def fit_solo(config, profile, *, share=1., pieces=None, chars_per_piece=4., toke
     host = (sizer.host_moments(new) if offload else 0) + 2 * weights  # a checkpoint's copy of the weights, and the moments when offloaded
     checkpoints = CHECKPOINTS * weights * 3  # each holds the weights and AdamW's two moments
     reads = min(pieces, planned) if pieces else planned
+    cached = max(0, min(int(cached_pieces or 0), reads))
     cap, why, available, hard = None, "", 0, 0
     for resource, free in (("disk", profile.disk_free), ("ram", profile.ram_free)):
         if free is None:
             continue
         room = free - (checkpoints + HEADROOM if resource == "disk" else host)
         for chars in ((chars_per_piece, CORPUS_CHARS) if resource == "disk" else (0,)):  # a budgeted read may overshoot by up to CORPUS_CHARS a token
-            per_token = TEXT_COPIES * chars + DISK_BYTES_PER_TOKEN if resource == "disk" else RESIDENT_BYTES_PER_TOKEN
-            allowed = max(0, int(room / per_token))
+            text_bytes = TEXT_COPIES * chars
+            allowed = max(0, _disk_tokens(room, text_bytes, cached)) if resource == "disk" else max(0, int(room / RESIDENT_BYTES_PER_TOKEN))
             if allowed >= reads:
                 break
         else:
             if cap is None or allowed < cap:
                 cap, why, available = allowed, resource, free
-                hard = int(floor_tokens * per_token + (checkpoints + HEADROOM if resource == "disk" else host))
+                hard = int((_disk_cost(floor_tokens, text_bytes, cached) + checkpoints + HEADROOM) if resource == "disk"
+                           else floor_tokens * RESIDENT_BYTES_PER_TOKEN + host)
     if cap is not None:
         if cap < min(floor_tokens, reads):
             out.blocker = {"resource": why, "needed": hard, "available": int(available)}
@@ -402,11 +422,11 @@ def fit_solo(config, profile, *, share=1., pieces=None, chars_per_piece=4., toke
 RECORD = "fit"  # the job param that remembers what was asked for, so the queue can fit it again to the machine it starts on
 
 
-def record(fit, config, token_budget, *, window_hours, keep_mine, speed, pieces, chars_per_piece):
+def record(fit, config, token_budget, *, window_hours, keep_mine, speed, pieces, chars_per_piece, cached_pieces=0):
     """`params["fit"]` for a job built from `fit`: the settings as the person declared them (`config`, `token_budget`), everything the
     fit read besides the machine, and what it said. The queue fits the declared settings again just before the job starts."""
     return {"declared": {"config": config, "token_budget": token_budget}, "window_hours": window_hours, "keep_mine": keep_mine, "speed": speed,
-            "pieces": pieces, "chars_per_piece": chars_per_piece, "notes": [n.to_dict() for n in fit.notes], "scaled": fit.changed}
+            "pieces": pieces, "chars_per_piece": chars_per_piece, "cached_pieces": cached_pieces, "notes": [n.to_dict() for n in fit.notes], "scaled": fit.changed}
 
 
 def refit(params, profile, share, remote=False):
@@ -425,7 +445,8 @@ def refit(params, profile, share, remote=False):
     return fit_solo(config, profile, share=share, pieces=seen.get("pieces") or params.get("pieces_per_pass"),
                     chars_per_piece=seen.get("chars_per_piece") or 4., token_budget=budget,
                     window_hours=seen.get("window_hours") or DEFAULT_WINDOW_HOURS, speed=None if remote else seen.get("speed"),
-                    keep_mine=bool(seen.get("keep_mine")), fixed_architecture=bool(params.get("init_from")))
+                    keep_mine=bool(seen.get("keep_mine")), fixed_architecture=bool(params.get("init_from")),
+                    cached_pieces=seen.get("cached_pieces") or 0)
 
 
 def applied(params, fit):
