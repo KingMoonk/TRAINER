@@ -17,6 +17,7 @@ import { LrCard } from "./lr-card";
 import { ScalingCard } from "./scaling-card";
 import { SizingCard } from "./sizing-card";
 import { TrainCard } from "./train-card";
+import { Disclosure } from "@/components/disclosure";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 
 export default function PretrainingPage() {
@@ -129,17 +130,18 @@ export default function PretrainingPage() {
           <Skeleton className="mt-1 h-6 w-72" />
         ) : (
           <p className="mt-1 text-base" data-testid="model-line">
-            {plan.data.version ? `Version ${plan.data.version} · from the Network designer` : T.noDesign}
+            {plan.data.version ? `Version ${plan.data.version} · from Build your model` : T.noDesign}
           </p>
         )}
       </div>
 
       <SetsCard sets={sets.data} loading={sets.isLoading} chosen={ids} onToggle={toggle} />
-      <CollectionCard kind="text" description={T.collectionDesc} />
+      <Disclosure title="Download more text" testId="collection-disclosure">
+        <CollectionCard kind="text" description={T.collectionDesc} />
+      </Disclosure>
       <EnoughCard plan={plan.data} estimating={estimating} />
       <BatchesCard plan={plan.data} preview={cached.data} estimating={estimating} rows={rows} savedRows={saved} hold={hold} chat={chat} onRows={setRows} onHold={setHold} onChat={setChat} />
       <SizingCard plan={plan.data} estimating={estimating} hours={hours} onHours={setHours} chosenSteps={chosenSteps} onUseSteps={setChosenSteps} />
-      <ScalingCard plan={plan.data} keepMine={keepMine} onKeepMine={setKeepMine} />
       <TrainCard
         plan={plan.data}
         body={body}
@@ -154,7 +156,10 @@ export default function PretrainingPage() {
           setLength(next);
         }}
       />
-      <LrCard version={version} spec={current?.spec ?? null} />
+      <Disclosure title="Advanced: learning rate and scaling" testId="advanced-disclosure" reveal={plan.data?.scaling?.refusal}>
+        <ScalingCard plan={plan.data} keepMine={keepMine} onKeepMine={setKeepMine} />
+        <LrCard version={version} spec={current?.spec ?? null} />
+      </Disclosure>
     </main>
   );
 }

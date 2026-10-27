@@ -120,3 +120,16 @@ test("Add to the queue posts the job the plan built and says when it starts", as
   ]);
   await expect(page.getByTestId("queue-line")).toHaveText("Queued. Starts after Version 1 catch-up (about 3 min).");
 });
+
+test("the advanced and download cards start closed and open on their summary", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/pretraining/");
+  await expect(page.getByTestId("queue-line")).toBeVisible();
+  await expect(page.getByTestId("model-line")).toHaveText("Version 2 · from Build your model");
+  await expect(page.getByRole("button", { name: "Find a learning rate" })).toBeHidden();
+  await page.getByText("Advanced: learning rate and scaling").click();
+  await expect(page.getByRole("button", { name: "Find a learning rate" })).toBeVisible();
+  await expect(page.getByTestId("collection-disclosure")).not.toHaveAttribute("open", "");
+  await page.getByText("Download more text").click();
+  await expect(page.getByTestId("collection-disclosure")).toHaveAttribute("open", "");
+});
