@@ -39,6 +39,7 @@ export const ROUTES: Route[] = [
   { route: "run_view", href: "/runs/view", area: "train", title: "Run", lead: "One run in detail: its rounds, its loss, and each machine's part.", hidden: true, parent: "runs" },
   { route: "chat", href: "/chat", area: "eval", title: "Chat", lead: "Talk to any trained version. Compare two to see what a change really did." },
   { route: "benchmark", href: "/benchmark", area: "eval", title: "Benchmark", lead: "Score a version on a fixed set of questions." },
+  { route: "export", href: "/export", area: "eval", title: "Export", lead: "Write a trained version to a file other tools can open." },
   { route: "machines", href: "/cluster/machines", area: "machines", title: "Machines", lead: "What is running where on the machines this one works with, and who may call this computer." },
   { route: "cluster_training", href: "/cluster/training", area: "machines", title: "Training", tabTitle: "Cluster training", lead: "Start a training run that spreads over several machines, and watch each one: its round, its speed, and why one fell behind." },
 ];

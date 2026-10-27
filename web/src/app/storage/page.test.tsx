@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 import { mockApi } from "@/test/network";
 import { renderPage } from "@/test/render";
 import StoragePage from "./page";
@@ -8,10 +8,9 @@ import StoragePage from "./page";
 // The Storage page against a mocked API (the component tier of tests/storage.spec.ts; the pure formatters are covered in logic.test.ts).
 
 type Use = { items: number; bytes: number };
-type ExportRow = { number: number; name: string; gguf_problem: string };
 
 /** GET /storage answers by the `days` and `data` asked; every POST /storage/clean is recorded and, unless refused, empties the disk. */
-function server(use: (days: number | null, data: boolean) => Use, exportsList: ExportRow[] = [], extra: Parameters<typeof mockApi>[0] = {}) {
+function server(use: (days: number | null, data: boolean) => Use, extra: Parameters<typeof mockApi>[0] = {}) {
   const state = { use, refuse: "", cleaned: [] as unknown[] };
   mockApi({
     "GET /storage": ({ search }) => {
@@ -19,7 +18,6 @@ function server(use: (days: number | null, data: boolean) => Use, exportsList: E
       return { body: state.use(q.has("days") ? Number(q.get("days")) : null, q.get("data") === "true") };
     },
     "GET /storage/free": { body: { bytes: 120e9 } },
-    "GET /storage/exports": { body: exportsList },
     "GET /storage/leftovers": { body: [] },
     "POST /storage/clean": ({ body }) => {
       state.cleaned.push(body);
@@ -90,63 +88,13 @@ describe("Storage page", () => {
     expect(screen.getByText("This frees 1.0 MB in 1 item")).toBeVisible();
   });
 
-  test("nothing trained: the export card says so", async () => {
-    server(() => ({ items: 0, bytes: 0 }));
-    renderPage(<StoragePage />, { route: "/storage/" });
-    expect(await screen.findByText(/Nothing to export yet\./)).toBeVisible();
-    expect(await screen.findByText("Nothing to delete")).toBeVisible();
-  });
-
-  test("a version GGUF cannot hold greys out its button and says why; the others download", async () => {
-    const why = "GGUF export covers GPT-2's architecture only.";
-    const asked: string[] = [];
-    server(
-      bySize,
-      [
-        { number: 1, name: "plain", gguf_problem: "" },
-        { number: 2, name: "exotic", gguf_problem: why },
-      ],
-      {
-        "GET /versions/1/export": ({ search }) => {
-          asked.push(search);
-          return { text: "zip", headers: { "content-disposition": 'attachment; filename="plain-hf.zip"' } };
-        },
-        "GET /versions/2/export": { status: 409, body: { detail: "Version 2 has no checkpoint yet." } },
-      },
-    );
-    // jsdom cannot make object URLs or follow a download link: record the link the page clicks.
-    URL.createObjectURL = vi.fn(() => "blob:export");
-    URL.revokeObjectURL = vi.fn();
-    const downloads: string[] = [];
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
-      downloads.push(this.download);
-    });
-
-    const user = userEvent.setup();
-    renderPage(<StoragePage />, { route: "/storage/" });
-    const list = await within(screen.getByRole("main")).findByRole("list"); // the toaster is a list too
-    const rows = within(list).getAllByRole("listitem");
-    expect(rows).toHaveLength(2);
-    expect(within(rows[1]).getByRole("button", { name: "GGUF" })).toBeDisabled();
-    expect(within(rows[1]).getByText(why)).toBeVisible();
-    expect(within(rows[0]).getByRole("button", { name: "GGUF" })).toBeEnabled();
-
-    await user.click(within(rows[0]).getByRole("button", { name: "GGUF" }));
-    await waitFor(() => expect(downloads).toEqual(["plain-hf.zip"]));
-    expect(asked[0]).toContain("kind=gguf");
-
-    await user.click(within(rows[1]).getByRole("button", { name: "Hugging Face" }));
-    expect(await screen.findByText("Version 2 has no checkpoint yet.")).toBeVisible();
-    expect(downloads).toHaveLength(1);
-  });
-
   test("leftovers are listed with their sizes and only the ticked ones are removed, after asking", async () => {
     const rows = [
       { id: "runs/queue_a-before-restart", kind: "interrupted", name: "queue_a-before-restart", belongs_to: "Version 1 from scratch", bytes: 5e8, shared: 2e9 },
       { id: "runs/.snapshots/abc.jsonl", kind: "snapshot", name: "abc", belongs_to: "No run uses this training data", bytes: 2e9, shared: 0 },
     ];
     const removed: unknown[] = [];
-    server(() => ({ items: 0, bytes: 0 }), [], {
+    server(() => ({ items: 0, bytes: 0 }), {
       "GET /storage/leftovers": { body: rows },
       "POST /storage/leftovers/remove": ({ body }) => {
         removed.push(body);

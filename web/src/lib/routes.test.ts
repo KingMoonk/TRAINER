@@ -55,17 +55,17 @@ describe("the five sidebar areas", () => {
     expect(pagesIn("models")).toEqual(["builder", "quicktest", "compare"]);
     expect(pagesIn("data")).toEqual(["your_data", "collect", "storage"]);
     expect(pagesIn("train")).toEqual(["pretraining", "post_training", "runs", "new_run", "queue", "training_run", "run_view"]);
-    expect(pagesIn("eval")).toEqual(["chat", "benchmark"]);
+    expect(pagesIn("eval")).toEqual(["chat", "benchmark", "export"]);
     expect(pagesIn("machines")).toEqual(["machines", "cluster_training"]);
   });
 
-  test("the section tabs are the visible pages, nine in all", () => {
+  test("the section tabs are the visible pages, ten in all", () => {
     expect(tabsIn("models")).toEqual(["builder"]);
     expect(tabsIn("data")).toEqual(["your_data"]);
     expect(tabsIn("train")).toEqual(["pretraining", "post_training", "runs"]);
-    expect(tabsIn("eval")).toEqual(["chat", "benchmark"]);
+    expect(tabsIn("eval")).toEqual(["chat", "benchmark", "export"]);
     expect(tabsIn("machines")).toEqual(["machines", "cluster_training"]);
-    expect(ROUTES.filter((r) => !r.hidden)).toHaveLength(9);
+    expect(ROUTES.filter((r) => !r.hidden)).toHaveLength(10);
   });
 
   test("the hidden pages are the ones reached from elsewhere, each with a visible parent in its own area", () => {
