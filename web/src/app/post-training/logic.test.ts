@@ -1,7 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api";
 import { T, fill } from "./copy";
-import { count, errorText, firstOpenRound, gateState, roundBlocker, rowText, spreadText, stepLine, type Status } from "./logic";
+import { count, errorText, firstOpenRound, gateState, roundBlocker, rowText, settingValue, spreadText, stepLine, type Status } from "./logic";
+
+describe("settingValue", () => {
+  const steps = { min: 1, max: 5000, integer: true };
+  it("is null when empty so the server default applies", () => {
+    expect(settingValue("", steps)).toBeNull();
+    expect(settingValue("  ", steps)).toBeNull();
+  });
+  it("reads a number inside the bounds", () => {
+    expect(settingValue("50", steps)).toBe(50);
+    expect(settingValue("0.7", { min: 0.1, max: 2, integer: false })).toBe(0.7);
+  });
+  it("ignores text, fractions of a whole setting and numbers out of bounds", () => {
+    expect(settingValue("abc", steps)).toBeNull();
+    expect(settingValue("2.5", steps)).toBeNull();
+    expect(settingValue("0", steps)).toBeNull();
+    expect(settingValue("9000", steps)).toBeNull();
+  });
+});
 
 const rounds = (statuses: Record<string, string>) => ({ rounds: Object.fromEntries(Object.entries(statuses).map(([k, status]) => [k, { status }])) }) as unknown as Status;
 

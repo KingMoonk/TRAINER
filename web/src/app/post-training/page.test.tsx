@@ -170,6 +170,22 @@ describe("Post-training page", () => {
     expect(state.imports).toHaveLength(1);
   });
 
+  test("round 2 settings are sent when typed and left out when empty", async () => {
+    const { state } = server({ "GET /jobs/*": ({ path }) => ({ body: job(path.split("/").pop()!, { ...idle, counts: { ...idle.counts, problems: 5 } }) }) });
+    const user = userEvent.setup();
+    renderPage(<PostTrainingPage />);
+    await user.click(await screen.findByRole("tab", { name: /Practice with checks/ }));
+    await user.click(await screen.findByText("Settings"));
+    const steps = screen.getByLabelText(/^Steps/);
+    expect(steps).toHaveAttribute("placeholder", "200");
+    expect(screen.getByLabelText(/^Prompts per step/)).toHaveAttribute("placeholder", "8");
+    await user.type(steps, "50");
+    await user.type(screen.getByLabelText(/^Temperature/), "0.7");
+    await user.click(screen.getByRole("button", { name: "Add to the queue" }));
+    await waitFor(() => expect(state.rounds).toHaveLength(1));
+    expect(state.rounds[0]).toEqual(expect.objectContaining({ round: 2, steps: 50, temperature: 0.7, group: null, prompts_per_step: null, max_tokens: null }));
+  });
+
   test("a round that has nothing to learn from yet says why and cannot be queued", async () => {
     server();
     const user = userEvent.setup();

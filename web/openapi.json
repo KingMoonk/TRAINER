@@ -9645,6 +9645,19 @@
       },
       "RoundRequest": {
         "properties": {
+          "group": {
+            "anyOf": [
+              {
+                "maximum": 32.0,
+                "minimum": 2.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          },
           "leash": {
             "default": "Medium",
             "enum": [
@@ -9671,11 +9684,50 @@
             "title": "Lora Rank",
             "type": "integer"
           },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "maximum": 2048.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens"
+          },
+          "prompts_per_step": {
+            "anyOf": [
+              {
+                "maximum": 64.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompts Per Step"
+          },
           "round": {
             "maximum": 4.0,
             "minimum": 1.0,
             "title": "Round",
             "type": "integer"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "maximum": 5000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
           },
           "teacher": {
             "default": "version",
@@ -9696,6 +9748,19 @@
               }
             ],
             "title": "Teacher Version"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 2.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temperature"
           },
           "version": {
             "anyOf": [
