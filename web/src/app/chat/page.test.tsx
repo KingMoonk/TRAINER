@@ -64,6 +64,27 @@ describe("Chat page", () => {
     await waitFor(() => expect(screen.getAllByText("The model ran out of memory.")).toHaveLength(2));
   });
 
+  test("scores sit in a closed disclosure, there is no retry while the best version loads fine, and no designer link", async () => {
+    mockVersions([version(1)]);
+    renderPage(<Page />, { route: "/chat" });
+    await screen.findByText("Version 1 is best");
+    expect(screen.queryByRole("button", { name: "Check best again" })).toBeNull();
+    expect(screen.queryByRole("link", { name: /designer/i })).toBeNull();
+    const summary = screen.getByText("Scores for this version");
+    const details = summary.closest("details")!;
+    expect(details.open).toBe(false);
+    expect(details).toHaveTextContent("Answers prompts");
+    expect(details).toHaveTextContent("Learning from examples in the question");
+  });
+
+  test("a failed best check offers a retry", async () => {
+    mockVersions([version(1)], {
+      "POST /versions/best": { body: { id: "b", kind: "versions", status: "failed", result: null, progress: "", error: "Scoring failed", created_at: 0 } },
+    });
+    renderPage(<Page />, { route: "/chat" });
+    expect(await screen.findByRole("button", { name: "Check best again" })).toBeVisible();
+  });
+
   test("a correction is saved with the conversation up to the last message", async () => {
     let saved: unknown;
     mockVersions([version(1)], {
