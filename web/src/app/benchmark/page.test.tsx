@@ -89,6 +89,14 @@ describe("Benchmark page", () => {
     expect(screen.queryByRole("button", { name: "Check the rest" })).not.toBeInTheDocument();
   });
 
+  test("does not show training speed (it lives on Machines)", async () => {
+    const calls = mockApi(read(() => track(true)));
+    renderPage(<BenchmarkPage />);
+    expect(await screen.findByText("Every trained version has been checked.")).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Training speed" })).not.toBeInTheDocument();
+    expect(calls.some((c) => c.path === "/mlperf/board")).toBe(false);
+  });
+
   test("shows the suite as a trend across a lineage, with the paired test beside each step and what was left out", async () => {
     const point = (number: number, tokens: number, bpc: number, accuracy: number, extra: Record<string, unknown> = {}) => ({
       number,

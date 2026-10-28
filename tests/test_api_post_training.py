@@ -144,8 +144,23 @@ class PostTrainingApiTest(unittest.TestCase):
         self.assertEqual(self.queued()[-1].params["config"], {"lora": None})
         self.client.post("/post-training/rounds", json={"round": 2})
         self.assertNotIn("config", self.queued()[-1].params)
+        self.services.post_training = lambda version: {"counts": {"pairs": 20}}
         self.client.post("/post-training/rounds", json={"round": 4, "leash": "Far"})
         self.assertEqual(self.queued()[-1].params["beta"], .02)
+        self.services.post_training = lambda version: {"counts": {"pairs": 5}}
+        refused = self.client.post("/post-training/rounds", json={"round": 4})
+        self.assertEqual(refused.json()["detail"], "Rate at least 20 pairs in Chat first: fewer are memorised, not learned.")
+        del self.services.post_training
+
+    def test_round_two_settings_are_queued_and_bounded(self):
+        version = trained(self.services)
+        queued = self.client.post("/post-training/rounds", json={"round": 2, "steps": 50, "group": 4, "prompts_per_step": 6, "temperature": .7, "max_tokens": 32, "kl": 0})
+        self.assertEqual(queued.status_code, 200, queued.text)
+        self.assertEqual(self.queued()[-1].params, {"round": 2, "version": version.number, "checkpoint": "best.npz", "steps": 50, "group": 4,
+                                                    "prompts_per_step": 6, "temperature": .7, "max_tokens": 32, "kl": 0})
+        self.client.post("/post-training/rounds", json={"round": 2})
+        self.assertEqual(self.queued()[-1].params, {"round": 2, "version": version.number, "checkpoint": "best.npz"})   # the round's own defaults apply
+        self.assertEqual(self.client.post("/post-training/rounds", json={"round": 2, "group": 1}).status_code, 422)
 
     def test_a_correction_round_goes_to_the_front(self):
         teacher = trained(self.services)
@@ -169,7 +184,7 @@ class PostTrainingApiTest(unittest.TestCase):
         trained(self.services)
         self.services.post_training = lambda version: {"counts": {}}
         for number, sentence in ((1, "Add conversations in Your data first."), (2, "Make problems a rule can check first."),
-                                 (3, "There is no other trained version to learn from yet."), (4, "Rate at least 2 pairs in Chat first.")):
+                                 (3, "There is no other trained version to learn from yet."), (4, "Rate at least 20 pairs in Chat first: fewer are memorised, not learned.")):
             self.assertEqual(self.client.post("/post-training/rounds", json={"round": number}).json()["detail"], sentence)
         self.assertEqual(self.client.post("/post-training/rounds", json={"round": 5}).status_code, 422)
         del self.services.post_training

@@ -80,7 +80,7 @@ export const T = {
   curveLabel: "Expected validation error by step",
   useSteps: "Use {steps} steps",
   usingSteps: "Using {steps} steps instead of the length chosen below.",
-  openDesigner: "Open the Network designer",
+  openDesigner: "Open Build your model",
   addQueue: "Add to the queue",
   queueNote:
     "Runs after the current job on this computer, or right away if nothing is running. Chat keeps {parent} until {version} beats it on held-back text.",
@@ -109,7 +109,7 @@ export const T = {
   lrFlat: "The error did not fall during the test, so there is no suggestion. More text may help.",
   lrStopped: "Stopped. Nothing was saved.",
   lrFailed: "The test could not run: {error}",
-  lrNoDesign: "Save a design in the Network designer first.",
+  lrNoDesign: "Save a design in Build your model first.",
   lrTitle: "Learning rate",
   scalingTitle: "Fitted to this computer",
   scalingDesc: "What this computer can train, measured now. Where the run as set would not fit, it was scaled down, and every change is listed here.",

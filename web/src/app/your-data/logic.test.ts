@@ -59,10 +59,10 @@ describe("shownLine", () => {
 });
 
 describe("collectionShown", () => {
-  it("shows the recommended collection while the kind has no sets", () => {
-    expect(collectionShown(summary())).toBe(true);
-    expect(collectionShown(summary(["a", 1]))).toBe(false);
-    expect(collectionShown(undefined)).toBe(false);
+  it("shows the recommended collection as a card while the kind has no sets, tucks it away once there are some", () => {
+    expect(collectionShown(summary())).toBe("card");
+    expect(collectionShown(summary(["a", 1]))).toBe("tucked");
+    expect(collectionShown(undefined)).toBeNull();
   });
 });
 

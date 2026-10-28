@@ -8,7 +8,7 @@ import { api, unwrap } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ROUNDS, STATUS_TEXT, T } from "./copy";
 import { GateCard } from "./gate-card";
-import { count, errorText, firstOpenRound, roundBlocker, type Gate, type JobOut, type Status } from "./logic";
+import { ROUND2_SETTINGS, count, errorText, firstOpenRound, roundBlocker, settingValue, type Gate, type JobOut, type Status } from "./logic";
 import { BaseWarning, KeptCard } from "./kept-card";
 import { baseWarning, isKept, type KeptGate } from "./kept-logic";
 import { LoopCard } from "./loop-card";
@@ -16,6 +16,7 @@ import { RoundCard, type Choices, type Live } from "./round-card";
 import { ImportCard, RowsCard, VersionsCard } from "./side-cards";
 import { useEventStream, useJob } from "./use-events";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
+import { Disclosure } from "@/components/disclosure";
 import { optionBox } from "@/components/option-box";
 
 const REFRESH_MS = 600;
@@ -23,7 +24,7 @@ const REFRESH_MS = 600;
 export default function PostTrainingPage() {
   const queryClient = useQueryClient();
   const [picked, setPicked] = useState<number | null>(null);
-  const [choices, setChoices] = useState<Choices>({ lora: null, rank: 8, teacher: "version", teacherVersion: null, leash: "Medium" });
+  const [choices, setChoices] = useState<Choices>({ lora: null, rank: 8, teacher: "version", teacherVersion: null, leash: "Medium", method: "practice", round2: { steps: "", prompts_per_step: "", group: "", temperature: "", max_tokens: "", kl: "" } });
   const [live, setLive] = useState<Live>({});
   const [liveGates, setLiveGates] = useState<Record<number, Gate>>({});
 
@@ -128,6 +129,10 @@ export default function PostTrainingPage() {
             teacher: choices.teacher,
             teacher_version: choices.teacher === "version" ? choices.teacherVersion : null,
             leash: choices.leash,
+            method: selected === 2 ? choices.method : "practice",
+            ...(selected === 2
+              ? Object.fromEntries(ROUND2_SETTINGS.map((spec) => [spec.key, settingValue(choices.round2[spec.key], spec)]))
+              : {}),
           },
         }),
       ),
@@ -229,11 +234,15 @@ export default function PostTrainingPage() {
         </>
       )}
 
-      <LoopCard version={version?.number} hasCheckpoint={!!version?.best_checkpoint} />
+      <Disclosure title={T.importTitle} defaultOpen={versionsQuery.isSuccess && !versions?.some((v) => v.best_checkpoint)} testId="import-disclosure">
+        <ImportCard ranks={options?.lora_ranks ?? []} onImported={() => setPicked(null)} />
+      </Disclosure>
 
-      <VersionsCard versions={versions} startsFrom={version?.number} loading={versionsQuery.isLoading} />
-      <ImportCard ranks={options?.lora_ranks ?? []} onImported={() => setPicked(null)} />
-      <RowsCard />
+      <Disclosure title={T.advancedTitle} hint={T.advancedHint} testId="advanced-disclosure">
+        <LoopCard version={version?.number} hasCheckpoint={!!version?.best_checkpoint} />
+        <VersionsCard versions={versions} startsFrom={version?.number} loading={versionsQuery.isLoading} />
+        <RowsCard />
+      </Disclosure>
     </main>
   );
 }

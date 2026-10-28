@@ -43,7 +43,7 @@ export function roundBlocker(
   const need: Record<number, [string, number, string]> = {
     1: ["conversations", 1, "Add conversations in Your data first."],
     2: ["problems", 1, "Make problems a rule can check first."],
-    4: ["pairs", 2, "Rate at least 2 pairs in Chat first."],
+    4: ["pairs", 20, "Rate at least 20 pairs in Chat first: fewer are memorised, not learned."],
   };
   const [key, least, why] = need[round];
   return (counts[key] ?? 0) >= least ? null : why;
@@ -86,6 +86,25 @@ export function errorText(error: unknown): string {
     return body;
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+/** A Round 2 setting the person can change, with the default the server applies when it is left empty (studio_rl.ROUND2_DEFAULTS). */
+export const ROUND2_SETTINGS = [
+  { key: "steps", label: "Steps", hint: "Updates to the model. More steps learn more and take longer.", fallback: 200, min: 1, max: 5000, integer: true },
+  { key: "prompts_per_step", label: "Prompts per step", hint: "Different prompts trained on in each step. Prompts whose answers all pass or all fail are swapped for others.", fallback: 8, min: 1, max: 64, integer: true },
+  { key: "group", label: "Answers per prompt", hint: "How many answers it writes to each prompt, to compare them with each other.", fallback: 8, min: 2, max: 32, integer: true },
+  { key: "temperature", label: "Temperature", hint: "How adventurous its answers are. Higher gives more varied answers to compare.", fallback: 1, min: 0.1, max: 2, integer: false },
+  { key: "max_tokens", label: "Longest answer (tokens)", hint: "Empty sizes it by the rule being checked.", fallback: null, min: 1, max: 2048, integer: true },
+  { key: "kl", label: "Stay close to the start", hint: "How hard it is pulled back to the weights the round started from, so a long round does not drift. 0 turns it off; empty uses 0.02 (0 for a LoRA model).", fallback: 0.02, min: 0, max: 1, integer: false },
+] as const;
+export type Round2Key = (typeof ROUND2_SETTINGS)[number]["key"];
+
+/** The number typed into a Round 2 setting, or null when it is empty or outside what the server accepts (then the default applies). */
+export function settingValue(text: string, spec: { min: number; max: number; integer: boolean }): number | null {
+  if (!text.trim()) return null;
+  const value = Number(text);
+  if (!Number.isFinite(value) || value < spec.min || value > spec.max || (spec.integer && !Number.isInteger(value))) return null;
+  return value;
 }
 
 /** One row of the data behind a round, as short text: a string as is, an object as 'key: value' lines. */

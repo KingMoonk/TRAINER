@@ -4,10 +4,25 @@ For RULES the prompt text carries the problem (e.g. 'Reverse: groundwork'), so t
 KEYED rules compare the answer with a key stored in params["answer"] (imported datasets such as GSM8K or ARC);
 they have no generator. Copy and reverse are case-sensitive; surrounding whitespace is ignored everywhere.
 """
+import random
 import re
 
-WORDS = ["groundwork", "mirror", "harbor", "lantern", "meadow", "pebble", "thunder", "orchard", "ribbon", "window",
+_SEED_WORDS = ["groundwork", "mirror", "harbor", "lantern", "meadow", "pebble", "thunder", "orchard", "ribbon", "window",
          "garden", "puzzle", "violin", "anchor", "bridge", "candle", "forest", "marble", "silver", "tomorrow"]
+
+
+def _word_pool(size=600):
+    """The seed words plus pronounceable made-up ones (consonant-vowel syllables from a fixed seed), so a held-back
+    copy/reverse/count prompt rarely repeats a training one. Deterministic: the pool is the same on every run."""
+    rng, pool = random.Random(822), dict.fromkeys(_SEED_WORDS)
+    consonants, vowels = "bcdfghklmnprstvz", "aeiou"
+    while len(pool) < size:
+        pool[("".join(rng.choice(consonants) + rng.choice(vowels) for _ in range(rng.randint(3, 4))) + rng.choice(["", "n", "r", "s", "l"]))] = None
+    return list(pool)
+
+
+WORDS = _word_pool()
+MIN_LENGTH = 8
 TERMINAL = ".!?…"
 CLOSERS = "\"')]}”’"
 PAIRS = {"(": ")", "[": "]", "{": "}", "“": "”"}
@@ -25,6 +40,30 @@ def decimal(text):
     """The last number in text (commas ignored, decimals kept) as a float, else None."""
     found = DECIMAL.findall(str(text).replace(",", ""))
     return float(found[-1]) if found else None
+
+
+VALUE = re.compile(r"(-?\d+(?:\.\d+)?)(?:/(\d+))?%?")
+ANSWER_LINE = re.compile(r"answer\s*(?:is)?\s*:", re.I)
+
+
+def answer_value(text):
+    """The number a worked answer ends on, as a float, else None. A final 'Answer: <number>' wins; without one the
+    last number in the text counts. Commas and the unicode minus are understood, 'a/b' is a fraction and '50%' is 50."""
+    text = str(text).replace("−", "-").replace(",", "")
+    marks = list(ANSWER_LINE.finditer(text))
+    if marks:
+        m = VALUE.search(text, marks[-1].end())
+        if m:
+            return _value(m)
+    found = list(VALUE.finditer(text))
+    return _value(found[-1]) if found else None
+
+
+def _value(m):
+    top, bottom = float(m.group(1)), m.group(2)
+    if bottom is None:
+        return top
+    return top / int(bottom) if int(bottom) else None
 
 
 def _tail(prompt, label):
@@ -46,7 +85,18 @@ def _ends_cleanly(answer):
         return False
     core = text.rstrip(CLOSERS)
     # an apostrophe inside a word is fine; a lone opening single quote is not checked
-    return bool(core) and core[-1] in TERMINAL
+    return bool(core) and core[-1] in TERMINAL and _is_sentence(text)
+
+
+def _is_sentence(text):
+    """Not a degenerate answer: at least two words, a letter, and no letter or digit three times in a row or a word three times in a row."""
+    words = text.split()
+    if len(words) < 2 or not re.search(r"[^\W\d_]", text):
+        return False
+    if re.search(r"([^\W_])\1\1", text):
+        return False
+    keys = [re.sub(r"\W", "", w).lower() for w in words]
+    return not any(keys[i] and keys[i] == keys[i + 1] == keys[i + 2] for i in range(len(keys) - 2))
 
 
 def _copy(prompt, answer):
@@ -62,7 +112,14 @@ def _reverse(prompt, answer):
 def _sort(prompt, answer):
     want = _tail(prompt, r"Sort these (?:letters|words|numbers)")
     got = [t for t in re.split(r"[\s,]+", answer.strip()) if t]
-    return want is not None and bool(got) and got == sorted(want.split())
+    if want is None or not got:
+        return False
+    items = want.split()
+    try:
+        numbers = [float(t) for t in items]
+    except ValueError:
+        return got == sorted(items)
+    return got == sorted(items, key=lambda t: numbers[items.index(t)])
 
 
 def _count(prompt, answer):
@@ -77,7 +134,11 @@ def _small_addition(prompt, answer):
 
 def _max_length(prompt, answer):
     m = re.search(r"under (\d+) characters", prompt)
-    return bool(m) and 0 < len(answer.strip()) < int(m.group(1))
+    if not m:
+        return False
+    text, limit = answer.strip(), int(m.group(1))
+    # a real answer, not "x": at least two words and a handful of characters (never more than half the limit)
+    return min(MIN_LENGTH, limit // 2) <= len(text) < limit and len(text.split()) >= 2
 
 
 def _ends(prompt, answer):
@@ -87,7 +148,7 @@ def _ends(prompt, answer):
 CHECKS = {"copy": _copy, "reverse": _reverse, "sort": _sort, "count": _count, "small_addition": _small_addition,
           "max_length": _max_length, "ends_cleanly": _ends}
 def _final_number(prompt, answer, params):
-    want, got = decimal(params.get("answer", "")), decimal(answer)
+    want, got = decimal(params.get("answer", "")), answer_value(answer)
     return want is not None and got is not None and abs(got - want) <= 1e-6 * max(1., abs(want))
 
 
@@ -107,7 +168,8 @@ CHECKABLE = RULES + KEYED
 # Tokens an answer may use before it is cut off. Most rules check a short answer; the rest (a sentence, a length
 # limit, an unknown rule or a free prompt) get room to finish, because a cut-off answer fails ends_cleanly and max_length.
 DEFAULT_MAX_TOKENS = 96
-MAX_TOKENS = {rule: 32 for rule in ("copy", "reverse", "sort", "count", "small_addition", "final_number", "choice")}
+MAX_TOKENS = {rule: 32 for rule in ("copy", "reverse", "sort", "count", "small_addition", "choice")}
+MAX_TOKENS["final_number"] = 160   # room to show brief working before 'Answer: <number>'
 
 
 def max_tokens(rule=None):

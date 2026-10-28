@@ -11,7 +11,7 @@ import YourDataPage from "./page";
 const job = (id: string, kind: string, result: unknown) => ({ id, kind, status: "done", progress: "", fraction: null, result, error: "", created_at: 0, started_at: 0, finished_at: 1 });
 
 const row = (id: string, a: string, b: string, status = "In use") => ({ id, a, b, status, dataset: "Your files" });
-const summary = (kind: string, rows: ReturnType<typeof row>[], sets: { id: string; name: string; count: number }[]) => ({
+const summary = (kind: string, rows: ReturnType<typeof row>[], sets: { id: string; name: string; count: number }[], duplicates = 0) => ({
   kind,
   count: rows.length,
   characters: 100,
@@ -19,7 +19,7 @@ const summary = (kind: string, rows: ReturnType<typeof row>[], sets: { id: strin
   count_line: `${rows.length} ${kind === "text" ? "documents" : "conversations"} · ${sets.length} sets`,
   sets,
   rules: {},
-  near_duplicates: 0,
+  near_duplicates: duplicates,
   held_back: 0,
   scanned: rows.length,
   rows,
@@ -27,7 +27,7 @@ const summary = (kind: string, rows: ReturnType<typeof row>[], sets: { id: strin
 
 const source = (id: string, name: string, state: string, extra: object = {}) => ({ id, name, size: "64 MB", records: "77,941 stories", state, completed: 0, total: 0, error: "", ...extra });
 
-function server() {
+function server(duplicates = 0) {
   const state = { uploads: [] as Blob[], paths: [] as string[][], downloads: [] as unknown[], imported: false };
   const conversations = () =>
     state.imported
@@ -41,7 +41,7 @@ function server() {
       const kind = kindOf(path);
       const rows = kind === "conversations" ? conversations() : [];
       const sets = kind === "conversations" ? [{ id: "d1", name: "Your conversations", count: rows.length }, ...(state.imported ? [{ id: "d2", name: "Imported set", count: 1 }] : [])] : [];
-      return { status: 202, body: job(`s-${kind}-${state.imported}`, "data", summary(kind, rows, sets)) };
+      return { status: 202, body: job(`s-${kind}-${state.imported}`, "data", summary(kind, rows, sets, duplicates)) };
     },
     "GET /data/*/rows": ({ path }) => {
       const kind = kindOf(path);
@@ -76,11 +76,42 @@ describe("Your data page", () => {
     renderPage(<YourDataPage />, { route: "/your-data/?kind=conversations" });
     const toolbar = await screen.findByRole("toolbar", { name: "Data actions" });
     for (const name of ["Write a conversation", "Import files", "Make extra data"]) expect(within(toolbar).getByRole("button", { name })).toBeVisible();
-    expect(within(toolbar).getByRole("button", { name: /Near-duplicates/ })).toBeDisabled();
+    expect(within(toolbar).queryByRole("button", { name: /Near-duplicates/ })).toBeNull();
     await waitFor(() => expect(screen.getByTestId("stat-total")).toHaveTextContent("2"));
     expect(screen.queryByTestId("row-c1")).toBeNull();
     expect(screen.queryByTestId("detail")).toBeNull();
     expect(screen.getByRole("button", { name: "Browse examples" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("the near-duplicates button shows once some are found", async () => {
+    server(3);
+    renderPage(<YourDataPage />, { route: "/your-data/?kind=conversations" });
+    const toolbar = await screen.findByRole("toolbar", { name: "Data actions" });
+    expect(await within(toolbar).findByRole("button", { name: /Near-duplicates/ })).toBeEnabled();
+  });
+
+  test("with sets, the recommended collection sits in a closed Download more disclosure that stays mounted", async () => {
+    server();
+    renderPage(<YourDataPage />, { route: "/your-data/?kind=conversations" });
+    const more = await screen.findByTestId("download-more");
+    expect(more.tagName).toBe("DETAILS");
+    expect(more).not.toHaveAttribute("open");
+    expect(within(more).getByText("Download more")).toBeInTheDocument();
+    expect(await within(more).findByTestId("source-tinystories")).toBeInTheDocument();
+  });
+
+  test("with no sets, the recommended collection is the open card and there is no Download more", async () => {
+    server();
+    renderPage(<YourDataPage />, { route: "/your-data/?kind=text" });
+    expect(await screen.findByTestId("source-tinystories")).toBeVisible();
+    expect(screen.queryByTestId("download-more")).toBeNull();
+  });
+
+  test("the header links to Collect and Storage", async () => {
+    server();
+    renderPage(<YourDataPage />, { route: "/your-data/?kind=conversations" });
+    expect(await screen.findByRole("link", { name: "Collect in the background ›" })).toHaveAttribute("href", "/collect");
+    expect(screen.getByRole("link", { name: /^Storage/ })).toHaveAttribute("href", "/storage");
   });
 
   test("the set cards show each set's name, count and share of the total", async () => {

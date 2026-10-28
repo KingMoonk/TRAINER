@@ -36,7 +36,8 @@ from studio_core import atomic_json, messages_of, now, replace_file, uid
 from studio_model import (ASSISTANT, BOS, EOS, SYSTEM, USER, AdamW, LocalModel, ScratchTransformer, Tokenizer,
                           batch_arrays, load_checkpoint, samples_from)
 
-DPO_DEFAULTS = {"beta": .1, "learning_rate": 1e-4, "steps": 100, "batch_size": 4, "sft_weight": .2,
+# learning_rate and steps default to None: dpo_train sizes them from the model (full or LoRA) and the pair count (DPO_*).
+DPO_DEFAULTS = {"beta": .1, "learning_rate": None, "steps": None, "batch_size": 4, "sft_weight": .2,
                 "validation": .1, "eval_every": 10, "device": "auto", "seed": 7, "weight_decay": 0.,
                 "length_normalize": False, "loss_type": "dpo"}
 LOSS_TYPES = ("dpo", "ipo")
@@ -45,7 +46,14 @@ AUTO_DEFAULTS = {"rounds": 3, "prompts_per_round": 24, "dpo_steps": 60, "eval_pr
                  "extra_pairs": False, "both_orders": True, "keep_only_improvements": True, "replay": 200,
                  "gate_samples": 2, "win_margin": .05, "gate_temperature": .4, "tie_eps": .5, "max_failures": 8}
 ROLE_TOKENS = {"system": SYSTEM, "user": USER, "assistant": ASSISTANT}
-MIN_PAIRS_TO_TRAIN = 20
+MIN_PAIRS_TO_TRAIN = 20   # fewer human pairs than this are memorised, not learned: Round 4 refuses them
+DPO_LR_FULL, DPO_LR_LORA = 5e-6, 2e-5   # a preference step on a few pairs must stay small: 1e-4 memorises them
+DPO_EPOCHS, DPO_MAX_STEPS, DPO_MIN_VALIDATION = 3, 300, 2   # steps = ceil(3 x pairs / batch), capped; at least 2 pairs held back
+
+
+def dpo_steps(pairs, batch_size):
+    """Optimizer steps that show each pair about DPO_EPOCHS times, so a small set is not repeated into memory."""
+    return max(1, min(DPO_MAX_STEPS, math.ceil(DPO_EPOCHS * pairs / max(1, batch_size))))
 
 DEFAULT_RUBRIC = [
     {"text": "The reply is correct for what was asked.", "weight": 3},
@@ -322,13 +330,20 @@ def prompts_from(examples):
 
 # --------------------------------------------------------------------------- DPO / IPO
 
-def _encode_pair(tokenizer, messages, response, context):
+def is_cut(tokenizer, text, max_tokens):
+    """True when a sampled answer ran into its token budget (a reply that stopped on its own is shorter than max_tokens - 1
+    once re-encoded), so it never ended and must not be trained with an end token."""
+    return len(tokenizer.encode(text)) >= int(max_tokens) - 1
+
+
+def _encode_pair(tokenizer, messages, response, context, eos=True):
+    """(inputs, targets). eos=False leaves off the end token: an answer cut off at its budget did not end there."""
     prefix = [BOS]
     for message in messages:
         if message["role"] in ROLE_TOKENS:
             prefix += [ROLE_TOKENS[message["role"]]] + tokenizer.encode(message["content"]) + [EOS]
     prefix.append(ASSISTANT)
-    answer = tokenizer.encode(response) + [EOS]
+    answer = tokenizer.encode(response) + ([EOS] if eos else [])
     window = context + 1
     # Keep the answer (what DPO scores) and as much recent prompt context as fits.
     answer = answer[:max(1, window - 8)]
@@ -436,10 +451,13 @@ def dpo_train(base_checkpoint, pairs, output_dir, config=None, emit=None, stop=N
     stop, pause = stop or threading.Event(), pause or threading.Event()
     if len(pairs) < 2:
         raise ValueError("Collect at least two preference pairs before post-training.")
-    for key, low, high in [("beta", .001, 10), ("learning_rate", 1e-7, .01), ("sft_weight", 0, 10), ("validation", 0, .5)]:
+    for key in ("learning_rate", "steps"):   # unset (or None): sized below from the model and the pair count
+        if cfg[key] is None:
+            cfg[key] = 0
+    for key, low, high in [("beta", .001, 10), ("learning_rate", 0, .01), ("sft_weight", 0, 10), ("validation", 0, .5)]:
         if not low <= float(cfg[key]) <= high:
             raise ValueError(f"{key} must be between {low} and {high}.")
-    for key, low, high in [("steps", 1, 100000), ("batch_size", 1, 64), ("eval_every", 1, 100000)]:
+    for key, low, high in [("steps", 0, 100000), ("batch_size", 1, 64), ("eval_every", 1, 100000)]:
         cfg[key] = int(cfg[key])
         if not low <= cfg[key] <= high:
             raise ValueError(f"{key} must be between {low} and {high}.")
@@ -449,9 +467,11 @@ def dpo_train(base_checkpoint, pairs, output_dir, config=None, emit=None, stop=N
     data = load_checkpoint(base_checkpoint)
     model_cfg = dict(data["config"], device=cfg["device"], dropout=0)
     tokenizer = Tokenizer.restore(data["tokenizer"])
+    cfg["learning_rate"] = float(cfg["learning_rate"]) or (DPO_LR_LORA if model_cfg.get("lora") else DPO_LR_FULL)
+    cfg["steps"] = cfg["steps"] or dpo_steps(len(pairs), cfg["batch_size"])
     rng = random.Random(cfg["seed"])
-    encoded = [(_encode_pair(tokenizer, p["messages"], p["chosen"], model_cfg["context"]),
-                _encode_pair(tokenizer, p["messages"], p["rejected"], model_cfg["context"])) for p in pairs]
+    encoded = [(_encode_pair(tokenizer, p["messages"], p["chosen"], model_cfg["context"], eos=not p.get("chosen_cut")),
+                _encode_pair(tokenizer, p["messages"], p["rejected"], model_cfg["context"], eos=not p.get("rejected_cut"))) for p in pairs]
     # The reference never changes, so it scores every pair once, in a phase of its own, and is gone before the policy exists.
     reference = ScratchTransformer(model_cfg, tokenizer.vocab_size)
     reference.load_weights(data["model"])
@@ -465,7 +485,7 @@ def dpo_train(base_checkpoint, pairs, output_dir, config=None, emit=None, stop=N
     optimizer = AdamW(policy, cfg["weight_decay"])
     order = list(range(len(encoded)))
     rng.shuffle(order)
-    held = int(len(order) * cfg["validation"]) if len(order) >= 10 else 0
+    held = max(DPO_MIN_VALIDATION, int(len(order) * cfg["validation"])) if cfg["validation"] > 0 and len(order) >= 2 * DPO_MIN_VALIDATION else 0
     val_ids, train_ids = order[:held], order[held:]
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
@@ -552,10 +572,12 @@ def dpo_train(base_checkpoint, pairs, output_dir, config=None, emit=None, stop=N
         _save(directory / "last.npz", policy, optimizer, model_cfg, tokenizer, data["step"] + step, best, history, extra)
         if not (directory / "best.npz").exists():
             _save(directory / "best.npz", policy, optimizer, model_cfg, tokenizer, data["step"] + step, best, history, extra)
+        # With held-back pairs the lowest validation loss is the checkpoint to keep; without them the lowest batch loss is noise, so the last one is.
+        shipped = directory / ("best.npz" if val_ids else "last.npz")
         final = evaluate()
         record.update(status="stopped" if stop.is_set() else "completed", step=step, finishedAt=now(),
                       duration_seconds=time.monotonic() - started, final_validation=final,
-                      checkpoint=str(directory / "last.npz"))
+                      checkpoint=str(shipped))
         atomic_json(directory / "run.json", record)
         emit({"type": "done", "run": record, "directory": str(directory)})
         return {**record, "directory": str(directory)}

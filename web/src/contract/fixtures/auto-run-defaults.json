@@ -1,0 +1,67 @@
+{
+  "body": {
+    "budget": {
+      "hours": 12.0
+    },
+    "id": "",
+    "name": "Auto Run",
+    "phases": [
+      {
+        "enabled": true,
+        "kind": "data",
+        "on_fail": "pause",
+        "on_pass": "continue",
+        "settings": {}
+      },
+      {
+        "enabled": true,
+        "kind": "pretrain",
+        "on_fail": "pause",
+        "on_pass": "continue",
+        "settings": {}
+      },
+      {
+        "enabled": false,
+        "kind": "midtrain",
+        "on_fail": "pause",
+        "on_pass": "continue",
+        "settings": {}
+      },
+      {
+        "enabled": true,
+        "kind": "sft",
+        "on_fail": "pause",
+        "on_pass": "continue",
+        "settings": {}
+      },
+      {
+        "enabled": true,
+        "kind": "rlvr",
+        "on_fail": "pause",
+        "on_pass": "continue",
+        "settings": {}
+      },
+      {
+        "enabled": true,
+        "kind": "distill",
+        "on_fail": "pause",
+        "on_pass": "continue",
+        "settings": {}
+      },
+      {
+        "enabled": true,
+        "kind": "dpo",
+        "on_fail": "pause",
+        "on_pass": "continue",
+        "settings": {}
+      }
+    ],
+    "version": "v0.0.0"
+  },
+  "request": {
+    "body": null,
+    "method": "GET",
+    "path": "/auto-runs/defaults?version=1"
+  },
+  "status": 200
+}

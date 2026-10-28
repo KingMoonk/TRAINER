@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { AvailableVersions } from "@/components/available-versions";
+import { Disclosure } from "@/components/disclosure";
 import { api, ApiError, subscribe, unwrap } from "@/lib/api";
 import type { components } from "@/lib/api-schema";
 import { availableElsewhere, cameFrom, isCluster, useCluster, usePublished } from "@/lib/cluster";
@@ -373,7 +374,7 @@ export default function Page() {
             {best.isFetching && <span role="status" className="flex items-center gap-2"><Skeleton className="h-4 w-20" />{T.findingBest}</span>}
             {best.isError && <p role="alert">{T.bestFailed}: {describe(best.error)}</p>}
             {best.data === null && !best.isFetching && !best.isError && <p>{T.noBest}</p>}
-            <Button variant="ghost" size="sm" disabled={best.isFetching || busy} onClick={() => void best.refetch()}>{T.retryBest}</Button>
+            {best.isError && <Button variant="ghost" size="sm" disabled={best.isFetching || busy} onClick={() => void best.refetch()}>{T.retryBest}</Button>}
           </div>}
 
           <section aria-label="Replies" className={compare ? "grid gap-4 md:grid-cols-2" : "flex flex-col gap-4"}>
@@ -567,25 +568,22 @@ export default function Page() {
           )}
 
           {scored && (
-            <Card>
-              <CardContent className="flex flex-col gap-1">
+            <Disclosure title={T.scoresTitle}>
+              <div className="flex flex-col gap-1">
                 {scoreRows(scored).map(([label, value]) => (
                   <div key={label} className="flex gap-4 text-sm">
                     <span className="w-72 text-muted-foreground">{label}</span>
                     <span className="font-mono">{value}</span>
                   </div>
                 ))}
-              </CardContent>
-            </Card>
+              </div>
+              <FewShotCheck key={JSON.stringify(checkKey("few-shot", scored))} version={scored} />
+            </Disclosure>
           )}
-          {scored && <FewShotCheck key={JSON.stringify(checkKey("few-shot", scored))} version={scored} />}
 
           <div className="flex flex-wrap gap-2">
             <Link href="/compare" className={buttonVariants()}>
               {T.testChange}
-            </Link>
-            <Link href="/builder" className={buttonVariants({ variant: "outline" })}>
-              {T.openDesigner}
             </Link>
             <Link href="/benchmark" className={buttonVariants({ variant: "outline" })}>
               Open the benchmark

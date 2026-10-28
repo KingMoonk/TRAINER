@@ -342,8 +342,8 @@ class CheckableProblemTests(unittest.TestCase):
 
     def test_numeric_keys(self):
         ex, rule, key = self._problem("gsm8k_check", {"question": "How many?", "answer": "48/2 = <<48/2=24>>24\n#### 1,072"})
-        self.assertEqual((rule, key, ex["assistant"]), ("final_number", "1072", "1072"))
-        self.assertTrue(ex["user"].startswith("How many?") and ex["user"].endswith("as a number."))
+        self.assertEqual((rule, key, ex["assistant"]), ("final_number", "1072", "Answer: 1072"))
+        self.assertTrue(ex["user"].startswith("How many?") and ex["user"].endswith("'Answer: <number>'."))
         self.assertEqual(self._problem("svamp_check", {"ID": "s1", "question_concat": "Some apples?", "Answer": 145.0})[2], "145")
         self.assertEqual(self._problem("metamath_check", {"query": "Q", "response": "Work.\nThe answer is: 2.5"})[2], "2.5")
         for raw in ({"query": "Q", "response": "The answer is: \\frac{1}{2}"}, {"query": "Q", "response": "no key"}):
@@ -710,6 +710,27 @@ class LanguageCorpusSizeTests(unittest.TestCase):
         article = _convert("wikipedia_en_a", {"id": "12", "title": "Anarchism", "text": "word " * 60})[0]
         self.assertEqual((article["groupId"], article["sourceId"]), ("wikipedia_en_a:12", "12"))
         self.assertEqual(_convert("simplewiki", {"id": "12", "title": "T", "text": "word " * 60})[0]["groupId"], "simplewiki:12")
+
+
+class Relettering(unittest.TestCase):
+    PROMPT = "Answer the question. Reply with the letter and the option text.\n\nWhich is wet?\n\nA) dust\nB) water\nC) sand\nD) rock"
+
+    def test_the_key_follows_its_option_and_the_order_varies_by_seed(self):
+        from studio_catalog import reletter_choice
+        prompts = set()
+        for seed in range(12):
+            prompt, key = reletter_choice(self.PROMPT, "B", seed)
+            lines = prompt.rpartition("\n\n")[2].split("\n")
+            self.assertEqual([line[:2] for line in lines], ["A)", "B)", "C)", "D)"])
+            self.assertEqual(next(line for line in lines if line.startswith(key + ")")), f"{key}) water")
+            self.assertEqual(reletter_choice(self.PROMPT, "B", seed), (prompt, key))
+            prompts.add(prompt)
+        self.assertGreater(len(prompts), 3)
+
+    def test_prompts_that_are_not_clean_lettered_lists_are_left_alone(self):
+        from studio_catalog import reletter_choice
+        self.assertEqual(reletter_choice("Count to three.", "B"), ("Count to three.", "B"))
+        self.assertEqual(reletter_choice(self.PROMPT, "Z"), (self.PROMPT, "Z"))
 
 
 if __name__ == "__main__":

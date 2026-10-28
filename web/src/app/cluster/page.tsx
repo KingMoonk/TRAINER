@@ -3,18 +3,18 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
-import { CLUSTER_TABS } from "./tabs";
+import { routeFor } from "@/lib/routes";
 
-// /cluster/ opens the area's first tab. A static export has no server-side redirect, so it is done here.
+// /cluster/ opens the Machines page, the area's home. A static export has no server-side redirect, so it is done here.
 export default function ClusterHome() {
   const router = useRouter();
-  const first = CLUSTER_TABS[0];
+  const machines = routeFor("machines");
   useEffect(() => {
-    router.replace(first.href);
-  }, [router, first.href]);
+    router.replace(machines.href);
+  }, [router, machines.href]);
   return (
     <main className="p-4 text-sm text-muted-foreground">
-      <Link href={first.href} className="underline underline-offset-2">{first.title}</Link>
+      <Link href={machines.href} className="underline underline-offset-2">{machines.title}</Link>
     </main>
   );
 }

@@ -348,6 +348,14 @@ class Services:
     def resume_queue_at_start(self):
         """Carry on the queue the last run of the app left going (no-op where there is no real queue)."""
 
+    def find_job(self, job_id):
+        """The queue's job with this id, in any status (waiting, held, running, or ended and still remembered), else None."""
+        raise NotImplementedError
+
+    def live_jobs(self):
+        """The jobs that are waiting, held or running."""
+        raise NotImplementedError
+
     def refresh_downloads(self):
         """Rebuild catalogue downloads converted by an older app version; returns the ids rebuilt (no-op without a workspace)."""
         return []
@@ -452,6 +460,12 @@ class Services:
     def device_facts(self):
         """studio_backend.gpu_status(): {available, kind, name, ...} of the GPU this computer offers, or None when it cannot say."""
         return None
+
+    def cached_tokens(self, dataset_ids, config, init_from=None):
+        """How many tokens of the chosen text the token cache already holds for the tokenizer this run will use (studio_shards.cached_tokens),
+        so the fit does not charge the disk for them again. Never tokenizes. The tokenizer is only known before the run when it keeps the
+        checkpoint's (`init_from`, a warm start); a fresh run fits its own on the data, so nothing counts as cached (0)."""
+        return 0
 
     def hardware_profile(self):
         """studio_fit.Profile of this computer as it is now (GPU memory total and free, free RAM and disk, cores, the newest measured
@@ -789,9 +803,12 @@ class FakeServices(Services):
         self.heldout_docs: list = []  # the held-back text
         self.live: list[dict] = []  # a test's runs in progress: [{version, step, total, saved_at, file}]
         self.reviewed_text = True  # whether the text sets hold an example marked Good
+        self.cached = 0  # the tokens a test says the token cache already holds (cached_tokens)
         self.hardware = None  # a studio_fit.Profile a test gives the plan; None: the plan does not scale (as `studio_api --fake`)
         self.share = 1.  # what memory_share answers
         self.conversations_in_text = 40  # how many conversations a cluster run's teacher can answer are in the data
+        self._ended = {}  # id -> the jobs that finished, kept as the real queue keeps its history (find_job)
+        self._autorun = None
 
     def inspect_landscape(self, version, snapshot=None, mode="random", grid=21, span=1.0, seed=0, live=False, new_anchor=False, stop=None):
         """A made-up bowl with two ripples and a path that walks into it one point longer per call, so a live page has something to show."""
@@ -831,6 +848,9 @@ class FakeServices(Services):
 
     def hardware_profile(self):
         return self.hardware
+
+    def cached_tokens(self, dataset_ids, config, init_from=None):
+        return self.cached
 
     def memory_share(self):
         return self.share
@@ -944,6 +964,37 @@ class FakeServices(Services):
                 return
             self._worker = start_thread(self._run_jobs, job)
 
+    @property
+    def autorun(self):
+        """The Auto Run orchestrator over this fake queue, made on first use with a folder of its own."""
+        if self._autorun is None:
+            from studio_ia.autorun import Orchestrator
+            self._autorun = Orchestrator(self, tempfile.mkdtemp(prefix="fake_auto_runs_"))
+            self.watch(self._autorun.on_event)
+        return self._autorun
+
+    def find_job(self, job_id):
+        q = self._queue
+        return next((j for j in [*([q.job] if q.job else []), *q.up_next, *q.failed, *self._ended.values()] if j.id == job_id), None)
+
+    def live_jobs(self):
+        q = self._queue
+        return [j for j in [*([q.job] if q.job else []), *q.up_next] if j.status in ("waiting", "held", "running")]
+
+    def finish_job(self, job_id, status="done", result=None, error=""):
+        """Test hook: end a waiting or running job the way the real runner does, with the result a round leaves in its params."""
+        q = self._queue
+        job = self.find_job(job_id)
+        q.up_next = [j for j in q.up_next if j.id != job_id]
+        if q.job is not None and q.job.id == job_id:
+            q.job = None
+        job.status, job.error = status, error
+        if result is not None:
+            job.params["result"] = result
+        self._ended[job_id] = job
+        self.emit("job", {"job": job_id, "status": status, "error": error})
+        self.emit("queue", q)
+
     def wait_idle(self, timeout=10.0):
         """Test hook: block until the worker has run every waiting job; True when it has."""
         worker = self._worker
@@ -1044,6 +1095,7 @@ class FakeServices(Services):
             if self.snapshot_every and step % self.snapshot_every == 0:
                 self.emit("train", {"job": job.id, "type": "viz_snapshot", "step": step, "path": f"viz/step_{step:08d}.npz", "markers": []})
         job.status = "done"
+        self._ended[job.id] = job
         q.job, q.step, q.total, q.phase, q.prepare, q.lr, q.eta_s = None, 0, 0, "", None, None, None
         self.emit("job", {"job": job.id, "status": "done", "error": ""})
         number = job.params.get("version")
@@ -1659,6 +1711,8 @@ class WorkspaceServices(Services):
                                           profile=lambda: studio_fit.hardware_profile(self.root))
         self.runner.subscribe(self.emit)
         self.runner.subscribe(self._record_job)
+        self._make_autorun()
+        self.runner.subscribe(self.autorun.on_event)  # after _record_job: a round's result is recorded before the Auto Run reads it
         for job in self.runner.ended_on_load:  # a distributed run the restart could not resume: its version is not training any more
             self._record_job("job", {"job": job.id, "status": job.status})
         workspace.progress = self.note
@@ -2120,6 +2174,19 @@ class WorkspaceServices(Services):
         was running continues from its own checkpoint, studio_jobs.continue_here). A pause or stop the person made is saved in
         queue.json and still holds: the runner starts but runs nothing while paused."""
         self.start_queue()
+        self.autorun.reconcile()  # an Auto Run the last run of the app left going finds its job again, or asks for the same one
+
+    def _make_autorun(self):
+        from studio_ia.autorun import Orchestrator
+        self.autorun = Orchestrator(self, self.root / "data" / "auto_runs", spawn=start_thread)
+
+    def find_job(self, job_id):
+        with self.runner.lock:
+            return next((j for j in self.runner.jobs if j.id == job_id), None)
+
+    def live_jobs(self):
+        with self.runner.lock:
+            return [j for j in self.runner.jobs if j.status in ("waiting", "held", "running")]
 
     @timed("services.refresh_downloads")
     def refresh_downloads(self):
@@ -2781,6 +2848,27 @@ class WorkspaceServices(Services):
         except Exception:  # noqa: BLE001 - a broken driver is "no GPU" here
             return None
 
+    def cached_tokens(self, dataset_ids, config, init_from=None):
+        import studio_core
+        import studio_data_kinds as dk
+        import studio_model
+        import studio_shards
+        if not init_from:
+            return 0  # a fresh run fits its tokenizer on the data: its hash is unknown before the run, so none of the cache is counted
+        try:
+            cfg = studio_model.validate_config(config)
+            with np.load(self._abs(init_from), allow_pickle=False) as archive:  # the metadata only: not the weights
+                data = json.loads(str(archive["metadata"].item()))
+            if (studio_model.effective_spec(cfg)["tokenizer"] != studio_model.effective_spec(studio_model.validate_config(data["config"]))["tokenizer"]
+                    or config.get("refit_tokenizer")):
+                return 0  # the run fits a new tokenizer
+            tokenizer = studio_model.Tokenizer.restore(data["tokenizer"])
+            prints = dk.text_fingerprints(self.workspace, self._preview_ids(dataset_ids), exclude=self._heldout_set())
+            return studio_shards.cached_tokens(studio_core.ROOT / "data" / "shards", studio_model._tokenizer_hash(tokenizer), tokenizer.vocab_size,
+                                               cfg["objective"] == "assistant", prints)
+        except Exception:  # noqa: BLE001 - an unreadable checkpoint or cache is "nothing cached", the conservative answer
+            return 0
+
     def hardware_profile(self):
         import studio_fit
         try:
@@ -3033,16 +3121,9 @@ class WorkspaceServices(Services):
             return index
         return self._fresh("train_index", make)
 
-    def post_rows(self, kind):
+    def _kind_rows(self, want, held):
+        """The workspace's non-draft examples of `want` ("problems" | "conversations") on one side of the held-back split."""
         import studio_data_kinds as dk
-        if kind == "heldout_docs":
-            return self._heldout()
-        if kind == "pairs":
-            return self._human_pairs()
-        if kind == "corrections":
-            return self._json("corrections.json", [])
-        want = "problems" if kind.endswith("problems") else "conversations"
-        held = kind in ("heldout_problems", "heldout_conversations")
         datasets = list(self.workspace.state["datasets"])
         # disk datasets: one indexed query on the kind and holdout columns; in-memory ones (under 10,000 rows each) carry the same two stamps
         on_disk = self.workspace.pick(want, held, [d["id"] for d in datasets if d.get("storage") == "sqlite"])
@@ -3054,13 +3135,44 @@ class WorkspaceServices(Services):
                 rows = [e for e in self.workspace.iter_examples(d["id"]) if dk.stamp(e)["kind"] == want and bool(e["holdout"]) == held]
             out.extend({"prompt": e.get("user", ""), "rule": dk.rule_of(e), "params": e.get("params") or (e.get("metadata") or {}).get("params", {})}
                        if want == "problems" else e for e in rows if not dk.is_draft(e))   # synthetic drafts are not the user's data
+        return out
+
+    def post_rows(self, kind, seed=0, binary=False):
+        """Rows for a post_round job (see Services.post_rows). Lettered choice problems come with their options shuffled and re-lettered
+        by (seed, prompt), the key following: the stored order never decides the answer letter. `binary` keeps 2-option sets in the
+        "problems" rows reinforcement learning trains on; by default they are left out (a majority class passes half of them)."""
+        import studio_catalog
+        import studio_eval
+        if kind == "heldout_docs":
+            return self._heldout()
+        if kind == "pairs":
+            return self._human_pairs()
+        if kind == "corrections":
+            return self._json("corrections.json", [])
+        want = "problems" if kind.endswith("problems") else "conversations"
+        held = kind in ("heldout_problems", "heldout_conversations")
+        out = self._kind_rows(want, held)
         if want == "conversations" and (mixed := self._chat_mix_ids()):   # pretraining read these as chat: Round 1 must not train on them
             out = [e for e in out if e.get("id") not in mixed]
-        if held:  # a held-back problem whose text also appears in training would be answered from memory: leave it out and say how many
+        if held:  # a held-back prompt that is also a training prompt would be answered from memory: leave it out (exact text; the index below catches near copies)
+            train = {(e["prompt"] if want == "problems" else e.get("user", "")) for e in self._kind_rows(want, False)}
+            out = [e for e in out if (e["prompt"] if want == "problems" else e.get("user", "")) not in train]
             import studio_decontam
             out, report = studio_decontam.exclude_overlap(out, self._train_index(), (lambda row: row["prompt"]) if want == "problems" else _doc)
             if want == "problems":   # the page shows this note for problems and text only
                 self._note_overlap("problems", report)
+        if want == "problems":
+            shuffled = []
+            for row in out:
+                if row["rule"] != "choice":
+                    shuffled.append(row)
+                    continue
+                key = str((row.get("params") or {}).get("answer") or "")
+                prompt, key = studio_catalog.reletter_choice(row["prompt"], key, 0 if held else seed)   # held-back questions keep one order: before and after compare
+                if kind == "problems" and not binary and len((studio_eval.choice_item(row) or {}).get("choices", ())) == 2:
+                    continue
+                shuffled.append({**row, "prompt": prompt, "params": {**(row.get("params") or {}), "answer": key}})
+            out = shuffled
         return out
 
     def post_loops(self):

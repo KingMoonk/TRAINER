@@ -998,7 +998,7 @@ def _mmlu_auxiliary(raw):
             "assistant": lines[index], "intent": "multiple_choice", "sourceId": "mmlu_auxiliary:" + digest, "groupId": "mmlu_auxiliary:" + digest}
 
 
-NUMBER_ASK = "\n\nGive the final answer as a number."
+NUMBER_ASK = "\n\nShow brief working, then end with 'Answer: <number>'."
 CHOICE_ASK = "Reply with the letter and the option text.\n\n"
 PLAIN_NUMBER = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 
@@ -1039,20 +1039,42 @@ def _lettered(intro, question, options, index, intent, source_id=""):
     return _keyed(f"{intro}{CHOICE_ASK}{question}\n\n" + "\n".join(lines), lines[index], "choice", _LETTERS[index], intent, source_id)
 
 
+_CHOICE_LINE = re.compile(r"([A-J])\) (.+)")
+
+
+def reletter_choice(prompt, answer, seed=0):
+    """Shuffle a lettered choice prompt's options and re-letter them: (new prompt, new key letter), the key following its option.
+
+    Stored rows keep the source's order (a source that always puts the answer first, or a 2-option set with one majority class, would
+    reward answering "A"), so this runs when rows are sampled. Deterministic in (seed, prompt). A prompt that is not a clean lettered list,
+    or whose key is not one of its letters, comes back unchanged."""
+    head, _, tail = str(prompt).rstrip().rpartition("\n\n")
+    found = [_CHOICE_LINE.fullmatch(line.strip()) for line in tail.split("\n")]
+    if not head or len(found) < 2 or not all(found) or "".join(m[1] for m in found) != _LETTERS[:len(found)]:
+        return prompt, answer
+    letters, options = [m[1] for m in found], [m[2] for m in found]
+    if answer not in letters:
+        return prompt, answer
+    order = list(range(len(options)))
+    random.Random(f"{seed}:{prompt}").shuffle(order)
+    lines = [f"{_LETTERS[k]}) {options[j]}" for k, j in enumerate(order)]
+    return head + "\n\n" + "\n".join(lines), _LETTERS[order.index(letters.index(answer))]
+
+
 def _checkable(raw, parser):
     """Source record -> a problem with an answer key (studio_rules.KEYED), or None when it has no clean key."""
     if parser == "gsm_check":
         key = _number_key(str(raw.get("answer", "")).rpartition("####")[2])
         question = str(raw.get("question") or "").strip()
-        return _keyed(question + NUMBER_ASK, key, "final_number", key, "math_problem", group=group_id(question)) if key and question else None
+        return _keyed(question + NUMBER_ASK, f"Answer: {key}", "final_number", key, "math_problem", group=group_id(question)) if key and question else None
     if parser == "svamp_check":
         key = _number_key(raw.get("Answer"))
         question = str(raw.get("question_concat") or f"{raw.get('Body', '')} {raw.get('Question', '')}").strip()
-        return _keyed(question + NUMBER_ASK, key, "final_number", key, "math_problem", str(raw.get("ID", ""))) if key and question else None
+        return _keyed(question + NUMBER_ASK, f"Answer: {key}", "final_number", key, "math_problem", str(raw.get("ID", ""))) if key and question else None
     if parser == "metamath_check":
         query, response = str(raw.get("query") or "").strip(), str(raw.get("response") or "")
         key = _number_key(response.rpartition("The answer is:")[2]) if "The answer is:" in response else None
-        return (_keyed(query + NUMBER_ASK, key, "final_number", key, "math_problem", group=group_id(raw.get("original_question") or query))
+        return (_keyed(query + NUMBER_ASK, f"Answer: {key}", "final_number", key, "math_problem", group=group_id(raw.get("original_question") or query))
                 if key and query else None)
     if parser == "aqua_check":
         options = [re.sub(r"^\s*[A-E]\s*\)\s*", "", str(o)).strip() for o in raw.get("options") or []]

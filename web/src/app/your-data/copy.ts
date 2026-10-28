@@ -6,6 +6,7 @@ export const KINDS: Kind[] = ["text", "conversations", "problems"];
 export const T = {
   h1: "Your data",
   lead: "Three kinds, because each one trains a different stage.",
+  collectLink: "Collect in the background ›",
   storageLink: "Storage: free up disk space ›",
   backPretraining: "Back to Pretraining",
   backPost: "Back to Post-training",
@@ -38,6 +39,8 @@ export const T = {
   hideExamples: "Hide examples",
   examplesHint: "Search, or open the list to read, edit or review single examples.",
   toolbar: "Data actions",
+  downloadMore: "Download more",
+  downloadMoreHint: "Recommended sources to download, check and add to your sets.",
   noMatches: "Nothing matches.",
 } as const;
 

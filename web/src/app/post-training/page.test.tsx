@@ -113,6 +113,7 @@ describe("Post-training page", () => {
     const { state } = server();
     const user = userEvent.setup();
     renderPage(<PostTrainingPage />);
+    await user.click(await screen.findByText("Start from a pretrained model", { selector: "summary" }));
     await user.click(await screen.findByRole("combobox", { name: "Pretrained model" }));
     await user.click(await screen.findByRole("option", { name: "New server model" }));
     expect(await screen.findByText("About 12 MB to download once.")).toBeVisible();
@@ -126,6 +127,7 @@ describe("Post-training page", () => {
     server({ "GET /post-training/import-models": { status: 503, body: { detail: "Catalogue unavailable" } } });
     const user = userEvent.setup();
     renderPage(<PostTrainingPage />);
+    await user.click(await screen.findByText("Start from a pretrained model", { selector: "summary" }));
     expect(await screen.findByText(/Could not load importable models: Catalogue unavailable/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Import model" })).toBeDisabled();
 
@@ -165,9 +167,43 @@ describe("Post-training page", () => {
 
     // Importing a model saves a new version, which is listed at once.
     expect(screen.queryByTestId("version-2")).toBeNull();
+    await user.click(await screen.findByText("Start from a pretrained model", { selector: "summary" }));
     await user.click(await screen.findByRole("button", { name: /^Import GPT-2/ }));
+    await user.click(screen.getByText("Advanced", { selector: "summary" }));
     expect(await screen.findByTestId("version-2")).toHaveTextContent("Started from GPT-2 (124M)");
     expect(state.imports).toHaveLength(1);
+  });
+
+  test("round 2 settings are sent when typed and left out when empty", async () => {
+    const { state } = server({ "GET /jobs/*": ({ path }) => ({ body: job(path.split("/").pop()!, { ...idle, counts: { ...idle.counts, problems: 5 } }) }) });
+    const user = userEvent.setup();
+    renderPage(<PostTrainingPage />);
+    await user.click(await screen.findByRole("tab", { name: /Practice with checks/ }));
+    await user.click(await screen.findByText("Settings"));
+    const steps = screen.getByLabelText(/^Steps/);
+    expect(steps).toHaveAttribute("placeholder", "200");
+    expect(screen.getByLabelText(/^Prompts per step/)).toHaveAttribute("placeholder", "8");
+    await user.type(steps, "50");
+    await user.type(screen.getByLabelText(/^Temperature/), "0.7");
+    const kl = screen.getByLabelText(/^Stay close to the start/);
+    expect(kl).toHaveAttribute("placeholder", "0.02");
+    await user.type(kl, "0.05");
+    await user.click(screen.getByRole("button", { name: "Add to the queue" }));
+    await waitFor(() => expect(state.rounds).toHaveLength(1));
+    expect(state.rounds[0]).toEqual(expect.objectContaining({ round: 2, steps: 50, temperature: 0.7, group: null, prompts_per_step: null, max_tokens: null, kl: 0.05 }));
+  });
+
+  test("round 2 can keep the passing answers instead of practising with rewards", async () => {
+    const { state } = server({ "GET /jobs/*": ({ path }) => ({ body: job(path.split("/").pop()!, { ...idle, counts: { ...idle.counts, problems: 5 } }) }) });
+    const user = userEvent.setup();
+    renderPage(<PostTrainingPage />);
+    await user.click(await screen.findByRole("tab", { name: /Practice with checks/ }));
+    expect(screen.getByText(/pushed toward the ones that pass/)).toBeVisible();
+    await user.click(screen.getByRole("radio", { name: "Keep the passes" }));
+    expect(screen.getByText(/keeps only the ones that pass the check and stop on their own/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Add to the queue" }));
+    await waitFor(() => expect(state.rounds).toHaveLength(1));
+    expect(state.rounds[0]).toEqual(expect.objectContaining({ round: 2, method: "rejection" }));
   });
 
   test("a round that has nothing to learn from yet says why and cannot be queued", async () => {
@@ -175,7 +211,31 @@ describe("Post-training page", () => {
     const user = userEvent.setup();
     renderPage(<PostTrainingPage />);
     await user.click(await screen.findByRole("tab", { name: /Your votes/ }));
-    expect(await screen.findByText("Rate at least 2 pairs in Chat first.")).toBeVisible();
+    expect(await screen.findByText("Rate at least 20 pairs in Chat first: fewer are memorised, not learned.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Add votes round to the queue" })).toBeDisabled();
+  });
+
+  test("the loop, versions and rows cards sit in one closed Advanced disclosure", async () => {
+    server();
+    renderPage(<PostTrainingPage />);
+    await screen.findByText("Version 1 · best checkpoint from Pretraining");
+    const advanced = screen.getByTestId("advanced-disclosure") as HTMLDetailsElement;
+    expect(advanced.open).toBe(false);
+    expect(within(advanced).getByRole("list", { name: "Versions" })).toBeInTheDocument();
+    expect(within(advanced).getByText("Look at the data")).toBeInTheDocument();
+  });
+
+  test("the import card starts collapsed once a version has a checkpoint", async () => {
+    server();
+    renderPage(<PostTrainingPage />);
+    await screen.findByText("Version 1 · best checkpoint from Pretraining");
+    expect((screen.getByTestId("import-disclosure") as HTMLDetailsElement).open).toBe(false);
+  });
+
+  test("the import card starts open while no version has a checkpoint", async () => {
+    server({ "GET /versions": { body: [version(1, false)] } });
+    renderPage(<PostTrainingPage />);
+    await screen.findByText("Version 1 · no checkpoint yet");
+    await waitFor(() => expect((screen.getByTestId("import-disclosure") as HTMLDetailsElement).open).toBe(true));
   });
 });

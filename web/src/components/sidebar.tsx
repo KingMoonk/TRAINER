@@ -6,6 +6,7 @@ import { Boxes, Database, Layers3, MessageSquare, Network, Server, Settings, Ter
 import { cn } from "@/lib/utils";
 import { APPEARANCE } from "@/lib/copy/appearance";
 import { AREAS, ROUTES, areaHome } from "@/lib/routes";
+import { useDeveloperTools } from "@/lib/developer-tools";
 import { useTraffic } from "@/components/traffic/traffic-provider";
 import { TRAFFIC } from "@/lib/copy/traffic";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -17,7 +18,7 @@ const gearClass = (active: boolean) =>
     focusClass,
     active && "border-surface-border bg-surface-raised text-foreground",
   );
-const icons = { models: Network, data: Database, runs: Layers3, eval: MessageSquare, machines: Server };
+const icons = { models: Network, data: Database, train: Layers3, eval: MessageSquare, machines: Server };
 
 export function Sidebar() {
   const pathname = (usePathname() || "").replace(/\/$/, "");
@@ -41,7 +42,9 @@ export function Sidebar() {
   );
 
   const traffic = useTraffic();
-  const consoleButton = (className?: string) => (
+  // Ctrl+` opens the console whether or not the button is shown (traffic-provider.tsx).
+  const [developerTools] = useDeveloperTools();
+  const consoleButton = (className?: string) => !developerTools ? null : (
     <Tooltip>
       <TooltipTrigger asChild>
         <button
