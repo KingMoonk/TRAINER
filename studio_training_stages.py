@@ -13,6 +13,7 @@ import studio_eval
 import studio_gate
 import studio_model
 import studio_rl
+import studio_stages
 
 STAGES = ("midtrain",)
 MIX = {
@@ -70,6 +71,16 @@ def _gate(checkpoint, candidate, context, stage, stop):
     return ok, before, after, band, checks, card
 
 
+def run_evidence(folder):
+    """What a stage's run folder shows of how it went: {"curve": [[step, validation loss]...]} from its metrics.jsonl and, when its
+    stages policy (studio_stages) ended it as too small, {"too_small": True}. Empty when it left neither."""
+    folder = Path(folder)
+    points = [[float(r["step"]), float(r["val_loss"])] for r in studio_model.read_metrics(folder / "metrics.jsonl")
+              if r.get("val_loss") is not None and r.get("step")]
+    journal = studio_stages.read_journal(folder) or {}
+    return {**({"curve": points} if points else {}), **({"too_small": True} if journal.get("too_small") else {})}
+
+
 def run_stage(stage, checkpoint, context, output_dir, emit, stop, pause, *, config=None, datasets=None, resume=None, candidate=None):
     """Train a stage and return its gated candidate without changing any version.
 
@@ -109,7 +120,7 @@ def run_stage(stage, checkpoint, context, output_dir, emit, stop, pause, *, conf
         return {"stage": stage, "ok": False, "checkpoint": candidate, "stopped": True,
                 "verdict": "The gate stopped before it could compare the weights."}
     result = {"stage": stage, "ok": bool(ok), "checkpoint": candidate, "before": before, "after": after,
-              "band": band, "checks": checks, "card": card,
+              "band": band, "checks": checks, "card": card, **run_evidence(Path(candidate).parent),
               "verdict": "The stage passed its held-back checks." if ok else "The stage finished, but its held-back checks failed; the version keeps its previous weights."}
     emit({"type": "gate", **result})
     return result

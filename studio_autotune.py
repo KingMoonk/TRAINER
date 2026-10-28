@@ -40,6 +40,7 @@ LENGTHEN = 1.5       # a phase whose curve is still falling gets this many times
 PULL = 1.5           # a failed gate's next beta (or KL coefficient) is this many times its last
 TOO_SMALL_SHARE = .6  # the curve is flat before this share of the run (studio_ia.sizing uses the same figure)
 MAX_ATTEMPTS = 50
+MAX_POINTS = 200      # validation points a phase result keeps
 SETTING = {"learning_rate": "learning_rate", "steps": "steps", "beta": "beta", "kl": "kl"}   # the plan setting each key writes
 APPLIES = {"learning_rate": ("sft", "rlvr", "distill"), "steps": ("midtrain",), "beta": ("dpo",), "kl": ("rlvr",)}
 
@@ -190,6 +191,8 @@ def decide(plan, state, phase, curve=None, width=None):
                                    evidence))
 
     pretrain = state["phases"][ar._index(plan, "pretrain")] if any(p["kind"] == "pretrain" for p in plan["phases"]) else None
+    if curve is None and pretrain and isinstance(pretrain.get("result"), dict):
+        curve = pretrain["result"].get("curve")      # (the points the pretrain phase kept in its own result)
     report = curve_report(curve) if pretrain and pretrain["status"] == "passed" else None
     if report:
         if phase == "midtrain" and report["falling"]:
@@ -203,6 +206,11 @@ def decide(plan, state, phase, curve=None, width=None):
             out.append({"phase": phase, "attempt": attempt, "key": "design", "was": None, "value": None, "rule": "bigger_design",
                         "why": f"{studio_stages.TOO_SMALL}The pretraining curve went flat after {share} of the run. {studio_stages.SUGGESTION} "
                                "This is a proposal: nothing was changed.", "evidence": report, "applied": False, "clamped": False})
+    small = next((e for e in state["phases"] if isinstance(e.get("result"), dict) and e["result"].get("too_small")), None)
+    if small and not any(c["rule"] == "bigger_design" for c in [*state.get("choices", []), *out]):
+        out.append({"phase": phase, "attempt": attempt, "key": "design", "was": None, "value": None, "rule": "bigger_design",
+                    "why": f"{studio_stages.TOO_SMALL}The {small['kind']} stage stopped as too small. {studio_stages.SUGGESTION} This is a proposal: nothing was changed.",
+                    "evidence": {"phase": small["kind"], "too_small": True}, "applied": False, "clamped": False})
     return out
 
 
