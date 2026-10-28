@@ -3,6 +3,27 @@
     "budget": {
       "hours": 12.0
     },
+    "controller": {
+      "bounds": {
+        "beta": {
+          "max": 0.5,
+          "min": 0.02
+        },
+        "kl": {
+          "max": 0.2,
+          "min": 0.0
+        },
+        "learning_rate": {
+          "max": 0.001,
+          "min": 1e-06
+        },
+        "steps": {
+          "max": 20000.0,
+          "min": 10.0
+        }
+      },
+      "enabled": true
+    },
     "id": "",
     "name": "Auto Run",
     "phases": [

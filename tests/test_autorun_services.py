@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy
+
 import studio_autorun as ar
 from studio_ia.autorun import Orchestrator
 from studio_ia.services import FakeServices, Job, Version
@@ -315,6 +317,47 @@ class RestartTests(Base):
         self.go(plan_of())
         folder = Path(self.tmp.name) / "run1"
         self.assertTrue((folder / "plan.json").is_file() and (folder / "state.json").is_file() and (folder / "journal.jsonl").is_file())
+
+
+class ControllerTests(Base):
+    """The parameter controller (studio_autotune) over the queue: the job a retry or the next phase asks for carries the choice, and the
+    choice is in the state and the journal with its evidence."""
+
+    def test_a_retry_after_a_divergence_runs_at_half_the_rate_and_says_so(self):
+        plan = plan_of(("sft",))
+        plan["phases"][0]["settings"]["learning_rate"] = 1e-4
+        self.go(plan)
+        self.assertEqual(self.services.find_job("run1-0-1").params["learning_rate"], 1e-4)
+        self.end("run1-0-1", "failed", error="Non-finite loss. Reduce the learning rate.")
+        self.assertEqual(self.state()["status"], "paused")
+        self.auto.continue_run("run1", "retry")
+        self.assertEqual(self.services.find_job("run1-0-2").params["learning_rate"], 5e-5)
+        [choice] = self.state()["choices"]
+        self.assertEqual((choice["phase"], choice["attempt"], choice["key"], choice["was"], choice["value"]), ("sft", 2, "learning_rate", 1e-4, 5e-5))
+        self.assertIn("Non-finite", choice["evidence"]["error"])
+        tuned = [line for line in self.auto.view("run1")["journal"] if line["event"] == "tuned"]
+        self.assertEqual([(line["key"], line["value"]) for line in tuned], [("learning_rate", 5e-5)])
+
+    def test_a_pretrain_curve_that_still_falls_lengthens_midtrain(self):
+        points = [(float(x), .1 + 5 * x ** -.2) for x in numpy.geomspace(1e3, 1e6, 14)]
+        self.services.loss_evidence = lambda version: {"points": points, "run": "r"}
+        plan = plan_of(("pretrain", "midtrain"))
+        plan["phases"][1]["settings"]["steps"] = 1000
+        self.go(plan)
+        self.end("run1-0-1", "done")
+        self.assertEqual(self.services.find_job("run1-1-1").params["config"]["steps"], 1500)
+        [choice] = self.state()["choices"]
+        self.assertEqual((choice["rule"], choice["applied"]), ("still_falling", True))
+
+    def test_a_controller_that_is_off_leaves_the_settings_alone(self):
+        plan = plan_of(("sft",))
+        plan["phases"][0]["settings"]["learning_rate"] = 1e-4
+        plan["controller"]["enabled"] = False
+        self.go(plan)
+        self.end("run1-0-1", "failed", error="Non-finite loss.")
+        self.auto.continue_run("run1", "retry")
+        self.assertEqual(self.services.find_job("run1-0-2").params["learning_rate"], 1e-4)
+        self.assertEqual(self.state().get("choices", []), [])
 
 
 if __name__ == "__main__":

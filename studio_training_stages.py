@@ -21,13 +21,18 @@ MIX = {
 DEFAULT_CHARS = 2_000_000
 
 
+def default_steps(width):
+    """The steps a stage runs when the caller gives none: a small model (under 512 wide) gets fewer."""
+    return 2000 if width < 512 else 5000
+
+
 def stage_config(stage, checkpoint, rows, overrides=None):
     """The stage's bounded default recipe; a caller can lower steps for a small run."""
     if stage not in STAGES:
         raise ValueError(f"Unknown training stage: {stage}.")
     base = studio_model.load_checkpoint(checkpoint, weights_only=True)
     old = base["config"]
-    steps = 2000 if old["width"] < 512 else 5000
+    steps = default_steps(old["width"])
     cfg = {**old, "objective": "all", "learning_rate": min(3e-4, old["learning_rate"] * .3),
            "steps": steps, "warmup": max(1, round(steps * .03)), "eval_every": max(1, steps // 10),
            "validation": .05 if len(rows) >= 20 else 0.}

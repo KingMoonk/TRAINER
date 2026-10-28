@@ -9,6 +9,10 @@ export const plan = (over: Partial<Plan> = {}): Plan => ({
   version: 1,
   budget: { hours: 12 },
   phases: KINDS.map((kind) => ({ kind, enabled: kind !== "midtrain", settings: {}, on_pass: "continue", on_fail: "pause" })),
+  controller: {
+    enabled: true,
+    bounds: { learning_rate: { min: 1e-6, max: 1e-3 }, steps: { min: 10, max: 20000 }, beta: { min: 0.02, max: 0.5 }, kl: { min: 0, max: 0.2 } },
+  },
   ...over,
 });
 
@@ -29,6 +33,8 @@ export function run(
       status,
       current,
       reason,
+      choices: [],
+      attempts: [],
       phases: KINDS.map((kind) => ({ kind, status: kind === "midtrain" ? "skipped" : "pending", attempt: 1, error: "", ...phases[kind] }) as PhaseState),
     },
     journal: [],

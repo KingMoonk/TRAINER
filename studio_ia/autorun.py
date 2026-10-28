@@ -35,6 +35,7 @@ import uuid
 from pathlib import Path
 
 import studio_autorun as ar
+import studio_autotune as tune
 from studio_core import now as clock
 
 LOG = logging.getLogger("groundwork.autorun")
@@ -370,7 +371,8 @@ class Orchestrator:
 
     def _finish_phase(self, run_id, kind, status, result):
         run = self.runs[run_id]
-        self._put(run_id, ar.apply_outcome(run["plan"], run["state"], kind, status, result, self.now()))
+        state = tune.record_attempt(run["plan"], run["state"], kind, status, result, self.now())   # (what the controller reads of it later)
+        self._put(run_id, ar.apply_outcome(run["plan"], state, kind, status, result, self.now()))
 
     def _park(self, run_id):
         """A pause is waiting for a phase whose job has not started: hold the job and park the phase. True when one was parked."""
@@ -439,6 +441,26 @@ class Orchestrator:
             self.services.enqueue(job)
         self._put(run_id, ar.begin(plan, self.runs[run_id]["state"], action, self.now()))   # (a phase already queued is only re-recorded)
 
+    def _tuned(self, run_id, version, kind, settings):
+        """`settings` with what the parameter controller (studio_autotune) chose for this phase from the evidence so far; the choices
+        are kept in the run's state and journal, with that evidence, before the job is asked for."""
+        run = self.runs[run_id]
+        plan = run["plan"]
+        if not tune.enabled(plan):
+            return settings
+        points = None
+        if any(p["kind"] == "pretrain" and p["enabled"] for p in plan["phases"]):
+            try:
+                found = self.services.loss_evidence(version)
+            except (NotImplementedError, OSError, ValueError):
+                found = None
+            points = found["points"] if found else None
+        width = ((version.spec or {}).get("dims") or {}).get("d_model")
+        choices = tune.decide(plan, run["state"], kind, points, width)
+        if choices:
+            self._put(run_id, tune.add_choices(run["state"], choices, self.now()))
+        return tune.settings_with(settings, choices)
+
     def _build(self, run_id, kind, job_id):
         run = self.runs[run_id]
         plan, state = run["plan"], run["state"]
@@ -448,6 +470,7 @@ class Orchestrator:
         if version is None:
             raise ValueError(f"There is no version {plan['version']}.")
         settings = ar.phase_settings(plan, state, kind, self.now())
+        settings = self._tuned(run_id, version, kind, settings)
         if kind == "pretrain":
             build = self.build_pretrain or getattr(self.services, "build_pretrain", None)   # the API app sets the services' one
             if build is None:

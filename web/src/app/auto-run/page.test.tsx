@@ -299,6 +299,97 @@ describe("Auto Run page: a run that waits for the person", () => {
   });
 });
 
+describe("Auto Run page: the parameter controller", () => {
+  const choices = [
+    {
+      phase: "sft",
+      attempt: 2,
+      key: "learning_rate",
+      was: 0.0001,
+      value: 0.00005,
+      rule: "divergence",
+      why: "Attempt 1 stopped on a loss that was not a number, so the learning rate is cut to 50% of 0.0001.",
+      evidence: { attempt: 1, error: "Non-finite loss." },
+      applied: true,
+      clamped: false,
+    },
+    {
+      phase: "midtrain",
+      attempt: 1,
+      key: "steps",
+      was: 2000,
+      value: 3000,
+      rule: "still_falling",
+      why: "The pretraining curve still falls 9.8% for every doubling of what it read, so mid-training runs 1.5 times as many steps.",
+      evidence: {},
+      applied: true,
+      clamped: true,
+    },
+    {
+      phase: "midtrain",
+      attempt: 1,
+      key: "design",
+      was: null,
+      value: null,
+      rule: "bigger_design",
+      why: "On the newest text the model's held-out loss barely fell, so this design has learned what it can.",
+      evidence: {},
+      applied: false,
+      clamped: false,
+    },
+  ];
+
+  test("the run page lists what was chosen for each phase and why", async () => {
+    const view = run("paused", "sft", { pretrain: { status: "passed" } });
+    view.state.choices = choices;
+    server(view);
+    renderPage(<AutoRunPage />);
+    const list = await screen.findByTestId("auto-run-choices");
+    expect(within(list).getByText("Learning rate for Round 1 · Learn to answer, attempt 2: 1e-4 to 5e-5")).toBeVisible();
+    expect(within(list).getByText(/not a number, so the learning rate is cut/)).toBeVisible();
+    expect(within(list).getByText("Steps for Mid-training, attempt 1: 2,000 to 3,000 (held to your limit)")).toBeVisible();
+    expect(within(list).getByText("Bigger design: Proposal (nothing was changed)")).toBeVisible();
+    expect(within(list).getByText(/barely fell/)).toBeVisible();
+  });
+
+  test("a run with nothing chosen yet says when the controller acts, and a run with the controller off says it is off", async () => {
+    server(run("running", "pretrain", { data: { status: "passed" } }));
+    const { unmount } = renderPage(<AutoRunPage />);
+    expect(await screen.findByText(/has not changed anything yet/)).toBeVisible();
+    unmount();
+    const off = run("running", "pretrain", { data: { status: "passed" } });
+    off.plan = plan({ id: "run1", controller: { ...plan().controller!, enabled: false } });
+    server(off);
+    renderPage(<AutoRunPage />);
+    expect(await screen.findByText(/Off: every phase runs with exactly the settings in the plan/)).toBeVisible();
+  });
+
+  test("the limits are shown in the plan and a change goes into the saved plan", async () => {
+    const { calls } = server(run("draft", null));
+    const user = userEvent.setup();
+    renderPage(<AutoRunPage />);
+    await screen.findByTestId("plan-controller");
+    expect(screen.getByLabelText("Highest, Steps")).toHaveValue("20000");
+    await user.clear(screen.getByLabelText("Highest, Steps"));
+    await user.type(screen.getByLabelText("Highest, Steps"), "8000");
+    await user.click(screen.getByRole("button", { name: "Save the plan" }));
+    await waitFor(() => expect(posted(calls, "/auto-runs/run1/plan")).toHaveLength(1));
+    expect((posted(calls, "/auto-runs/run1/plan")[0].body as { plan: Plan }).plan.controller!.bounds.steps).toEqual({ min: 10, max: 8000 });
+  });
+
+  test("limits that cannot be are not sent", async () => {
+    const { calls } = server(run("draft", null));
+    const user = userEvent.setup();
+    renderPage(<AutoRunPage />);
+    await screen.findByTestId("plan-controller");
+    await user.clear(screen.getByLabelText("Lowest, DPO beta"));
+    await user.type(screen.getByLabelText("Lowest, DPO beta"), "0.9");
+    await user.click(screen.getByRole("button", { name: "Save the plan" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The limits for DPO beta must be numbers");
+    expect(posted(calls, "/auto-runs/run1/plan")).toHaveLength(0);
+  });
+});
+
 describe("Auto Run page: earlier runs", () => {
   test("with nothing going, a plan for a new run is shown and an earlier run can be opened; a finished run offers another", async () => {
     const done = run("done", null, { data: { status: "passed" } }, { reason: "Every phase has finished." });

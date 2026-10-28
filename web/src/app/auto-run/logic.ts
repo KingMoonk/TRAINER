@@ -10,6 +10,8 @@ export type RunView = components["schemas"]["AutoRunRunView"];
 export type RunSummary = components["schemas"]["AutoRunRunSummary"];
 export type Progress = components["schemas"]["AutoRunJobProgress"];
 export type RunStatus = RunView["state"]["status"];
+export type Controller = components["schemas"]["AutoRunController"];
+export type Choice = components["schemas"]["AutoRunChoiceRecord"];
 
 /** The post-training round each phase runs (studio_ia/autorun.py ROUND). */
 export const ROUND: Record<string, number> = { sft: 1, rlvr: 2, distill: 3, dpo: 4 };
@@ -110,6 +112,37 @@ export function settingTexts(plan: Plan): Record<string, string> {
   return out;
 }
 
+/** The limits the parameter controller keeps to (studio_autotune.KEYS), with how the editor shows them. */
+export const BOUND_KEYS = [
+  { key: "learning_rate", label: "Learning rate" },
+  { key: "steps", label: "Steps" },
+  { key: "beta", label: "DPO beta" },
+  { key: "kl", label: "KL pull-back" },
+] as const;
+export type BoundKey = (typeof BOUND_KEYS)[number]["key"];
+export type BoundTexts = Record<BoundKey, { min: string; max: string }>;
+
+/** The controller's limits as the text the editor shows, or null for a plan that has no controller. */
+export function boundTexts(plan: Plan): BoundTexts | null {
+  const bounds = plan.controller?.bounds;
+  if (!bounds) return null;
+  return Object.fromEntries(BOUND_KEYS.map(({ key }) => [key, { min: String(bounds[key].min), max: String(bounds[key].max) }])) as BoundTexts;
+}
+
+/** The controller the editor's choices make: its switch, and the limits read from text (each a number, min not above max), or the sentence to fix. */
+export function buildController(base: Controller, texts: BoundTexts): { controller: Controller } | { error: string } {
+  const bounds = {} as Controller["bounds"];
+  for (const { key, label } of BOUND_KEYS) {
+    const min = Number(texts[key].min);
+    const max = Number(texts[key].max);
+    if (!texts[key].min.trim() || !texts[key].max.trim() || !Number.isFinite(min) || !Number.isFinite(max) || min < 0 || max < min || (key !== "kl" && max <= 0)) {
+      return { error: fill(T.badBound, { label }) };
+    }
+    bounds[key] = { min, max };
+  }
+  return { controller: { ...base, bounds } };
+}
+
 export function budgetText(plan: Plan): string {
   return plan.budget.hours == null ? "" : String(plan.budget.hours);
 }
@@ -118,7 +151,7 @@ export function budgetText(plan: Plan): string {
  * The plan the editor's choices make, or the sentence that says what to fix. A setting left empty is dropped so the server uses its default;
  * one outside what the server accepts is refused here rather than silently ignored.
  */
-export function buildPlan(base: Plan, texts: Record<string, string>, budget: string): { plan: Plan } | { error: string } {
+export function buildPlan(base: Plan, texts: Record<string, string>, budget: string, bounds?: BoundTexts | null): { plan: Plan } | { error: string } {
   if (!base.name.trim()) return { error: T.needName };
   if (!base.phases.some((p) => p.enabled)) return { error: T.atLeastOne };
   let hours: number | null = null;
@@ -140,7 +173,13 @@ export function buildPlan(base: Plan, texts: Record<string, string>, budget: str
     }
     phases.push({ ...phase, settings });
   }
-  return { plan: { ...base, name: base.name.trim(), budget: { hours }, phases } };
+  let controller = base.controller;
+  if (controller && bounds) {
+    const built = buildController(controller, bounds);
+    if ("error" in built) return built;
+    controller = built.controller;
+  }
+  return { plan: { ...base, name: base.name.trim(), budget: { hours }, phases, ...(controller ? { controller } : {}) } };
 }
 
 // ---- a run
@@ -155,6 +194,23 @@ export function timelinePhases(run: RunView): { plan: PhasePlan; state: PhaseSta
   return run.plan.phases
     .map((plan, i) => ({ plan, state: run.state.phases[i] }))
     .filter((p): p is { plan: PhasePlan; state: PhaseState } => !!p.state && p.plan.enabled);
+}
+
+/** A number as the page says it: 0.00005 as 5e-5, 1500 as 1,500. */
+export function valueText(value: number | null | undefined): string {
+  if (value == null) return "";
+  if (value !== 0 && Math.abs(value) < 0.001) return value.toExponential();
+  return value.toLocaleString("en-US", { maximumFractionDigits: 6 });
+}
+
+/** The label of what a choice set, e.g. "Learning rate"; a design proposal is "Bigger design". */
+export function choiceLabel(choice: Choice): string {
+  return choice.key === "design" ? T.biggerDesign : (BOUND_KEYS.find((b) => b.key === choice.key)?.label ?? choice.key);
+}
+
+/** The choices the controller made, oldest first, for the run page. */
+export function runChoices(run: RunView): Choice[] {
+  return run.state.choices ?? [];
 }
 
 export type Controls = {

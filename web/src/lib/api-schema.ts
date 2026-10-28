@@ -4141,6 +4141,23 @@ export interface components {
              */
             run_label: string;
         };
+        /** AutoRunBound */
+        AutoRunBound: {
+            /** Max */
+            max: number;
+            /** Min */
+            min: number;
+        };
+        /**
+         * AutoRunBounds
+         * @description The limits no choice of the parameter controller leaves.
+         */
+        AutoRunBounds: {
+            beta: components["schemas"]["AutoRunBound"];
+            kl: components["schemas"]["AutoRunBound"];
+            learning_rate: components["schemas"]["AutoRunBound"];
+            steps: components["schemas"]["AutoRunBound"];
+        };
         /** AutoRunBudget */
         AutoRunBudget: {
             /** Hours */
@@ -4153,6 +4170,53 @@ export interface components {
              * @enum {string}
              */
             choice: "next" | "retry" | "stop" | "adopt";
+        };
+        /**
+         * AutoRunChoiceRecord
+         * @description One decision of the parameter controller. key: learning_rate | steps | beta | kl, or design (a proposal, applied false).
+         */
+        AutoRunChoiceRecord: {
+            /** Applied */
+            applied: boolean;
+            /** Attempt */
+            attempt: number;
+            /**
+             * Clamped
+             * @default false
+             */
+            clamped: boolean;
+            /**
+             * Evidence
+             * @default {}
+             */
+            evidence: {
+                [key: string]: unknown;
+            };
+            /** Key */
+            key: string;
+            /** Phase */
+            phase: string;
+            /** Rule */
+            rule: string;
+            /** Value */
+            value?: number | null;
+            /** Was */
+            was?: number | null;
+            /** Why */
+            why: string;
+        };
+        /**
+         * AutoRunController
+         * @description The parameter controller (studio_autotune): between phases it picks the next phase's learning rate, steps, DPO beta and KL
+         *     coefficient from what the last phases showed, inside `bounds`. enabled false: every phase runs with the plan's settings.
+         */
+        AutoRunController: {
+            bounds: components["schemas"]["AutoRunBounds"];
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
         };
         /**
          * AutoRunJobProgress
@@ -4278,6 +4342,7 @@ export interface components {
         /** AutoRunPlanModel */
         AutoRunPlanModel: {
             budget: components["schemas"]["AutoRunBudget"];
+            controller?: components["schemas"]["AutoRunController"] | null;
             /**
              * Id
              * @default
@@ -4292,6 +4357,18 @@ export interface components {
         };
         /** AutoRunRunState */
         AutoRunRunState: {
+            /**
+             * Attempts
+             * @default []
+             */
+            attempts: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Choices
+             * @default []
+             */
+            choices: components["schemas"]["AutoRunChoiceRecord"][];
             /** Current */
             current?: string | null;
             /** Deadline */

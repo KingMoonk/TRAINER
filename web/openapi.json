@@ -162,6 +162,49 @@
         "title": "AskPeer",
         "type": "object"
       },
+      "AutoRunBound": {
+        "properties": {
+          "max": {
+            "title": "Max",
+            "type": "number"
+          },
+          "min": {
+            "title": "Min",
+            "type": "number"
+          }
+        },
+        "required": [
+          "min",
+          "max"
+        ],
+        "title": "AutoRunBound",
+        "type": "object"
+      },
+      "AutoRunBounds": {
+        "description": "The limits no choice of the parameter controller leaves.",
+        "properties": {
+          "beta": {
+            "$ref": "#/components/schemas/AutoRunBound"
+          },
+          "kl": {
+            "$ref": "#/components/schemas/AutoRunBound"
+          },
+          "learning_rate": {
+            "$ref": "#/components/schemas/AutoRunBound"
+          },
+          "steps": {
+            "$ref": "#/components/schemas/AutoRunBound"
+          }
+        },
+        "required": [
+          "learning_rate",
+          "steps",
+          "beta",
+          "kl"
+        ],
+        "title": "AutoRunBounds",
+        "type": "object"
+      },
       "AutoRunBudget": {
         "properties": {
           "hours": {
@@ -196,6 +239,96 @@
           "choice"
         ],
         "title": "AutoRunChoice",
+        "type": "object"
+      },
+      "AutoRunChoiceRecord": {
+        "description": "One decision of the parameter controller. key: learning_rate | steps | beta | kl, or design (a proposal, applied false).",
+        "properties": {
+          "applied": {
+            "title": "Applied",
+            "type": "boolean"
+          },
+          "attempt": {
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "clamped": {
+            "default": false,
+            "title": "Clamped",
+            "type": "boolean"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Evidence",
+            "type": "object"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "rule": {
+            "title": "Rule",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "was": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Was"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "phase",
+          "attempt",
+          "key",
+          "rule",
+          "why",
+          "applied"
+        ],
+        "title": "AutoRunChoiceRecord",
+        "type": "object"
+      },
+      "AutoRunController": {
+        "description": "The parameter controller (studio_autotune): between phases it picks the next phase's learning rate, steps, DPO beta and KL\ncoefficient from what the last phases showed, inside `bounds`. enabled false: every phase runs with the plan's settings.",
+        "properties": {
+          "bounds": {
+            "$ref": "#/components/schemas/AutoRunBounds"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bounds"
+        ],
+        "title": "AutoRunController",
         "type": "object"
       },
       "AutoRunJobProgress": {
@@ -475,6 +608,16 @@
           "budget": {
             "$ref": "#/components/schemas/AutoRunBudget"
           },
+          "controller": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutoRunController"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "default": "",
             "title": "Id",
@@ -508,6 +651,23 @@
       "AutoRunRunState": {
         "additionalProperties": true,
         "properties": {
+          "attempts": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Attempts",
+            "type": "array"
+          },
+          "choices": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AutoRunChoiceRecord"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
           "current": {
             "anyOf": [
               {
