@@ -15,8 +15,7 @@ export type EditorAction = { label: string; primary?: boolean; run: (plan: Plan)
 
 /**
  * The plan of a draft or paused run: which phases to include, the settings the server reads for each, what to do when one passes or
- * fails, and the overall time budget. Mid-training is not available yet, so it is listed only when the plan already includes it,
- * and then only to turn it off. `actions` are the buttons; each gets the plan the choices make, or the editor shows what to fix.
+ * fails, and the overall time budget. `actions` are the buttons; each gets the plan the choices make, or the editor shows what to fix.
  */
 export function PlanEditor({ initial, actions, pending }: { initial: Plan; actions: EditorAction[]; pending: boolean }) {
   const [plan, setPlan] = useState<Plan>(initial);
@@ -55,7 +54,6 @@ export function PlanEditor({ initial, actions, pending }: { initial: Plan; actio
       <h2 className="text-sm font-medium">{T.phasesTitle}</h2>
       <ul className="flex flex-col gap-3">
         {plan.phases
-          .filter((phase) => phase.kind !== "midtrain" || phase.enabled)
           .map((phase) => {
             const spec = PHASES[phase.kind];
             const title = phaseTitle(phase.kind);
@@ -65,11 +63,11 @@ export function PlanEditor({ initial, actions, pending }: { initial: Plan; actio
                   <CardHeader className="flex flex-row items-start justify-between gap-3">
                     <div className="flex min-w-0 flex-col gap-1">
                       <CardTitle className="text-sm">{title}</CardTitle>
-                      <p className="text-sm text-muted-foreground">{phase.kind === "midtrain" ? T.midtrainNote : spec?.blurb}</p>
+                      <p className="text-sm text-muted-foreground">{spec?.blurb}</p>
                     </div>
                     <Switch aria-label={fill(T.enable, { phase: title })} checked={phase.enabled} onCheckedChange={(enabled) => change(phase.kind, { enabled })} />
                   </CardHeader>
-                  {phase.enabled && phase.kind !== "midtrain" && (
+                  {phase.enabled && (
                     <CardContent className="flex flex-col gap-3">
                       <div className="flex flex-wrap gap-4">
                         <label className="flex flex-col gap-1 text-sm">

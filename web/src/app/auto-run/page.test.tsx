@@ -56,8 +56,8 @@ describe("Auto Run page: a new run", () => {
     expect(await screen.findByTestId("plan-editor")).toBeVisible();
     expect(screen.getByLabelText("Version to train")).toHaveValue("2");
     expect(calls.some((c) => c.path === "/auto-runs/defaults" && c.search === "?version=2")).toBe(true);
-    for (const kind of ["data", "pretrain", "sft", "rlvr", "distill", "dpo"]) expect(screen.getByTestId(`plan-${kind}`)).toBeVisible();
-    expect(screen.queryByTestId("plan-midtrain")).toBeNull(); // not available yet: no control for it
+    for (const kind of ["data", "pretrain", "midtrain", "sft", "rlvr", "distill", "dpo"]) expect(screen.getByTestId(`plan-${kind}`)).toBeVisible();
+    expect(screen.getByRole("switch", { name: "Include Mid-training" })).not.toBeChecked(); // optional: off unless the person adds it
     expect(screen.getByLabelText("Overall time budget (hours)")).toHaveValue("12");
   });
 
@@ -87,6 +87,21 @@ describe("Auto Run page: a new run", () => {
     expect(byKind.midtrain.enabled).toBe(false);
     expect(posted(calls, "/auto-runs/run1/start")).toHaveLength(1);
     expect(screen.getByTestId("auto-run-status")).toHaveTextContent("Running");
+  });
+
+  test("includes mid-training with its steps", async () => {
+    const running = run("running", "data", { data: { status: "running" } });
+    const { calls } = server(null, { start: running });
+    const user = userEvent.setup();
+    renderPage(<AutoRunPage />);
+    await screen.findByTestId("plan-editor");
+    expect(screen.queryByLabelText("Steps, Mid-training")).toBeNull(); // off: no settings yet
+    await user.click(screen.getByRole("switch", { name: "Include Mid-training" }));
+    await user.type(screen.getByLabelText("Steps, Mid-training"), "60000");
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    await screen.findByTestId("auto-run-view");
+    const made = posted(calls, "/auto-runs")[0].body as { plan: Plan };
+    expect(made.plan.phases.find((p) => p.kind === "midtrain")).toMatchObject({ enabled: true, settings: { steps: 60000 } });
   });
 
   test("says what to fix instead of sending a setting the server would refuse", async () => {

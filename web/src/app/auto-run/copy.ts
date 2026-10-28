@@ -19,7 +19,6 @@ export const T = {
   onFailLabel: "When it fails",
   onPass: { continue: "Carry on to the next phase", pause: "Pause so I can look" } as Record<string, string>,
   onFail: { pause: "Pause and ask me", stop: "Stop the run", skip: "Skip it and carry on" } as Record<string, string>,
-  midtrainNote: "Mid-training is not available yet, so a run that includes it waits for you at that phase. Turn it off here, or skip it when it asks.",
   start: "Start",
   saveDraft: "Save as a draft",
   savePlan: "Save the plan",

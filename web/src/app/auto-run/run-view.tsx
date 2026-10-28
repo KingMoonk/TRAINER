@@ -148,12 +148,10 @@ export function RunPanel({ run }: { run: RunView }) {
               )}
               {can.decide && (
                 <>
-                  {run.state.current !== "midtrain" && (
-                    <Button disabled={busy} onClick={() => actions.choose.mutate("retry")}>
-                      {T.retry}
-                    </Button>
-                  )}
-                  <Button variant={run.state.current === "midtrain" ? "default" : "outline"} disabled={busy} onClick={() => actions.choose.mutate("next")}>
+                  <Button disabled={busy} onClick={() => actions.choose.mutate("retry")}>
+                    {T.retry}
+                  </Button>
+                  <Button variant="outline" disabled={busy} onClick={() => actions.choose.mutate("next")}>
                     {T.skip}
                   </Button>
                 </>

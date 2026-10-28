@@ -33,7 +33,7 @@ export type PhaseSpec = { title: string; blurb: string; href: string; link: stri
 export const PHASES: Record<string, PhaseSpec> = {
   data: {
     title: "Check the data",
-    blurb: "Checks that there is text to train on. It trains nothing.",
+    blurb: "Checks that the phases you chose have what they train on: text for pretraining and mid-training, chats marked Good for Round 1. It trains nothing.",
     href: "/your-data",
     link: "Open Your data",
     settings: [],
@@ -50,10 +50,10 @@ export const PHASES: Record<string, PhaseSpec> = {
   },
   midtrain: {
     title: "Mid-training",
-    blurb: "Not available yet.",
-    href: "/pretraining",
-    link: "Open Pretraining",
-    settings: [],
+    blurb: "Keep training the best weights on your text mixed with chat and reasoning sets. Only weights that pass the check replace them.",
+    href: "/runs/new",
+    link: "Open New run",
+    settings: [{ ...STEPS, max: 100000, hint: "Updates to the model. Empty: sized to the model (2,000 to 5,000)." }],
   },
   sft: { title: "Round 1 · Learn to answer", blurb: "Train on good conversations so it answers in the shape of a chat.", href: "/post-training", link: "Open Post-training", settings: [STEPS] },
   rlvr: {
