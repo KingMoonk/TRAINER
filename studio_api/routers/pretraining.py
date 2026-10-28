@@ -492,8 +492,9 @@ SOLO_REASON = "You chose to train on this computer only."
 
 def _pool(services, body: PlanRequest, made: PretrainPlan, peer_url: str):
     """(Pool, the StartRun that starts it or None) for a start with these answers. A run across machines is a distributed run
-    (studio_api.routers.distributed): it starts from scratch, with the 16 rows and 5% held back that run always uses, so a choice it
-    cannot honour keeps the run on this computer, and the reason says so. Never raises: no eligible machine is a solo run."""
+    (studio_api.routers.distributed). It takes the page's answers as they are: the rows, the held-back share, the chat mix, the stop-when-flat
+    rule (as rounds) and a catch-up's starting weights. What it cannot carry keeps the run on this computer, and the reason says so: a
+    catch-up from a version of another design (a run across machines copies every weight). Never raises: no eligible machine is a solo run."""
     from studio_api.routers import distributed
     from studio_api.version import app_version
     import studio_diloco
@@ -506,17 +507,26 @@ def _pool(services, body: PlanRequest, made: PretrainPlan, peer_url: str):
         return alone("The size of the text is still being worked out, so this run starts on this computer alone.")
     if not made.can_add or made.version is None:
         return alone(made.reason)
-    if made.mode != "from_scratch":
-        return alone("Continuing a version trains on this computer. A run across machines starts over from scratch.")
-    if body.rows != distributed.ROWS or body.hold != distributed.HOLD or body.chat_share > 0:
-        return alone(f"A run across machines uses {distributed.ROWS} rows per step, {distributed.HOLD:.0%} held back and no chat in the mix.")
+    start = None
+    if made.mode == "catch_up":
+        start = next((s for s in made.sources if s.version == made.continue_from), None)
+        if start is None or not start.same_design:
+            return alone(f"Version {made.continue_from} has another design than this version, so only some of its weights carry over. "
+                         "That catch-up trains on this computer; a run across machines copies every weight or starts over.")
     if not services.setting("nodes", []):
         return alone("No other machine is on the Machines list.")
     if not peer_url:
         return alone("The other machines cannot reach this computer: set TRAINER_NODE_ADDRESS or serve it with Tailscale.")
     inner = min(studio_diloco.default_inner_steps(True), made.steps)
-    run = distributed.StartRun(version=made.version, dataset_ids=list(dict.fromkeys(body.dataset_ids)), rounds=max(1, made.steps // inner),
-                               inner_steps=inner, window_hours=body.window_hours)
+    rounds = max(1, made.steps // inner)
+    rule = made.plateau
+    if rule is not None and not rule.window_steps:
+        return alone("The stop-when-flat rule is measured in seconds here, which a run across machines cannot follow, so it trains on this computer.")
+    flat = ({"plateau_checks": max(2, -(-rule.window_steps // inner)), "plateau_min_improvement": rule.min_gain} if rule is not None else {})
+    chat = ({"chat_share": body.chat_share, "chat_datasets": [s["id"] for s in services.conversation_sets()]} if body.chat_share > 0 else {})
+    run = distributed.StartRun(version=made.version, dataset_ids=list(dict.fromkeys(body.dataset_ids)), rounds=rounds, inner_steps=inner,
+                               window_hours=body.window_hours, rows=body.rows, hold=body.hold,
+                               from_version=start.version if start is not None else None, **flat, **chat)
     version = services.current_version() if body.version is None else _version(services, body.version)
     own = studio_cluster.own_info(busy=services.queue().job is not None, version=app_version())
     peers, left_out, local = distributed.pool_peers(run, services, version, own)

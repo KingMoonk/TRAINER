@@ -1,6 +1,8 @@
 """The Pretraining page pools the machines that are ready by default: POST /pretraining/pool lists them, /start queues a distributed
 run with them, "this computer only" and the lack of any eligible machine keep a solo job, and Auto Run's pretrain phase does the same."""
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from fastapi import HTTPException
@@ -86,11 +88,61 @@ class PoolTests(ApiCase):
         self.call("POST", "/pretraining/start", 202, json={**BODY, "solo": True})
         self.assertEqual(self.services.queue().up_next[-1].kind, "pretrain")
 
-    def test_choices_a_pooled_run_cannot_honour_keep_it_on_this_computer(self):
+    def test_rows_and_held_back_share_chosen_on_the_page_reach_the_pooled_run(self):
         self.nodes("box")
-        rows = self.call("POST", "/pretraining/pool", json={**BODY, "rows": 32})
-        self.assertEqual(rows["pooled"], False)
-        self.assertIn("16 rows per step", rows["reason"])
+        started = self.call("POST", "/pretraining/start", 202, json={**BODY, "rows": 32, "hold": 0.1})
+        job = self.services.queue().up_next[-1]
+        self.assertEqual((started["run_id"], job.params["heldout_fraction"], job.params["config"]["batch_size"], job.params["config"]["validation"]),
+                         (job.id, 0.1, 32, 0.1))
+
+    def test_a_chat_mix_reaches_the_pooled_run(self):
+        self.nodes("box")
+        sets = [{"id": "talk", "name": "Talk", "count": 9}]
+        with mock.patch.object(self.services, "conversation_sets", create=True, return_value=sets):
+            self.call("POST", "/pretraining/start", 202, json={**BODY, "chat_share": 0.1})
+        job = self.services.queue().up_next[-1]
+        self.assertEqual((job.kind, job.params["chat_share"], job.params["chat_datasets"]), ("pretrain_distributed", 0.1, ["talk"]))
+        self.assertIn("10% chat", job.label)
+
+    def test_the_stop_when_flat_rule_ends_a_pooled_run_too(self):
+        self.nodes("box")
+        self.call("POST", "/pretraining/start", 202, json={**BODY, "plateau": True})
+        job = self.services.queue().up_next[-1]
+        rule = self.call("POST", "/pretraining/plan", json={**BODY, "plateau": True})["plateau"]
+        self.assertGreaterEqual(job.params["plateau_checks"], 2)
+        self.assertEqual(job.params["plateau_min_improvement"], rule["min_gain"])
+        self.assertEqual(job.params["settings"]["plateau_checks"], job.params["plateau_checks"])
+
+    def test_without_the_rule_the_pooled_run_has_no_plateau_window(self):
+        self.nodes("box")
+        self.call("POST", "/pretraining/start", 202, json={**BODY, "plateau": False})
+        self.assertNotIn("plateau_checks", self.services.queue().up_next[-1].params)
+
+    def trained(self, **spec_changes):
+        folder = Path(tempfile.mkdtemp())
+        (folder / "best.npz").write_bytes(b"x")
+        first = self.services.versions()[0]
+        first.best_checkpoint = str(folder / "best.npz")
+        second = self.services.save_version({**first.spec, **spec_changes}, "second")
+        return first, second
+
+    def test_a_catch_up_with_a_ready_machine_starts_the_run_from_the_chosen_versions_best_weights(self):
+        self.nodes("box")
+        first, second = self.trained()
+        started = self.call("POST", "/pretraining/start", 202, json={**BODY, "mode": "catch_up", "version": second.number, "from_version": first.number})
+        job = self.services.queue().up_next[-1]
+        self.assertEqual((job.kind, started["run_id"], job.params["mode"], job.params["restart_from"]), ("pretrain_distributed", job.id, "catch_up", first.best_checkpoint))
+        self.assertIn(f"continuing version {first.number}", job.label)
+
+    def test_a_catch_up_from_another_design_stays_on_this_computer_and_says_why(self):
+        self.nodes("box")
+        first, second = self.trained(dims={**default_spec()["dims"], "n_layer": 3})
+        body = {**BODY, "mode": "catch_up", "version": second.number, "from_version": first.number}
+        pool = self.call("POST", "/pretraining/pool", json=body)
+        self.assertEqual(pool["pooled"], False)
+        self.assertIn("another design", pool["reason"])
+        self.call("POST", "/pretraining/start", 202, json=body)
+        self.assertEqual(self.services.queue().up_next[-1].kind, "pretrain")
 
     def test_a_machine_that_fails_the_start_checks_after_the_survey_leaves_a_solo_job(self):
         self.nodes("box")

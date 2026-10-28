@@ -9547,6 +9547,16 @@ export interface components {
         StartRun: {
             /** All Machines */
             all_machines?: boolean | null;
+            /**
+             * Chat Datasets
+             * @default []
+             */
+            chat_datasets: string[];
+            /**
+             * Chat Share
+             * @default 0
+             */
+            chat_share: number;
             /** Coordinator */
             coordinator?: string | null;
             /** Dataset Ids */
@@ -9562,6 +9572,13 @@ export interface components {
              * @default 0
              */
             delta_sparsity: number;
+            /** From Version */
+            from_version?: number | null;
+            /**
+             * Hold
+             * @default 0.05
+             */
+            hold: number;
             /**
              * Inner Steps
              * @default 100
@@ -9612,6 +9629,11 @@ export interface components {
              * @default 10
              */
             rounds: number;
+            /**
+             * Rows
+             * @default 16
+             */
+            rows: number;
             stages?: components["schemas"]["Stages"] | null;
             /** Target Win Rate */
             target_win_rate?: number | null;
