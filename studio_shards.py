@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import shutil
+import time
 import uuid
 from pathlib import Path
 
@@ -240,6 +241,20 @@ def load(root, key, vocab_size):
         return None
 
 
+def _move(source, target, tries=40, pause=0.05):
+    """Rename a just-written folder. On Windows the rename is refused (PermissionError, WinError 5) while anything else holds a handle on
+    a file inside it: the virus scanner or the search indexer opening what was just written, or another run of this machine. Those
+    handles are short-lived, so retry for a few seconds; a real denial still raises after the last try."""
+    for attempt in range(tries):
+        try:
+            source.rename(target)
+            return
+        except PermissionError:
+            if attempt == tries - 1 or not source.exists() or target.exists():
+                raise
+            time.sleep(pause * min(attempt + 1, 10))
+
+
 def build(root, key, vocab_size, fill):
     """Run fill({split: ShardWriter}) into a scratch folder and move it to root/key. Returns load()'s result."""
     root = Path(root)
@@ -255,11 +270,11 @@ def build(root, key, vocab_size, fill):
         (scratch / "index.json").write_text(json.dumps({"format": FORMAT, "vocab_size": vocab_size, **entries}), encoding="utf-8")
         final = root / key
         try:
-            scratch.rename(final)
+            _move(scratch, final)
         except OSError:  # a folder is already there: another run just finished the same one, or it is unfinished or unreadable
             if load(root, key, vocab_size) is None:
                 shutil.rmtree(final, ignore_errors=True)
-                scratch.rename(final)
+                _move(scratch, final)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     found = load(root, key, vocab_size)
@@ -441,7 +456,7 @@ class _SegmentWriter:
         (self.scratch / "index.json").write_text(json.dumps({"format": FORMAT, "dtype": np.dtype(self.dtype).name, "examples": self.count,
                                                               "tokens": self.tokens, "aux": self.aux}), encoding="utf-8")
         try:
-            self.scratch.rename(self.folder / self.name)
+            _move(self.scratch, self.folder / self.name)
         finally:
             shutil.rmtree(self.scratch, ignore_errors=True)
 

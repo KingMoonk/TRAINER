@@ -142,6 +142,28 @@ class Shards(unittest.TestCase):
         self.assertEqual(list(self.root.iterdir()), [])
         self.assertIsNone(studio_shards.load(self.root, "k", 263))
 
+    def test_a_folder_rename_refused_for_a_moment_is_retried(self):
+        source, target = self.root / "a.part", self.root / "a"
+        source.mkdir()
+        real, calls = Path.rename, []
+
+        def flaky(path, destination):
+            calls.append(path)
+            if len(calls) < 3:
+                raise PermissionError(13, "Access is denied")  # WinError 5: a scanner holds a file inside
+            return real(path, destination)
+        with mock.patch.object(Path, "rename", flaky), mock.patch("studio_shards.time.sleep"):
+            studio_shards._move(source, target)
+        self.assertTrue(target.is_dir())
+        self.assertEqual(len(calls), 3)
+
+    def test_a_folder_rename_that_stays_refused_raises(self):
+        source = self.root / "b.part"
+        source.mkdir()
+        with mock.patch.object(Path, "rename", side_effect=PermissionError(13, "Access is denied")), mock.patch("studio_shards.time.sleep"):
+            with self.assertRaises(PermissionError):
+                studio_shards._move(source, self.root / "b", tries=3)
+
     def test_storage_counts_and_cleans_the_shards(self):
         shard_windows(TRAINING, VALIDATION, self.tokenizer, config(), "x", self.root / "data" / "shards")
         paths = studio_cleanup.plan(self.root)
