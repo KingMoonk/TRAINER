@@ -174,6 +174,76 @@ class LateJoin(unittest.TestCase):
         self.assertEqual(self.invited, [])
         self.assertIn("stopped by the run's owner", self.row(job, "late")["reason"])
 
+    def test_a_chosen_machine_offline_at_start_is_reinvited_and_joins_on_later_round(self):
+        self.net.down.add("b")
+        config = plan.pretrain_config(default_spec(device="cpu"), 6, router.ROWS, router.HOLD)
+        machines = [{"node": "laptop", "address": sc.LOCAL, "device": "cpu"}, {"node": "b", "address": "b", "device": "cuda"}]
+        job = self.runner.enqueue(Job("pretrain_distributed", "Distributed", params={
+            "machines": machines, "peer_url": "https://laptop.example", "owner": "laptop", "config": config, "min_members": 1,
+            "max_members": 2, "settings": {"rounds": 5, "inner_steps": 2, "min_members": 1, "max_members": 2}}))
+        self.cluster.poll_once()
+        self.cluster.place(job)
+        job.status = "running"
+        self.coordinator = support.build(self.root / "run", run=job.id, clock=self.clock, inner_steps=2, rounds=5, min_members=1, max_members=2)
+        studio_diloco.register(job.id, self.coordinator)
+        runs.invite(job, self.net.client_for)
+        self.coordinator.join("laptop")
+        self.cluster.tick()
+        b_machine = next(m for m in runs.run_of(job).machines if m.node == "b")
+        self.assertEqual(b_machine.state, "unplaced")
+        self.invited.clear()
+
+        # Laptop finishes round 0 alone: coordinator moves to round 1
+        view = self.coordinator.round_view(0, "laptop")
+        self.coordinator.submit(0, "laptop", view["generation"], 0, 10, 2, support.constant_delta(self.coordinator), 1.)
+        self.assertEqual(self.coordinator.next_round, 1)
+
+        # b comes online and cluster ticks
+        self.net.down.discard("b")
+        self.clock.advance(600)
+        self.cluster.poll_once()
+        self.cluster.tick()
+
+        # b is reinvited at round 1
+        self.assertEqual([a for a, _ in self.invited], ["b"])
+        slot = self.cluster.gangs.held(job.id)["b"]
+        self.coordinator.join("b", epoch=slot.epoch)
+        snap = self.coordinator.snapshot()
+        self.assertEqual(snap["nodes"]["b"]["state"], "joining")
+        self.assertEqual(snap["nodes"]["b"]["joined_round"], 2)
+
+    def test_a_failed_member_job_is_detected_immediately_and_reoffered_a_slot(self):
+        import studio_facts
+        job = self.start(max_members=2)
+        b_machine = next(m for m in runs.run_of(job).machines if m.node == "b")
+        self.assertTrue(b_machine.peer_job)
+        self.assertEqual(set(self.cluster.gangs.held(job.id)), {sc.LOCAL, "b"})
+
+        # b's member job fails on b, and b is temporarily busy/cleanup
+        self.peers["b"].node["busy"] = True
+        self.cluster.poll_once()
+        failures = [{"id": b_machine.peer_job, "run": job.id, "error": "CUDA out of memory"}]
+        with mock.patch.object(studio_facts, "member_failures", return_value=failures):
+            self.cluster.tick()
+
+        # Detected immediately: b lost its slot and coordinator was informed
+        self.assertEqual(set(self.cluster.gangs.held(job.id)), {sc.LOCAL})
+        self.assertEqual(b_machine.state, "unplaced")
+        self.assertFalse(b_machine.peer_job)
+        snap = self.coordinator.snapshot()
+        self.assertNotIn("b", snap["nodes"])
+
+        # When b becomes free, offer() re-grants a slot with fresh epoch and reinvites b
+        self.invited.clear()
+        self.peers["b"].node["busy"] = False
+        self.cluster.poll_once()
+        self.cluster.tick()
+        self.assertEqual([a for a, _ in self.invited], ["b"])
+        new_slot = self.cluster.gangs.held(job.id)["b"]
+        self.assertEqual(new_slot.epoch, 2)
+        self.assertEqual(self.invited[0][1]["params"]["epoch"], 2)
+
+
 
 if __name__ == "__main__":
     unittest.main()

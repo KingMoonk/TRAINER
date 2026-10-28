@@ -341,10 +341,11 @@ class Gangs:
         return [(run, a) for run, slots in self._slots.items() for a, slot in slots.items()
                 if a != studio_cluster.LOCAL and now - slot.last > slot.lease.duration_s * (1 if slot.heard else JOIN_GRACE)]
 
-    def drop(self, run, address):
+    def drop(self, run, address, ban=True):
         """Free a slot. The machine is not offered this run again for two leases, so one that is merely slow is not taken straight back."""
         if self._slots.get(run, {}).pop(address, None) is not None:
-            self._lost[(run, address)] = self.clock() + 2 * self.lease_s
+            if ban:
+                self._lost[(run, address)] = self.clock() + 2 * self.lease_s
 
     def end(self, run):
         """The run is over: free all its slots."""
