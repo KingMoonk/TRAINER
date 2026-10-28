@@ -55,6 +55,7 @@ function server({ outlook = "Starts after Version 1 (about 4 min)", nodes = NODE
     "POST /distributed/sizing": { body: sized },
     "POST /distributed/runs": failRun ? { status: 400, body: { detail: "Rounds must be at most 1000." } } : { body: { id: "run-3" } },
     "POST /post-training/rounds": { body: { id: "job-8", label: "SFT", params: {}, round: 1 } },
+    "POST /post-training/stages": { status: 202, body: { id: "job-8", label: "Mid-training", stage: "midtrain" } },
     "POST /quicktest/run": { body: { job_id: "job-9", outlook: "x", started_at: 1 } },
     "POST /queue/jobs/*/pin": { body: {} },
   });
@@ -322,6 +323,20 @@ describe("New run", () => {
     await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=job-8"));
     expect(sent("POST", "/post-training/rounds")?.body).toMatchObject({ round: 1, version: 1 });
     expect(sent("POST", "/queue/jobs/job-8/pin")?.body).toEqual({ pinned: "beast" });
+  });
+
+  test("Mid-train queues a stage from trained weights on this computer", async () => {
+    const { sent } = server({ nodes: MORE });
+    const user = userEvent.setup();
+    renderPage(<NewRunPage />, { route: "/runs/new/" });
+    await user.selectOptions(await screen.findByLabelText("Stage"), "midtrain");
+    expect(screen.queryByText("Text")).toBeNull();
+    expect(screen.getByTestId("worker-beast")).toBeDisabled();
+    expect(screen.getByTestId("worker-local")).toHaveAttribute("aria-pressed", "true");
+    await user.click(await cta());
+    await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=job-8"));
+    expect(sent("POST", "/post-training/stages")?.body).toMatchObject({ stage: "midtrain", version: 1 });
+    expect(sent("POST", "/queue/jobs/job-8/pin")).toBeUndefined();
   });
 
   test("Ablation queues the quick test with no guess", async () => {

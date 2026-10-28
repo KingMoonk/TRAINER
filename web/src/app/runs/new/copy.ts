@@ -18,17 +18,20 @@ export const NEW_RUN = {
 
   stage: "Stage",
   stageTip:
-    "Training stage, which sets the data source and loss. Pretrain: causal LM (next-token cross-entropy) on your text. SFT: cross-entropy on the answer tokens of instruction pairs. Ablation: a quick test of a staged design change for a few minutes; no version is kept.",
+    "Training stage, which sets the data source and loss. Pretrain learns from text; mid-train mixes starter text and conversations; SFT learns only from assistant answers. Ablation is a short design test.",
   stages: [
     { id: "pretrain", label: "Pretrain · causal LM" },
+    { id: "midtrain", label: "Mid-train · text and chat" },
     { id: "sft", label: "SFT · instruction pairs" },
     { id: "ablation", label: "Ablation · short budget" },
   ] as const,
 
   version: "Version",
-  versionTip: "The saved design this run trains. Pretrain defaults to the newest; SFT to the best trained one.",
+  versionTip: "The saved design this run trains. Pretrain defaults to the newest; mid-train and SFT start from the best trained one.",
   versionNewest: "Newest saved design",
   versionBest: "Best trained version",
+  stageSources: "This stage uses installed starter data: mid-training mixes educational text, SmolTalk, MMLU and GSM8K. Held-back items stay out of training.",
+  stageLocal: "Mid-training runs on this computer, where the installed data and frozen evaluation suite live.",
   versionName: "Version {number}",
   noVersions: "No design is saved yet. Save one in the Network designer first.",
   start: "Start from",

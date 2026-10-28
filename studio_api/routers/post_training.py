@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 import studio_registry as registry
 import studio_rl
 import studio_rlhf
+from studio_queue import Job
 from studio_api.app import get_services
 from studio_api.models_work import JobOut, VersionOut, start_job, version_out
 
@@ -218,6 +219,18 @@ class RoundQueued(BaseModel):
     params: dict[str, Any]
 
 
+class StageRequest(BaseModel):
+    stage: Literal["midtrain"]
+    version: int | None = None
+    steps: int | None = Field(None, ge=1, le=100_000)
+
+
+class StageQueued(BaseModel):
+    id: str
+    label: str
+    stage: Literal["midtrain"]
+
+
 class AdoptRequest(BaseModel):
     version: int | None = None  # None = the current version
 
@@ -419,6 +432,21 @@ def queue_round(body: RoundRequest, services=Depends(get_services)):
         for _ in range(len(services.queue().up_next)):
             services.move_up(job.id)
     return RoundQueued(id=job.id, label=job.label, round=body.round, params=params)
+
+
+@router.post("/stages", response_model=StageQueued, status_code=202)
+def queue_stage(body: StageRequest, services=Depends(get_services)):
+    """Queue mid-training from a trained version's best weights."""
+    version = pick_version(services, body.version)
+    if version is None or not version.best_checkpoint:
+        raise HTTPException(409, "Choose a trained version with a checkpoint first.")
+    label = f"Version {version.number} · {'mid-training'}"
+    params = {"version": version.number}
+    if body.steps is not None:
+        params["config"] = {"steps": body.steps}
+    job = Job(body.stage, label, f"{body.stage} stage", params=params)
+    services.enqueue(job)
+    return StageQueued(id=job.id, label=label, stage=body.stage)
 
 
 @router.post("/rounds/{round}/adopt", response_model=AdoptedOut)

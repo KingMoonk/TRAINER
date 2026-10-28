@@ -162,6 +162,17 @@ class PostTrainingApiTest(unittest.TestCase):
         self.assertEqual(self.queued()[-1].params, {"round": 2, "version": version.number, "checkpoint": "best.npz"})   # the round's own defaults apply
         self.assertEqual(self.client.post("/post-training/rounds", json={"round": 2, "group": 1}).status_code, 422)
 
+    def test_midtrain_is_a_real_queue_job_from_a_trained_version(self):
+        self.assertEqual(self.client.post("/post-training/stages", json={"stage": "midtrain"}).status_code, 409)
+        version = trained(self.services)
+        response = self.client.post("/post-training/stages", json={"stage": "midtrain", "version": version.number, "steps": 12})
+        self.assertEqual(response.status_code, 202, response.text)
+        self.assertEqual(response.json()["stage"], "midtrain")
+        job = self.queued()[-1]
+        self.assertEqual((job.kind, job.params), ("midtrain", {"version": version.number, "config": {"steps": 12}}))
+        self.assertEqual(self.client.post("/post-training/stages", json={"stage": "midtrain", "steps": 0}).status_code, 422)
+        self.assertEqual(self.client.post("/post-training/stages", json={"stage": "sft"}).status_code, 422)   # chat SFT is Round 1
+
     def test_a_correction_round_goes_to_the_front(self):
         teacher = trained(self.services)
         trained(self.services)

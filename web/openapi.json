@@ -12746,6 +12746,68 @@
         "title": "StackExchangeUpdate",
         "type": "object"
       },
+      "StageQueued": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "stage": {
+            "const": "midtrain",
+            "title": "Stage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "stage"
+        ],
+        "title": "StageQueued",
+        "type": "object"
+      },
+      "StageRequest": {
+        "properties": {
+          "stage": {
+            "const": "midtrain",
+            "title": "Stage",
+            "type": "string"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "stage"
+        ],
+        "title": "StageRequest",
+        "type": "object"
+      },
       "Stages": {
         "properties": {
           "replay": {
@@ -21806,6 +21868,48 @@
           }
         },
         "summary": "Read Rows",
+        "tags": [
+          "post-training"
+        ]
+      }
+    },
+    "/post-training/stages": {
+      "post": {
+        "description": "Queue mid-training from a trained version's best weights.",
+        "operationId": "queue_stage_post_training_stages_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StageQueued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Queue Stage",
         "tags": [
           "post-training"
         ]

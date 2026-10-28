@@ -2905,6 +2905,8 @@ class WorkspaceServices(Services):
         if job and job.kind in ("post_round", "restore_answers") and payload["status"] != "running" and job.params.get("result"):
             result = job.params["result"]  # the round ran in a worker: its gate result is kept here, in the app
             return self.record_round(result["round"], job.params.get("version"), result)
+        if job and job.kind == "midtrain" and payload["status"] == "done" and job.params.get("result"):
+            return self.record_stage(job)
         number = job.params.get("version") if job and job.kind in VERSION_JOBS else None
         if not number:
             return
@@ -3033,6 +3035,26 @@ class WorkspaceServices(Services):
         self.emit("versions", None)
         if result.get("ok"):
             self._bench_later(v.number)  # the weights changed: score the new file
+
+    def record_stage(self, job):
+        """Keep a stage's gate and run; only passed weights become the version's best."""
+        result = job.params["result"]
+        v = self._as_version(job.params["version"])
+        if v is None:
+            return
+        done = self._json("post_training_stages.json", {})
+        stages = done.setdefault(str(v.number), {})
+        if job.id in stages:
+            return
+        stages[job.id] = {k: result.get(k) for k in ("stage", "ok", "checks", "verdict", "before", "after", "band", "checkpoint", "card")}
+        self._save_json("post_training_stages.json", done)
+        out = job.params.get("output_dir")
+        if out and out not in v.runs:
+            self.store.add_run(v.number, out)
+        if result.get("ok"):
+            self._make_live(v, 0, result)
+            self._bench_later(v.number)
+        self.emit("versions", None)
 
     def _make_live(self, v, number, result):
         """Version `v`'s checkpoint becomes the round's (Chat follows it), with the scorecard the round measured."""
@@ -3174,6 +3196,46 @@ class WorkspaceServices(Services):
                 shuffled.append({**row, "prompt": prompt, "params": {**(row.get("params") or {}), "answer": key}})
             out = shuffled
         return out
+
+    def stage_rows(self, stage, shares, max_chars=2_000_000):
+        """Training rows for a mid-training stage, bounded and mixed by source characters.
+
+        Only the training side of each set is used. The frozen held-back text and
+        conversations are never read into the stage's dataset snapshot.
+        """
+        import itertools
+        import studio_corpus
+        from studio_training_stages import STAGES
+
+        if stage not in STAGES:
+            raise ValueError(f"Unknown training stage: {stage}.")
+        if not isinstance(shares, dict) or not shares or any(not isinstance(v, (int, float)) or v <= 0 for v in shares.values()):
+            raise ValueError("Stage sources must have positive shares.")
+        installed = {d["id"] for d in self.workspace.state["datasets"]}
+        chosen = {name: weight for name, weight in shares.items() if name == "text" or name in installed}
+        if not chosen:
+            return []
+        total = sum(chosen.values())
+        rows = []
+        for name, share in chosen.items():
+            if name == "text":
+                text_sets = [d["id"] for d in self.workspace.state["datasets"] if d["id"].startswith(("fineweb_edu", "cosmopedia"))]
+                source = self.example_stream({"datasets": text_sets}) if text_sets else []
+            else:
+                source = itertools.chain(self.example_stream({"datasets": [name]}), self._conversation_rows([name], False))
+            budget = round(max_chars * share / total)
+            used = 0
+            for row in source:
+                size = studio_corpus.characters_of(row)
+                if not size:
+                    continue
+                if used and used + size > budget:
+                    break
+                rows.append(row)
+                used += size
+                if used >= budget:
+                    break
+        return rows
 
     def post_loops(self):
         import studio_loop
