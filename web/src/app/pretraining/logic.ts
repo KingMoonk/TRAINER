@@ -228,6 +228,7 @@ export function queueNote(plan: Plan): string {
 
 /** What the card says a start trains on: the machines pooled with this computer, or this computer alone and why. */
 export function poolLines(pool: Pool): { lead: string; why: string; leftOut: string[] } {
+  if (pool.pending) return { lead: T.poolPending, why: pool.reason, leftOut: [] };
   const leftOut = pool.left_out.map((row) => fill(T.poolLeftOut, { reason: row.reason }));
   if (pool.pooled) return { lead: fill(T.poolWith, { machines: pool.machines.map((m) => m.node).join(", ") }), why: "", leftOut };
   return { lead: T.poolAlone, why: pool.reason, leftOut: [] }; // the reason already names every machine left out

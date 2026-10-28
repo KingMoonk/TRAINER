@@ -14,6 +14,7 @@ import {
   lrText,
   modeTexts,
   perStepLine,
+  poolLines,
   queueNote,
   rowChoices,
   savedRows,
@@ -286,5 +287,14 @@ describe("the fitted-to-this-computer card", () => {
     const base = { version: 1, datasetIds: ["a"], mode: "from_scratch" as const, rows: "16", hold: "5%" as const, length: "Medium" as const };
     expect(planBody(base).keep_my_settings).toBe(false);
     expect(planBody({ ...base, keepMine: true }).keep_my_settings).toBe(true);
+  });
+});
+
+describe("poolLines", () => {
+  it("does not say the run trains on this computer only while the size of the text is being worked out", () => {
+    const lines = poolLines({ pooled: false, machines: [], left_out: [], reason: "Once it is, this run joins the machines that are ready.", pending: true });
+    expect(lines.lead).toBe(T.poolPending);
+    expect(lines.lead).not.toBe(T.poolAlone);
+    expect(lines.why).toBe("Once it is, this run joins the machines that are ready.");
   });
 });
