@@ -2859,6 +2859,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pretraining/pool": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pretrain Pool
+         * @description The machines a start with these answers would train on, before it is pressed: the Pretraining page lists them beside Start.
+         *     Asks every listed machine (a few seconds when one is slow); nothing is queued.
+         */
+        post: operations["pretrain_pool_pretraining_pool_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/pretraining/preview": {
         parameters: {
             query?: never;
@@ -6147,6 +6168,15 @@ export interface components {
             /** Node */
             node: string;
         };
+        /** LeftOut */
+        LeftOut: {
+            /** Address */
+            address: string;
+            /** Node */
+            node: string;
+            /** Reason */
+            reason: string;
+        };
         /** Leftover */
         Leftover: {
             /**
@@ -7138,6 +7168,11 @@ export interface components {
              * @default 16
              */
             rows: number;
+            /**
+             * Solo
+             * @default false
+             */
+            solo: boolean;
             /** Steps */
             steps?: number | null;
             /** Version */
@@ -7164,6 +7199,37 @@ export interface components {
             window_seconds?: number | null;
             /** Window Steps */
             window_steps?: number | null;
+        };
+        /**
+         * Pool
+         * @description Which machines a start would train on. `pooled`: the run goes out as a distributed run on this computer plus `machines`;
+         *     otherwise it is a job on this computer alone and `reason` says why. `left_out` lists every listed machine that is not used.
+         */
+        Pool: {
+            /**
+             * Left Out
+             * @default []
+             */
+            left_out: components["schemas"]["LeftOut"][];
+            /**
+             * Machines
+             * @default []
+             */
+            machines: components["schemas"]["PoolMachine"][];
+            /** Pooled */
+            pooled: boolean;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+        };
+        /** PoolMachine */
+        PoolMachine: {
+            /** Address */
+            address: string;
+            /** Node */
+            node: string;
         };
         /** PostTrainingJobOut */
         PostTrainingJobOut: {
@@ -10198,6 +10264,18 @@ export interface components {
             id: string;
             /** Label */
             label: string;
+            /**
+             * Machines
+             * @default []
+             */
+            machines: string[];
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /** Run Id */
+            run_id?: string | null;
         };
         /**
          * GateModel
@@ -14863,6 +14941,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PretrainPlan"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pretrain_pool_pretraining_pool_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pool"];
                 };
             };
             /** @description Validation Error */

@@ -47,6 +47,7 @@ class PretrainingRouterTests(ApiCase):
         self.assertEqual((rate["result"]["device"], rate["result"]["rows"]), ("cpu", 8))
         self.call("GET", "/pretraining/text_sets")
         self.call("POST", "/pretraining/plan", json={"dataset_ids": ["a"]})
+        self.call("POST", "/pretraining/pool", json={"dataset_ids": ["a"]})
         self.assertIsNone(self.call("GET", "/pretraining/hardware"))
         self.assertEqual(self.call("POST", "/pretraining/start", 202, json={"dataset_ids": ["a"]})["id"], self.services.queue().up_next[-1].id)
         self.assertAllRoutesHit()

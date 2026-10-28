@@ -17,6 +17,7 @@ from studio_ia import sizing
 import studio_data_kinds
 import studio_fit
 from studio_ia.services import if_added
+import studio_cluster
 from studio_spec import RUN_INTS
 
 CHAT_SHARE_MAX = studio_data_kinds.CHAT_SHARE_MAX
@@ -92,6 +93,9 @@ class Started(BaseModel):
 
     id: str
     label: str
+    run_id: str | None = None  # set when the run was pooled with other machines: its id in /distributed/runs (the Run view)
+    machines: list[str] = []  # the other machines that train with this computer
+    note: str = ""  # why this run trains on this computer alone, when pooling was possible in principle but did not happen
 
 
 class StartJob(JobRecordModel):
@@ -132,6 +136,7 @@ class PlanRequest(BaseModel):
     plateau: bool | None = None  # end the run when its validation loss goes flat: true always, false never, null for runs over an hour
     from_version: int | None = None  # the version whose best checkpoint a catch-up starts from (one of the plan's `sources`); null: the default
     window_hours: float = Field(studio_fit.DEFAULT_WINDOW_HOURS, gt=0, le=24 * 365)  # the longest the run may take; a token budget that needs longer is cut to fit
+    solo: bool = False  # "Train on this computer only": never pool the run with other machines (POST /pretraining/pool, /start and Auto Run read it)
     chat_share: float = Field(0.0, ge=0.0, le=CHAT_SHARE_MAX)  # conversations mixed into the text as this share of its characters; 0 (off) is the default
     keep_my_settings: bool = False  # "use my settings anyway": keep the batch and token budget when the run only fits tightly or is only slow
 
@@ -441,6 +446,78 @@ def text_sets(services: Services) -> list[TextSet]:
     return out
 
 
+class PoolMachine(BaseModel):
+    node: str
+    address: str
+
+
+class LeftOut(BaseModel):
+    node: str
+    address: str
+    reason: str  # why the machine does not train: offline (the error), another build, busy, too little memory
+
+
+class Pool(BaseModel):
+    """Which machines a start would train on. `pooled`: the run goes out as a distributed run on this computer plus `machines`;
+    otherwise it is a job on this computer alone and `reason` says why. `left_out` lists every listed machine that is not used."""
+
+    pooled: bool
+    machines: list[PoolMachine] = []
+    left_out: list[LeftOut] = []
+    reason: str = ""
+
+
+SOLO_REASON = "You chose to train on this computer only."
+
+
+def _pool(services, body: PlanRequest, made: PretrainPlan, peer_url: str):
+    """(Pool, the StartRun that starts it or None) for a start with these answers. A run across machines is a distributed run
+    (studio_api.routers.distributed): it starts from scratch, with the 16 rows and 5% held back that run always uses, so a choice it
+    cannot honour keeps the run on this computer, and the reason says so. Never raises: no eligible machine is a solo run."""
+    from studio_api.routers import distributed
+    from studio_api.version import app_version
+    import studio_diloco
+
+    def alone(reason, left_out=()):
+        return Pool(pooled=False, left_out=[LeftOut(**row) for row in left_out], reason=reason), None
+    if body.solo:
+        return alone(SOLO_REASON)
+    if made.estimating:
+        return alone("The size of the text is still being worked out, so this run starts on this computer alone.")
+    if not made.can_add or made.version is None:
+        return alone(made.reason)
+    if made.mode != "from_scratch":
+        return alone("Continuing a version trains on this computer. A run across machines starts over from scratch.")
+    if body.rows != distributed.ROWS or body.hold != distributed.HOLD or body.chat_share > 0:
+        return alone(f"A run across machines uses {distributed.ROWS} rows per step, {distributed.HOLD:.0%} held back and no chat in the mix.")
+    if not services.setting("nodes", []):
+        return alone("No other machine is on the Machines list.")
+    if not peer_url:
+        return alone("The other machines cannot reach this computer: set TRAINER_NODE_ADDRESS or serve it with Tailscale.")
+    inner = min(studio_diloco.default_inner_steps(True), made.steps)
+    run = distributed.StartRun(version=made.version, dataset_ids=list(dict.fromkeys(body.dataset_ids)), rounds=max(1, made.steps // inner),
+                               inner_steps=inner, window_hours=body.window_hours)
+    version = services.current_version() if body.version is None else _version(services, body.version)
+    own = studio_cluster.own_info(busy=services.queue().job is not None, version=app_version())
+    peers, left_out, local = distributed.pool_peers(run, services, version, own)
+    if local:
+        return alone(f"{local} This run trains on this computer alone, fitted to it.", left_out)
+    if not peers:
+        why = " ".join(row["reason"] for row in left_out)
+        return alone(f"No other machine can join. {why}".strip(), left_out)
+    pool = Pool(pooled=True, machines=[PoolMachine(node=p.hostname or p.address, address=p.address) for p in peers],
+                left_out=[LeftOut(**row) for row in left_out])
+    return pool, run.model_copy(update={"machines": [p.address for p in peers]})
+
+
+@router.post("/pool")
+def pretrain_pool(body: PlanRequest, request: Request, services: Services) -> Pool:
+    """The machines a start with these answers would train on, before it is pressed: the Pretraining page lists them beside Start.
+    Asks every listed machine (a few seconds when one is slow); nothing is queued."""
+    from studio_api.routers.distributed import _address_for_peers
+    return _pool(services, body, pretrain_plan(body, services), _address_for_peers(request))[0]
+
+
 @router.post("/plan")
 def pretrain_plan(body: PlanRequest, services: Services) -> PretrainPlan:
     """What the Pretraining page shows for these answers: whether Continue is allowed, the steps, the size verdict, the
@@ -565,11 +642,28 @@ def pretrain_start(body: PlanRequest, request: Request, services: Services) -> S
 
     from studio_ia.services import Job
 
+    from studio_api.routers import distributed
+
     made = pretrain_plan(body, services)
+    note = ""
     if made.can_add:
+        peer_url, port = distributed._address_for_peers(request), request.url.port or studio_cluster.DEFAULT_PORT
+        pool, run = _pool(services, body, made, peer_url)
+        if run is not None:
+            try:
+                pooled = distributed.build_run(run, services, peer_url, port)
+            except HTTPException as exc:  # a machine changed since the survey: the run still starts, on this computer
+                note = f"The run could not be pooled ({exc.detail}) so it starts on this computer alone."
+            else:
+                distributed.runs.open_run(pooled)
+                services.enqueue(pooled)
+                services.start_queue()
+                return Started(id=pooled.id, label=pooled.label, run_id=pooled.id, machines=[m.node for m in pool.machines])
+        else:
+            note = pool.reason
         job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), note="", **made.job.model_dump())
         added = services.enqueue(job) or job
-        return Started(id=added.id, label=added.label)
+        return Started(id=added.id, label=added.label, note=note)
     if not made.estimating or made.version is None:
         raise HTTPException(409, made.reason)
     job = Job(id=uuid.uuid4().hex[:8], kind="pretrain", label=f"Version {made.version}, once the size of its text is known",
@@ -746,11 +840,13 @@ def gate_result(number: int, services: Services) -> GateModel | None:
     return None if found is None else GateModel.model_validate(found)
 
 
-def auto_run_pretrain(services, settings, version):
+def auto_run_pretrain(services, settings, version, peer_url=None):
     """The pretrain Job an Auto Run's pretrain phase enqueues: the plan POST /pretraining/start builds for the same answers (sizing
     and fitting included). `settings` holds PlanRequest fields (hours, passes, steps, mode, ...; dataset_ids defaults to every text set
     that is not held back). When the size of the text is not known yet it is worked out here, on the caller's thread. ValueError with
-    the plan's own sentence when the run cannot be added."""
+    the plan's own sentence when the run cannot be added. Like the start route it pools the run with the other machines that are ready
+    (a `pretrain_distributed` Job) unless `settings` says `solo`; `peer_url()` is how those machines reach this computer (None, or an
+    empty answer: no pooling)."""
     from studio_ia.services import Job
 
     fields = {k: v for k, v in settings.items() if k in PlanRequest.model_fields and k != "version"}
@@ -763,4 +859,13 @@ def auto_run_pretrain(services, settings, version):
         made = pretrain_plan(body, services)
     if not made.can_add:
         raise ValueError(made.reason)
+    address = peer_url() if peer_url is not None else ""
+    if address:
+        from studio_api.routers import distributed
+        _, run = _pool(services, body, made, address)
+        if run is not None:
+            try:
+                return distributed.build_run(run, services, address, studio_cluster.DEFAULT_PORT)
+            except HTTPException:
+                pass  # a machine changed since the survey: the phase trains on this computer
     return Job(id="", note="", **made.job.model_dump())

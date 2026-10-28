@@ -486,17 +486,20 @@ def _remote(services, run_id):
     return row if row is not None and row["origin"] != cluster.hostname else None
 
 
-def _address_for_peers(request):
+def peer_address(app, fallback=""):
     """How the other machines reach this one: TRAINER_NODE_ADDRESS, else https://<its tailnet name>, where `tailscale serve`
-    listens in both `make run` (the API at /) and `make dev` (the API under /api/, which studio_peer finds), else the address this
-    request came to (which only a machine on the same computer can use). Never the API's own port: it listens on loopback."""
+    listens in both `make run` (the API at /) and `make dev` (the API under /api/, which studio_peer finds), else `fallback` (the
+    address a request came to, which only a machine on the same computer can use; "" without a request). Never the API's own port:
+    it listens on loopback."""
     named = (os.environ.get("TRAINER_NODE_ADDRESS") or "").strip()
     if named:
         return named
-    tailnet = getattr(getattr(request.app.state, "hosts", None), "tailnet_name", "")
-    if tailnet:
-        return f"https://{tailnet}"
-    return str(request.base_url).rstrip("/")
+    tailnet = getattr(getattr(app.state, "hosts", None), "tailnet_name", "")
+    return f"https://{tailnet}" if tailnet else fallback
+
+
+def _address_for_peers(request):
+    return peer_address(request.app, str(request.base_url).rstrip("/"))
 
 
 def _replaced(services, job_id):
@@ -510,7 +513,7 @@ def _replaced(services, job_id):
     return waiting[index], index
 
 
-def _answering(peers, own):
+def _split_answering(peers, own):
     """(peers that join, machines left out with why) for "all machines": a machine joins when it answers and runs this app's version."""
     joining, left_out = [], []
     for peer in peers:
@@ -522,10 +525,40 @@ def _answering(peers, own):
                              "reason": f"{name} runs app version {peer.version}; this computer runs {own.version}."})
         else:
             joining.append(peer)
+    return joining, left_out
+
+
+def _answering(peers, own):
+    """_split_answering, but a 409 naming every reason when no machine joins."""
+    joining, left_out = _split_answering(peers, own)
     if not joining:
         raise HTTPException(409, " ".join(["No other machine can join, so there is nothing to train with.",
                                            *(row["reason"] for row in left_out)]))
     return joining, left_out
+
+
+def pool_peers(body, services, version, own):
+    """(peers to pool with, machines left out with why, why this computer cannot take part or "") for a run of `version` that
+    uses every listed machine that is ready: it answers on this app version, is not busy with a job, and holds its share of the run
+    (the same per-member sizing a start applies). A machine that did not report what it has free is kept: it trains as the design says."""
+    _, peers = _chosen_peers(StartRun(dataset_ids=["x"], all_machines=True), services, own)
+    joining, left_out = _split_answering(peers, own)
+    ready = []
+    for peer in joining:
+        if peer.busy:
+            name = peer.hostname or peer.address
+            left_out.append({"node": name, "address": peer.address, "reason": f"{name} is busy with another job."})
+        else:
+            ready.append(peer)
+    sizing = _sizing(body, services, version, ready, own) if ready else None
+    if sizing is None:
+        return ready, left_out, ""
+    refusals = {m.address: m.refusal for m in sizing.members if not m.fits}
+    if studio_cluster.LOCAL in refusals:
+        return [], left_out, refusals[studio_cluster.LOCAL]
+    left_out += [{"node": peer.hostname or peer.address, "address": peer.address, "reason": refusals[peer.address]}
+                 for peer in ready if peer.address in refusals]
+    return [peer for peer in ready if peer.address not in refusals], left_out, ""
 
 
 def _teaches(body):
@@ -699,6 +732,22 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     or 409 with the reason) this computer starts the run and hands the coordinator role to that machine once it holds a finished
     round (studio_failover, "handoff"); without it this computer coordinates throughout."""
     replaced, index = _replaced(services, body.replaces) if body.replaces else (None, None)
+    job = build_run(body, services, _address_for_peers(request), request.url.port or studio_cluster.DEFAULT_PORT, replaced)
+    runs.open_run(job)
+    if replaced is not None:
+        services.remove(replaced.id)
+    services.enqueue(job)
+    if index is not None:
+        services.move(job.id, index)
+    services.start_queue()
+    return Run.model_validate(_found(services, job.id))
+
+
+def build_run(body, services, peer_url, api_port, replaced=None):
+    """The queued-run Job POST /distributed/runs adds for `body` (every check and the per-member sizing included; HTTPException with a
+    sentence when it cannot start), not yet recorded or enqueued: `peer_url` and `api_port` are how the other machines reach this one.
+    The Pretraining page and the Auto Run's pretrain phase start their pooled runs through it, so they size and place machines the
+    way the Training tab does. `replaced` is the waiting pretrain job the run takes the place of."""
     number = replaced.params.get("version") if replaced is not None else body.version
     dataset_ids = list(replaced.params.get("datasets") or []) if replaced is not None else body.dataset_ids
     version = services.current_version() if number is None else _version(services, number)
@@ -769,16 +818,9 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
         "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
         "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("inner_steps", "outer_lr", "outer_momentum")}, "rounds": rounds,
         "delta_dtype": settings.delta_dtype, "delta_sparsity": settings.delta_sparsity, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **rules["settings"], **rules["params"], **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": member_options} if member_options else {}), "machines": machines, "owner": own.hostname,
-        **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
+        **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": peer_url, "api_port": api_port,
         **({"left_out": left_out} if body.all_machines or left_out else {}), **({"member_fit": fit_of} if fit_of else {})}, note=_sizing_note(sizing))
-    runs.open_run(job)
-    if replaced is not None:
-        services.remove(replaced.id)
-    services.enqueue(job)
-    if index is not None:
-        services.move(job.id, index)
-    services.start_queue()
-    return Run.model_validate(_found(services, job.id))
+    return job
 
 
 @router.post("/runs/{run_id}/stop")
