@@ -21,7 +21,7 @@ import { ProgressCard, RunHeader } from "./header";
 import { HealthPanel } from "./health-panel";
 import { factAge, memberPhaseText, roundNumber } from "./live";
 import { LossPanel } from "./loss-panel";
-import { dilocoShape, runViewHref, gapNow, gapText, lastOf, lossText, overfit, percentOf, soloNotices, soloShape, stepSeries, trainLine } from "./logic";
+import { dilocoShape, ended, finalProgress, runViewHref, gapNow, gapText, lastOf, lossText, overfit, percentOf, soloNotices, soloShape, stepSeries, trainLine } from "./logic";
 import { OutcomePanel } from "./outcome-panel";
 import { OpenRoundPanel } from "./open-round-panel";
 import { RoundBanner } from "./round-banner";
@@ -102,9 +102,11 @@ export function SoloView({ view }: { view: Extract<RunView, { kind: "solo" }> })
   const { job, queue, running, machine, curve } = view;
   const actions = useQueueActions();
   const busy = actions.pause.isPending || actions.resume.isPending || actions.stopAfterCooldown.isPending || actions.remove.isPending;
-  const step = running ? queue.step : 0;
-  const total = running ? queue.total : 0;
-  const eta = running ? queue.eta_s : job.eta_s;
+  const over = !running && ended(job.status); // read-only: what the job's record and curve say, no controls
+  const final = finalProgress(curve);
+  const step = running ? queue.step : over ? final.step : 0;
+  const total = running ? queue.total : over ? final.total : 0;
+  const eta = over ? null : running ? queue.eta_s : job.eta_s;
   const status = [
     running ? queue.phase || T.phaseWord : job.status,
     running && queue.lr != null ? fill(T.lr, { lr: queue.lr.toExponential(1) }) : "",
@@ -138,6 +140,7 @@ export function SoloView({ view }: { view: Extract<RunView, { kind: "solo" }> })
         }
       />
       {job.note && <p className="text-sm text-muted-foreground">{job.note}</p>}
+      {over && job.error && <p className="text-sm text-destructive" role="alert" data-testid="run-error">{job.error}</p>}
       <ProgressCard
         now={fill(T.stepOf, { step: step.toLocaleString("en-US") })}
         of={total > 0 ? fill(T.stepTotal, { total: total.toLocaleString("en-US") }) : ""}

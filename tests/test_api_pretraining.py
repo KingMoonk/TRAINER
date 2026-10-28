@@ -446,6 +446,23 @@ class PretrainingRouterTests(ApiCase):
         self.assertEqual(self.call("GET", "/pretraining/versions/{number}/gate_result", path={"number": 1}),
                          {"better": True, "diff": -0.1, "upper": -0.02, "vs": 0})
 
+    def test_a_job_that_left_the_queue_still_has_its_curve(self):
+        """A failed job (still remembered by the queue) and a job only its version remembers both resolve to their run."""
+        from studio_ia.services import Job, QueueState
+
+        asked = []
+        self.services.run_curve = lambda run_dir: asked.append(run_dir) or {"steps": [(10, 5.5)], "smooth": [(10, 5.4)], "heldout": [(10, 5.6)], "lr": [], "phases": [], "total": 100}
+        failed = Job("f1", "pretrain", params={"output_dir": "/work/runs/failed"}, status="failed")
+        self.services.set_queue(QueueState(failed=[failed]))
+        self.services.save_version({"dims": {"n_ctx": 64}}, "first")
+        self.services.versions()[0].runs = ["/work/runs/queue_gone"]
+
+        self.call("GET", "/pretraining/jobs/{job_id}/curve", path={"job_id": "f1"})
+        curve = self.call("GET", "/pretraining/jobs/{job_id}/curve", path={"job_id": "gone"})
+        self.assertEqual(curve["steps"], [[10, 5.5]])
+        self.assertEqual(asked, ["/work/runs/failed", "/work/runs/queue_gone"])
+        self.assertEqual(self.client.get("/pretraining/jobs/other/curve").status_code, 404)
+
     def test_a_run_that_does_not_exist_is_a_404_and_no_path_is_taken(self):
         self.services.save_version({}, "no run yet")
         for path in ("/pretraining/versions/9/curve", "/pretraining/versions/9/phases", "/pretraining/versions/9/references",

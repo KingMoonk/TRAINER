@@ -685,13 +685,19 @@ def _run_of_version(services, number):
 
 
 def _run_of_job(services, job_id):
-    state = services.queue()
-    job = next((j for j in ([state.job] if state.job is not None else []) + list(state.up_next) if j.id == job_id), None)
+    """The run folder a job writes to. A job that left the queue is found where the queue remembers it (`find_job`: failed and ended
+    jobs keep their params), else through the version whose run folder is the job's own (`queue_<id>`, where a job writes when its
+    params name no folder)."""
+    job = services.find_job(job_id)
+    if job is not None and job.params.get("output_dir"):
+        return _absolute(services, job.params["output_dir"])
+    for version in services.versions():
+        for run in getattr(version, "runs", None) or []:
+            if Path(run).name == f"queue_{job_id}":
+                return _absolute(services, run)
     if job is None:
         raise HTTPException(404, f"No job {job_id}")
-    if not job.params.get("output_dir"):
-        raise HTTPException(404, f"Job {job_id} has no training run yet")
-    return _absolute(services, job.params["output_dir"])
+    raise HTTPException(404, f"Job {job_id} has no training run yet")
 
 
 def _absolute(services, run):
