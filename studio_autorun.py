@@ -145,6 +145,9 @@ def validate(plan):
             studio_loop.clean_config(loop["settings"])
         except (ValueError, TypeError) as exc:
             problems.append(f"The rlhf phase: {exc}")
+        judge = loop["settings"].get("judge_model")
+        if judge is not None and not (isinstance(judge, str) and judge.strip()):
+            problems.append("The rlhf phase needs judge_model as the name of an Ollama model, or left out.")
     if not any(isinstance(p, dict) and p.get("enabled") is True for p in phases):
         problems.append("At least one phase must be enabled.")
     if plan.get("controller") is not None:
