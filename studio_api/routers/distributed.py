@@ -66,6 +66,7 @@ class StartRun(BaseModel):
     outer_momentum: float = Field(DEFAULTS.outer_momentum, ge=0, lt=1)
     min_members: int | None = Field(None, ge=1, le=64)  # the run waits in the queue until this many machines (this one included) are free at once
     max_members: int | None = Field(None, ge=1, le=64)  # the most machines it takes; machines that free up later join it up to this many
+    auto_join: bool | None = None  # a machine that comes online while the run goes, and fits it, is invited by itself while the run is under max_members (None, the default: yes); false: only the machines you chose or ask to join
     coordinator: str | None = None  # a machine from the Machines list to coordinate the run (it must be one of the machines invited and answer); "" (the default): this computer
     reviewed_only: bool = False  # train only on the examples marked Good (the validation text is cut from those too); 400 when the sets hold none
     overlap: bool | None = None  # every member (this one and the invited) overlaps its communication with its compute: it trains on while the exchange runs. None (the default): on when another machine takes part, off for a run on this computer alone; false turns it off
@@ -133,6 +134,7 @@ class Member(BaseModel):
     node: str  # the name it joins under
     address: str  # "local" for this computer
     local: bool
+    joined_round: int | None = None  # the (0-based) round it first trained in, for a machine that joined after the run began; null for the others
     device: str  # cuda | mps | cpu, as the machine reported when the run started; "" when unknown
     device_name: str
     state: Literal["invited", "joining", "training", "behind", "dropped", "left", "stopped", "unreachable", "waiting", "never_joined", "finished"]
@@ -321,6 +323,7 @@ class Run(BaseModel):
     history: list[Round]
     health: RunHealth | None = None  # null for an account from a computer on an older version
     reviewed_only: bool = False  # the run trains only on examples marked Good
+    auto_join: bool = True  # a machine that comes online while it goes, and fits, is invited by itself while the run has room (max_members)
     can_stop: bool
     paused: bool = False  # the owner paused it: no new round opens until it is resumed (a round in flight finishes)
     can_pause: bool = False
@@ -859,7 +862,7 @@ def build_run(body, services, peer_url, api_port, replaced=None):
     job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
         "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "catch_up" if start else "from_scratch", "version": version.number,
         "heldout_fraction": body.hold, **{k: getattr(body, k) for k in ("inner_steps", "outer_lr", "outer_momentum")}, "rounds": rounds,
-        "delta_dtype": settings.delta_dtype, "delta_sparsity": settings.delta_sparsity, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **rules["settings"], **rules["params"], **({"reviewed_only": True} if body.reviewed_only else {}), **({"restart_from": start} if start else {}), **chat, **({"member_options": member_options} if member_options else {}), "machines": machines, "owner": own.hostname,
+        "delta_dtype": settings.delta_dtype, "delta_sparsity": settings.delta_sparsity, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **rules["settings"], **rules["params"], **({"reviewed_only": True} if body.reviewed_only else {}), **({"restart_from": start} if start else {}), **chat, **({"member_options": member_options} if member_options else {}), "machines": machines, "owner": own.hostname, **({"auto_join": False} if body.auto_join is False else {}),
         **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": peer_url, "api_port": api_port,
         **({"left_out": left_out} if body.all_machines or left_out else {}), **({"member_fit": fit_of} if fit_of else {})}, note=_sizing_note(sizing))
     return job
@@ -1047,6 +1050,28 @@ def add_member(run_id: str, node: str, services: Services) -> Run:
         raise HTTPException(409, refused)
     runs.choose(job, node, address)
     cluster.offer(job)
+    return Run.model_validate(_read(run, job)[0])
+
+
+class AutoJoin(BaseModel):
+    enabled: bool
+
+
+@router.post("/runs/{run_id}/auto-join")
+def set_auto_join(run_id: str, body: AutoJoin, services: Services) -> Run:
+    """Turn on or off inviting machines that come online while the run goes. Off: only the machines chosen, or that ask to join, are
+    offered a slot; a machine already invited stays. A run another computer coordinates is changed by asking that computer. 409 when the run is over."""
+    remote = _remote(services, run_id)
+    if remote is not None:
+        return _forward(services, remote, f"distributed/runs/{run_id}/auto-join", {"enabled": body.enabled})
+    run, job = _find(services, run_id)
+    if job is None or job.status not in ("waiting", "held", "running") or _read(run, job)[0].get("state") in runs.ENDED:  # the run view ends before the job does
+        raise HTTPException(409, "The run is over, so nothing can join it.")
+    runs.set_auto_join(job, body.enabled)
+    runner = getattr(services, "runner", None)
+    if runner is not None:
+        with runner.lock:
+            runner._save()  # the switch survives a restart of the app
     return Run.model_validate(_read(run, job)[0])
 
 

@@ -33,6 +33,10 @@ function server(initial: Run[]) {
       state.posted.push(path);
       return change(path.split("/")[3], { paused: false, can_pause: true, can_resume: false, phase: "training" });
     },
+    "POST /distributed/runs/*/auto-join": ({ path, body }) => {
+      state.posted.push(`${path} ${JSON.stringify(body)}`);
+      return change(path.split("/")[3], { auto_join: (body as { enabled: boolean }).enabled });
+    },
     "POST /distributed/runs/*/restart": ({ path }) => {
       state.posted.push(path);
       const made = run({ id: "r2", label: "Restarted run", started_at: 500, round: 0, history: [], can_pause: true });
@@ -73,6 +77,39 @@ describe("run controls", () => {
     renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
     await screen.findByTestId("run-r1");
     for (const name of ["Pause", "Resume", "Restart"]) expect(screen.queryByRole("button", { name })).toBeNull();
+  });
+
+  test("a machine that joined late says at which round, and one that cannot join says why", async () => {
+    const why = "old-pc runs app version 0.9.0; this computer runs 1.0.0, so it cannot join.";
+    server([run({
+      members: [
+        member("mac-mini", { address: "local", local: true, can_stop: false }),
+        member("gpu-box", { joined_round: 3 }),
+        member("old-pc", { state: "waiting", can_stop: false, note: why, reason: why }),
+      ],
+    })]);
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
+    expect(await screen.findByTestId("joined-gpu-box")).toHaveTextContent("Joined at round 4");
+    expect(screen.queryByTestId("joined-mac-mini")).toBeNull();
+    expect(screen.getByTestId("reason-old-pc")).toHaveTextContent("runs app version 0.9.0");
+  });
+
+  test("the switch for inviting machines that come online later is on and is turned off on the run", async () => {
+    const state = server([run()]);
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
+    const user = userEvent.setup();
+    const toggle = await screen.findByRole("switch", { name: "Invite machines that come online later" });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    await waitFor(() => expect(state.posted).toEqual(['/distributed/runs/r1/auto-join {"enabled":false}']));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Invite machines that come online later" })).not.toBeChecked());
+  });
+
+  test("a run that is over has no switch", async () => {
+    server([run({ state: "finished", can_stop: false })]);
+    renderPage(<RunViewPage />, { route: "/runs/view?id=r1" });
+    await screen.findByTestId("run-r1");
+    expect(screen.queryByRole("switch")).toBeNull();
   });
 
   test("the error curve of a run with no round yet says so", async () => {

@@ -2119,6 +2119,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/distributed/runs/{run_id}/auto-join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Auto Join
+         * @description Turn on or off inviting machines that come online while the run goes. Off: only the machines chosen, or that ask to join, are
+         *     offered a slot; a machine already invited stays. A run another computer coordinates is changed by asking that computer. 409 when the run is over.
+         */
+        post: operations["set_auto_join_distributed_runs__run_id__auto_join_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/distributed/runs/{run_id}/extend": {
         parameters: {
             query?: never;
@@ -4222,6 +4243,11 @@ export interface components {
              * @default
              */
             run_label: string;
+        };
+        /** AutoJoin */
+        AutoJoin: {
+            /** Enabled */
+            enabled: boolean;
         };
         /** AutoRunBound */
         AutoRunBound: {
@@ -6705,6 +6731,8 @@ export interface components {
             device: string;
             /** Device Name */
             device_name: string;
+            /** Joined Round */
+            joined_round?: number | null;
             /** Last Delta Bytes */
             last_delta_bytes: number | null;
             /** Last Delta Dtype */
@@ -8715,6 +8743,11 @@ export interface components {
              * @default 0
              */
             age_s: number;
+            /**
+             * Auto Join
+             * @default true
+             */
+            auto_join: boolean;
             /** Best Round */
             best_round?: number | null;
             /** Best Val Loss */
@@ -9547,6 +9580,8 @@ export interface components {
         StartRun: {
             /** All Machines */
             all_machines?: boolean | null;
+            /** Auto Join */
+            auto_join?: boolean | null;
             /**
              * Chat Datasets
              * @default []
@@ -13984,6 +14019,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_auto_join_distributed_runs__run_id__auto_join_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoJoin"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

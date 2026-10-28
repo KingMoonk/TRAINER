@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { TRAINING as T } from "@/lib/copy/training";
 import { cn } from "@/lib/utils";
-import { isActive, isProblem, memberDevice, needsReason, reasonText, type Member, type Run } from "@/app/cluster/training/logic";
+import { isActive, isProblem, joinedText, memberDevice, needsReason, reasonText, type Member, type Run } from "@/app/cluster/training/logic";
 import { T as V } from "./copy";
 import {
   deviceBadge, edges, liveLossText, liveSpeedText, memberPhaseText, progressFraction, reportedText, shardsText, stateColor, stepsText, type Edge,
@@ -57,6 +57,7 @@ function MemberNode({ run, member, action }: { run: Run; member: Member; action:
         {action && <span className="ml-auto">{action}</span>}
       </div>
       {memberDevice(member) && <p className="text-xs text-muted-foreground">{memberDevice(member)}</p>}
+      {joinedText(member) && <p className="text-xs text-muted-foreground" data-testid={`joined-${member.node}`}>{joinedText(member)}</p>}
       {member.phase && member.state === "training" && <p className="text-sm" data-testid={`phase-${member.node}`}>{memberPhaseText(member, run)}</p>}
       <div className="flex flex-col gap-1">
         <div

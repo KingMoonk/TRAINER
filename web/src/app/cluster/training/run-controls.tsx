@@ -1,9 +1,23 @@
 "use client";
 
 import { TipButton } from "@/app/runs/view/controls";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { TRAINING as T } from "@/lib/copy/training";
 import { holdButtons, type Run } from "./logic";
-import { useHoldRun, useRestartRun } from "./use-training";
+import { useAutoJoin, useHoldRun, useRestartRun } from "./use-training";
+
+/** The run's switch for inviting machines that come online while it goes (on by default); the server owns the setting. */
+export function AutoJoinSwitch({ run }: { run: Run }) {
+  const change = useAutoJoin();
+  const id = `auto-join-${run.id}`;
+  return (
+    <div className="flex items-center gap-2" data-testid="auto-join">
+      <Switch id={id} checked={run.auto_join} disabled={change.isPending} onCheckedChange={(enabled) => change.mutate({ id: run.id, enabled })} />
+      <Label htmlFor={id} title={T.autoJoinTip}>{T.autoJoin}</Label>
+    </div>
+  );
+}
 
 /**
  * Pause, Resume and Restart for one run, each only while the server says the run can do it. Stop is its own button where each page

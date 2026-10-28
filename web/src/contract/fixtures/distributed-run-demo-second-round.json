@@ -1,6 +1,7 @@
 {
   "body": {
     "age_s": 0.0,
+    "auto_join": true,
     "best_round": 0,
     "best_val_loss": 5.1309,
     "can_join": false,
@@ -147,6 +148,7 @@
         "can_stop": false,
         "device": "mps",
         "device_name": "Apple M2",
+        "joined_round": null,
         "last_delta_bytes": 2000000,
         "last_delta_dtype": "float16",
         "live_tokens_per_second": 2439.996474404291,
@@ -205,6 +207,7 @@
         "can_stop": true,
         "device": "cuda",
         "device_name": "NVIDIA GeForce RTX 4090",
+        "joined_round": null,
         "last_delta_bytes": 2000000,
         "last_delta_dtype": "float16",
         "live_tokens_per_second": 9806.694228012113,
