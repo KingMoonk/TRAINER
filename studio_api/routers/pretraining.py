@@ -687,28 +687,28 @@ def pretrain_prepare(body: PrepareRequest, request: Request, services: Services)
 
 
 def _pooled_in_place(services, body: PlanRequest, ready: PretrainPlan, waiting_id: str, peer_url: str, port: int):
-    """The pooled run that took the place of the waiting size-placeholder `waiting_id` once its size is known (same spot in Up next), or
-    None when the run stays solo: this computer only, no eligible machine, a machine that changed since the survey, or the placeholder
-    having left the queue meanwhile."""
+    """(the pooled run that took the place of the waiting size-placeholder `waiting_id` once its size is known (same spot in Up next),
+    or None when the run stays solo, why it stays solo ("" when there is nothing to tell)): this computer only, no eligible machine, a
+    machine that changed since the survey, or the placeholder having left the queue meanwhile."""
     from studio_api.routers import distributed
 
     waiting = list(services.queue().up_next)
     index = next((i for i, job in enumerate(waiting) if job.id == waiting_id and job.params.get("sizing")), None)
     if index is None:
-        return None
-    _, run = _pool(services, body, ready, peer_url)
+        return None, ""
+    pool, run = _pool(services, body, ready, peer_url)
     if run is None:
-        return None
+        return None, pool.reason
     try:
         pooled = distributed.build_run(run, services, peer_url, port)
-    except HTTPException:
-        return None
+    except HTTPException as exc:  # a machine changed since the survey
+        return None, f"The run could not be pooled ({exc.detail}) so it trains on this computer alone."
     distributed.runs.open_run(pooled)
     services.remove(waiting_id)
     services.enqueue(pooled)
     services.move(pooled.id, index)
     services.start_queue()
-    return pooled
+    return pooled, ""
 
 
 @router.post("/start", status_code=202)
@@ -765,10 +765,10 @@ def pretrain_start(body: PlanRequest, request: Request, services: Services) -> S
         except Exception as exc:
             services.fail_job(added.id, str(exc) or type(exc).__name__)
             raise
-        pooled = _pooled_in_place(services, body, ready, added.id, peer_url, port)
+        pooled, why_solo = _pooled_in_place(services, body, ready, added.id, peer_url, port)
         if pooled is not None:
             return {"id": pooled.id, "label": pooled.label}
-        services.fill_job(added.id, ready.job.label, ready.job.params)
+        services.fill_job(added.id, ready.job.label, ready.job.params, why_solo)
         return {"id": added.id, "label": ready.job.label}
     submit(request, "pretrain_start", work, StartJob, own_thread=True)  # not behind a slow read: the run waits in the queue for this
     return Started(id=added.id, label=added.label)

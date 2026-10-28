@@ -126,6 +126,28 @@ class PoolTests(ApiCase):
         self.until(lambda: "config" in queued.params, "the run's steps")
         self.assertEqual(queued.kind, "pretrain")
 
+    def test_a_placeholder_that_cannot_be_pooled_ends_solo_and_its_note_names_the_refusal(self):
+        self.nodes("box")
+        release = self.while_sizing()
+        started = self.call("POST", "/pretraining/start", 202, json=BODY)
+        queued = next(j for j in self.services.queue().up_next if j.id == started["id"])
+        refusal = HTTPException(409, "box cannot hold its share")
+        with mock.patch("studio_api.routers.distributed.build_run", side_effect=refusal):
+            release.set()
+            self.until(lambda: "config" in queued.params, "the run's steps")
+        self.assertEqual(queued.kind, "pretrain")
+        self.assertIn("box cannot hold its share", queued.note)
+        self.assertEqual(self.call("GET", "/queue")["up_next"][0]["note"], queued.note)
+
+    def test_a_placeholder_with_no_eligible_machine_says_why_it_trains_alone(self):
+        self.nodes("old")
+        release = self.while_sizing()
+        started = self.call("POST", "/pretraining/start", 202, json=BODY)
+        release.set()
+        queued = next(j for j in self.services.queue().up_next if j.id == started["id"])
+        self.until(lambda: "config" in queued.params, "the run's steps")
+        self.assertIn("old did not answer", queued.note)
+
     def test_this_computer_only_keeps_the_placeholder_solo(self):
         self.nodes("box")
         release = self.while_sizing()
