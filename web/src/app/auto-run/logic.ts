@@ -12,6 +12,8 @@ export type Progress = components["schemas"]["AutoRunJobProgress"];
 export type RunStatus = RunView["state"]["status"];
 export type Controller = components["schemas"]["AutoRunController"];
 export type Choice = components["schemas"]["AutoRunChoiceRecord"];
+export type RlhfLoop = components["schemas"]["AutoRunRlhfLoop"];
+export type RlhfRound = components["schemas"]["AutoRunRlhfRound"];
 
 /** The post-training round each phase runs (studio_ia/autorun.py ROUND). */
 export const ROUND: Record<string, number> = { sft: 1, rlvr: 2, distill: 3, dpo: 4 };
@@ -35,7 +37,7 @@ export type PhaseSpec = { title: string; blurb: string; href: string; link: stri
 export const PHASES: Record<string, PhaseSpec> = {
   data: {
     title: "Check the data",
-    blurb: "Checks that the phases you chose have what they train on: text for pretraining and mid-training, chats marked Good for Round 1. It trains nothing.",
+    blurb: "Checks that the phases you chose have what they train on: text for pretraining and mid-training, chats marked Good for Round 1, and problems a rule can check plus held-back data for the RLHF loop. It trains nothing.",
     href: "/your-data",
     link: "Open Your data",
     settings: [],
@@ -67,6 +69,17 @@ export const PHASES: Record<string, PhaseSpec> = {
   },
   distill: { title: "Round 3 · Learn from a teacher", blurb: "Move its answers toward a teacher's.", href: "/post-training", link: "Open Post-training", settings: [STEPS] },
   dpo: { title: "Round 4 · Prefer the better answer", blurb: "Learn from the answer pairs you rated.", href: "/post-training", link: "Open Post-training", settings: [STEPS] },
+  rlhf: {
+    title: "RLHF loop",
+    blurb:
+      "Practice on problems a rule can check, round after round, from the best weights so far. A round is kept only if nothing got worse on held-back data or on the report card, and it stops when the report card has not improved for a few rounds in a row.",
+    href: "/post-training",
+    link: "Open Post-training",
+    settings: [
+      { key: "max_rounds", label: "Most rounds", hint: "The most rounds it tries, kept or not. Empty: 20.", min: 1, max: 100, integer: true, fallback: null },
+      { key: "card_patience", label: "Rounds without a gain before it stops", hint: "It stops after this many rounds in a row that did not improve the report card. Empty: 3.", min: 1, max: 50, integer: true, fallback: null },
+    ],
+  },
 };
 
 export function phaseTitle(kind: string): string {
@@ -263,6 +276,40 @@ export function resultVerdict(result: PhaseState["result"]): string {
 
 export function checkText(ok: boolean | null): string {
   return ok === null ? T.checkUnmeasured : ok ? T.checkPassed : T.checkFailed;
+}
+
+/** The report card's entries as the page names them, in the order the card lists them. */
+export const CARD_ENTRIES = [
+  { key: "heldout_bpc", label: "Held-back text error", digits: 3, percent: false },
+  { key: "choice_accuracy", label: "Multiple choice", digits: 0, percent: true },
+  { key: "checked_accuracy", label: "Checked answers", digits: 0, percent: true },
+  { key: "chat_win_rate", label: "Head-to-head", digits: 0, percent: true },
+] as const;
+
+type CardEntry = { value?: number | null; band?: number[] | null };
+
+/** A round's report card as 'label value (band)' lines for the entries it measured; empty when the round never got to the card. */
+export function roundCardLines(round: RlhfRound): string[] {
+  const entries = (round.card as { entries?: Record<string, CardEntry> } | null | undefined)?.entries ?? {};
+  const lines: string[] = [];
+  for (const { key, label, digits, percent } of CARD_ENTRIES) {
+    const entry = entries[key];
+    if (entry?.value == null) continue;
+    const show = (n: number) => (percent ? `${(n * 100).toFixed(digits)}%` : n.toFixed(digits));
+    lines.push(`${label} ${show(entry.value)}${entry.band && entry.band.length === 2 ? ` (${show(entry.band[0])} to ${show(entry.band[1])})` : ""}`);
+  }
+  return lines;
+}
+
+/** Whether the report card said the round improved it; null when the round never got to the card. */
+export function roundCardImproved(round: RlhfRound): boolean | null {
+  const card = round.card as { improved?: boolean } | null | undefined;
+  return card ? Boolean(card.improved) : null;
+}
+
+/** The checks of a round that failed, so a rolled-back round says why in the gate's own words. */
+export function failedChecks(round: RlhfRound): { name: string; detail: string }[] {
+  return (round.checks ?? []).filter((c) => (c as { ok?: boolean | null }).ok === false) as { name: string; detail: string }[];
 }
 
 /** What the live job says about itself, in plain words: its step, or why it has not started. */

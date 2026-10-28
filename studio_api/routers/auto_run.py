@@ -22,7 +22,7 @@ PhaseStatus = Literal["pending", "queued", "running", "passed", "failed", "skipp
 
 
 class AutoRunPhasePlan(BaseModel):
-    """One phase of a plan. kind: data | pretrain | midtrain | sft | rlvr | distill | dpo, each at most once, in that order.
+    """One phase of a plan. kind: data | pretrain | midtrain | sft | rlvr | distill | dpo | rlhf, each at most once, in that order.
     on_pass: continue | pause. on_fail: pause | stop | skip. `settings` are the phase's own (the pretraining or round settings)."""
     kind: str
     enabled: bool
@@ -139,12 +139,36 @@ class AutoRunJobProgress(BaseModel):
     eta_s: float | None = None
 
 
+class AutoRunRlhfRound(BaseModel):
+    """One round of the RLHF loop. status: kept | rolled_back | too_few_pairs | judge_down. `card` is the report card's verdict on the round."""
+    model_config = ConfigDict(extra="allow")
+    round: int
+    status: str
+    reason: str = ""
+    checks: list[dict] = []  # the gate's checks, the report card's among them
+    card: dict | None = None  # {ok, improved, entries: {name: {value, band, items}}}; null when the round never got to the card
+
+
+class AutoRunRlhfLoop(BaseModel):
+    """The RLHF phase's loop, read from its folder, so its rounds show while it runs. card_streak: rounds in a row without a report card gain."""
+    model_config = ConfigDict(extra="allow")
+    id: str
+    status: str  # running | waiting_judge | stopped | finished | failed
+    stop_reason: str = ""
+    kept: int = 0
+    card_streak: int = 0
+    phase: str = ""
+    config: dict = {}
+    rounds: list[AutoRunRlhfRound] = []
+
+
 class AutoRunRunView(BaseModel):
     id: str
     plan: AutoRunPlanModel
     state: AutoRunRunState
     journal: list[AutoRunJournalLine]  # the last 50 lines, oldest first
     progress: AutoRunJobProgress | None = None  # null when no phase has a job in the queue
+    rlhf: AutoRunRlhfLoop | None = None  # the RLHF phase's loop, once the phase has a job
 
 
 class AutoRunRunSummary(BaseModel):
@@ -181,8 +205,16 @@ def progress(services, state):
     return out
 
 
+def rlhf_loop(services, state):
+    """The loop of the rlhf phase (its id is the phase's job id), or None while the phase has no job or the loop has not started."""
+    entry = next((p for p in state["phases"] if p["kind"] == "rlhf"), None)
+    if entry is None or not entry["job_id"]:
+        return None
+    return next((loop for loop in services.post_loops() if loop["id"] == entry["job_id"]), None)
+
+
 def view(services, body):
-    return {"id": body["plan"]["id"], **body, "progress": progress(services, body["state"])}
+    return {"id": body["plan"]["id"], **body, "progress": progress(services, body["state"]), "rlhf": rlhf_loop(services, body["state"])}
 
 
 def act(services, run_id, call, *args):

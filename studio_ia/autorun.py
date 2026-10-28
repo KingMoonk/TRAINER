@@ -16,7 +16,13 @@ Phases and the jobs they become (`JOB_KIND` in studio_autorun is the plan's view
 * sft, rlvr, distill, dpo: `post_round` jobs for rounds 1-4, built by `studio_rl.round_job`, on the version's newest checkpoint;
 * midtrain: the `midtrain` stage job (what POST /post-training/stages queues) on the version's best weights; the plan's `steps`
   setting becomes `params["config"]["steps"]`. Its result (ok, checkpoint, checks) lands in the job's params like a round's; only a
-  passing stage becomes the version's best (Services.record_stage), and a failing one fails the phase by the plan's on_fail policy.
+  passing stage becomes the version's best (Services.record_stage), and a failing one fails the phase by the plan's on_fail policy;
+* rlhf: the `rlhf_loop` job (studio_loop, built by Services.loop_job) on the version's best weights, which after an sft phase that
+  passed are the sft result. Rewards are rule-checked problems only (no judge), its prompts and held-back data are the workspace's own
+  (the same rows the data phase checked), each round is gated by the held-back checks plus the report card, and the loop ends when the
+  card has not improved for `card_patience` rounds or after `max_rounds` (the plan's settings). Its loop id is the job id, so a restart
+  carries on the same loop from its folder, and its rounds are read from there for the run page. Its best is adopted as the version's
+  best only if it passes the gate on all the held-back data (studio_loop.adoption, a round-5 record), else the phase fails.
 
 What the budget covers today: the overall deadline is checked between phases, and a pretrain phase's `hours` is capped to what is
 left. Rounds 1-4 honour no wall-clock budget of their own (their steps decide how long they take).
@@ -40,6 +46,7 @@ from studio_core import now as clock
 
 LOG = logging.getLogger("groundwork.autorun")
 ROUND = {"sft": 1, "rlvr": 2, "distill": 3, "dpo": 4}      # the post-training round each phase runs
+LOOP_SETTINGS = ("max_rounds", "card_patience")             # the rlhf phase's settings that go to the loop's config
 ACTIVE = ("running", "pausing")
 FINISHED = ("done", "failed", "stopped")                    # the queue's statuses for a job that has ended
 CHOICES = ("next", "retry", "stop", "adopt")
@@ -362,6 +369,10 @@ class Orchestrator:
             if job.status == "done" and not result:
                 what = f"Round {ROUND[kind]}" if kind in ROUND else "Mid-training"
                 result = {"passed": False, "error": f"{what} left no result."}
+        elif kind == "rlhf":
+            result = dict(job.params.get("result") or {})
+            if job.status == "done" and not result:
+                result = {"passed": False, "error": "The RLHF loop left no result."}
         elif kind == "pretrain" and job.status == "done":
             found = self._version(self.runs[run_id]["plan"]["version"])
             result = {"checkpoint": str(found.best_checkpoint)} if found is not None and found.best_checkpoint else {}
@@ -420,6 +431,12 @@ class Orchestrator:
                 ids = [s["id"] for s in self.services.conversation_sets()]
                 if not (ids and self.services.has_conversations(ids, reviewed_only=True)):
                     problems.append("There are no conversations marked Good yet for sft. Add some in Your data and mark them Good.")
+            if "rlhf" in kinds:
+                import studio_rules
+                if not any(row.get("rule") in studio_rules.CHECKABLE for row in self.services.post_rows("problems")):
+                    problems.append("There are no problems a rule can check yet for rlhf. Add some in Your data.")
+                if not (self.services.post_rows("heldout_docs") or self.services.post_rows("heldout_problems")):
+                    problems.append("There is no held-back text or problems yet for rlhf to be gated on. Hold some back in Your data.")
         except NotImplementedError:
             return ""
         return " ".join(problems)
@@ -484,6 +501,12 @@ class Orchestrator:
                 params["config"] = {"steps": settings["steps"]}
             from studio_queue import Job
             job = Job("midtrain", f"Version {version.number} \u00b7 mid-training", "midtrain stage", params=params)
+        elif kind == "rlhf":
+            if not version.best_checkpoint:
+                raise ValueError(f"Version {version.number} has no trained weights yet. Pretrain it first, or skip this phase.")
+            config = {key: settings[key] for key in LOOP_SETTINGS if isinstance(settings.get(key), int) and not isinstance(settings.get(key), bool)}
+            job = self.services.loop_job(version.number, config, loop_id=job_id, judge_model=None)   # (ValueError: a refused setting, said now)
+            job.params.update(no_judge=True, report_card=True)
         else:
             if not version.best_checkpoint:
                 raise ValueError(f"Version {version.number} has no trained weights yet. Pretrain it first, or skip this phase.")

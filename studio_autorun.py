@@ -6,9 +6,11 @@ Files, in `data/auto_runs/<id>/`: `plan.json` (what to do), `state.json` (where 
 events it made are kept in `state["events"]` until `save_state` writes them to the journal and drops them.
 
 Plan: `{id, name, version, budget: {hours}, phases: [{kind, enabled, settings, on_pass, on_fail}]}`.
-* kinds, in this fixed order, each at most once: data, pretrain, midtrain, sft, rlvr, distill, dpo (`KINDS`). Each maps to a queue
+* kinds, in this fixed order, each at most once: data, pretrain, midtrain, sft, rlvr, distill, dpo, rlhf (`KINDS`). Each maps to a queue
   job kind in `JOB_KIND` (data is not a job; pretrain, midtrain and sft are the jobs of the same name, midtrain/sft from
-  studio_training_stages (#836); rlvr, distill and dpo are `post_round` jobs, the orchestrator picks the round number);
+  studio_training_stages (#836); rlvr, distill and dpo are `post_round` jobs, the orchestrator picks the round number; rlhf is the
+  `rlhf_loop` job, the last phase: rounds of rule-checked practice from the version's best weights, each kept or rolled back by the gate
+  plus the report card, until the card stops improving (studio_loop; its settings are `max_rounds` and `card_patience`));
 * `on_pass`: continue | pause (pause after the phase passed, so the person can look);
 * `on_fail`: pause (wait for the person, who retries or skips) | stop (end the run) | skip (carry on without the phase);
 * `budget.hours`: wall-clock hours from `start`, or None for no limit. No phase starts past the deadline, and a pretrain phase's
@@ -51,9 +53,10 @@ from pathlib import Path
 
 from studio_core import atomic_json, now as clock
 
-KINDS = ("data", "pretrain", "midtrain", "sft", "rlvr", "distill", "dpo")
+KINDS = ("data", "pretrain", "midtrain", "sft", "rlvr", "distill", "dpo", "rlhf")
 JOB_KIND = {"pretrain": "pretrain", "midtrain": "midtrain", "sft": "sft", "rlvr": "post_round", "distill": "post_round",
-            "dpo": "post_round"}  # the queue job kind of each phase; data runs in process
+            "dpo": "post_round", "rlhf": "rlhf_loop"}  # the queue job kind of each phase; data runs in process
+OPT_IN = ("midtrain", "rlhf")  # the phases a new plan has switched off
 ON_PASS = ("continue", "pause")
 ON_FAIL = ("pause", "stop", "skip")
 RUN_STATUSES = ("draft", "running", "pausing", "paused", "waiting_user", "stopped", "done", "failed")
@@ -75,10 +78,11 @@ class AutorunError(ValueError):
 # --------------------------------------------------------------------------- the plan
 
 def DEFAULT_PLAN(version):
-    """The plan a new Auto Run starts from: every phase on except mid-training, continue on a pass, pause on a failure."""
+    """The plan a new Auto Run starts from: every phase on except mid-training and the RLHF loop (both are long, and the person chooses
+    them), continue on a pass, pause on a failure."""
     return {
         "id": "", "name": "Auto Run", "version": version, "budget": {"hours": DEFAULT_HOURS},
-        "phases": [{"kind": kind, "enabled": kind != "midtrain", "settings": {}, "on_pass": "continue", "on_fail": "pause"} for kind in KINDS],
+        "phases": [{"kind": kind, "enabled": kind not in OPT_IN, "settings": {}, "on_pass": "continue", "on_fail": "pause"} for kind in KINDS],
         "controller": _autotune().default_controller(),
     }
 

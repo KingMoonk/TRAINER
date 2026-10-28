@@ -4275,7 +4275,7 @@ export interface components {
         };
         /**
          * AutoRunPhasePlan
-         * @description One phase of a plan. kind: data | pretrain | midtrain | sft | rlvr | distill | dpo, each at most once, in that order.
+         * @description One phase of a plan. kind: data | pretrain | midtrain | sft | rlvr | distill | dpo | rlhf, each at most once, in that order.
          *     on_pass: continue | pause. on_fail: pause | stop | skip. `settings` are the phase's own (the pretraining or round settings).
          */
         AutoRunPhasePlan: {
@@ -4355,6 +4355,78 @@ export interface components {
             /** Version */
             version: number;
         };
+        /**
+         * AutoRunRlhfLoop
+         * @description The RLHF phase's loop, read from its folder, so its rounds show while it runs. card_streak: rounds in a row without a report card gain.
+         */
+        AutoRunRlhfLoop: {
+            /**
+             * Card Streak
+             * @default 0
+             */
+            card_streak: number;
+            /**
+             * Config
+             * @default {}
+             */
+            config: {
+                [key: string]: unknown;
+            };
+            /** Id */
+            id: string;
+            /**
+             * Kept
+             * @default 0
+             */
+            kept: number;
+            /**
+             * Phase
+             * @default
+             */
+            phase: string;
+            /**
+             * Rounds
+             * @default []
+             */
+            rounds: components["schemas"]["AutoRunRlhfRound"][];
+            /** Status */
+            status: string;
+            /**
+             * Stop Reason
+             * @default
+             */
+            stop_reason: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * AutoRunRlhfRound
+         * @description One round of the RLHF loop. status: kept | rolled_back | too_few_pairs | judge_down. `card` is the report card's verdict on the round.
+         */
+        AutoRunRlhfRound: {
+            /** Card */
+            card?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Checks
+             * @default []
+             */
+            checks: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Round */
+            round: number;
+            /** Status */
+            status: string;
+        } & {
+            [key: string]: unknown;
+        };
         /** AutoRunRunState */
         AutoRunRunState: {
             /**
@@ -4429,6 +4501,7 @@ export interface components {
             journal: components["schemas"]["AutoRunJournalLine"][];
             plan: components["schemas"]["AutoRunPlanModel"];
             progress?: components["schemas"]["AutoRunJobProgress"] | null;
+            rlhf?: components["schemas"]["AutoRunRlhfLoop"] | null;
             state: components["schemas"]["AutoRunRunState"];
         };
         /** Block */

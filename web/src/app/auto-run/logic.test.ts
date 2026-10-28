@@ -1,5 +1,26 @@
 import { describe, expect, test } from "vitest";
-import { PHASES, boundTexts, buildPlan, budgetText, checkText, controls, defaultVersion, errorText, keptRound, pickRun, progressLine, resultChecks, settingTexts, timelinePhases, valueText, when } from "./logic";
+import {
+  PHASES,
+  boundTexts,
+  buildPlan,
+  budgetText,
+  checkText,
+  controls,
+  defaultVersion,
+  errorText,
+  failedChecks,
+  keptRound,
+  pickRun,
+  progressLine,
+  resultChecks,
+  roundCardImproved,
+  roundCardLines,
+  settingTexts,
+  timelinePhases,
+  valueText,
+  when,
+  type RlhfRound,
+} from "./logic";
 import { plan, run, summary } from "./test-data";
 
 describe("buildPlan", () => {
@@ -171,5 +192,33 @@ describe("the parameter controller's limits", () => {
 
   test("names a value the way the page says it", () => {
     expect([valueText(0.00005), valueText(0.0001), valueText(3000), valueText(0.15), valueText(null)]).toEqual(["5e-5", "1e-4", "3,000", "0.15", ""]);
+  });
+});
+
+describe("the RLHF phase", () => {
+  const round = (over: Partial<RlhfRound> = {}): RlhfRound => ({ round: 1, status: "kept", reason: "", checks: [], card: null, ...over });
+
+  test("takes the most rounds and the patience as whole numbers, and refuses others", () => {
+    expect(PHASES.rlhf.settings.map((s) => s.key)).toEqual(["max_rounds", "card_patience"]);
+    const on = plan({ phases: plan().phases.map((p) => (p.kind === "rlhf" ? { ...p, enabled: true } : p)) });
+    const built = buildPlan(on, { "rlhf.max_rounds": "8", "rlhf.card_patience": "2" }, "");
+    expect("plan" in built && built.plan.phases.find((p) => p.kind === "rlhf")!.settings).toEqual({ max_rounds: 8, card_patience: 2 });
+    expect(buildPlan(on, { "rlhf.card_patience": "1.5" }, "")).toMatchObject({ error: expect.stringContaining("Rounds without a gain before it stops") });
+  });
+
+  test("a round's report card is named entry by entry, with its band", () => {
+    const card = { ok: true, improved: true, entries: { choice_accuracy: { value: 0.6, band: [0.5, 0.7] }, heldout_bpc: { value: 1.9, band: [1.85, 1.95] }, chat_win_rate: { value: null, band: null } } };
+    expect(roundCardLines(round({ card }))).toEqual(["Held-back text error 1.900 (1.850 to 1.950)", "Multiple choice 60% (50% to 70%)"]);
+    expect(roundCardLines(round())).toEqual([]);
+    expect([roundCardImproved(round({ card })), roundCardImproved(round({ card: { ...card, improved: false } })), roundCardImproved(round())]).toEqual([true, false, null]);
+  });
+
+  test("only the checks that failed are listed", () => {
+    const checks = [
+      { name: "a", ok: true, detail: "" },
+      { name: "b", ok: false, detail: "worse" },
+      { name: "c", ok: null, detail: "" },
+    ];
+    expect(failedChecks(round({ checks }))).toEqual([{ name: "b", ok: false, detail: "worse" }]);
   });
 });

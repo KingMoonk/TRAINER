@@ -56,7 +56,7 @@ describe("Auto Run page: a new run", () => {
     expect(await screen.findByTestId("plan-editor")).toBeVisible();
     expect(screen.getByLabelText("Version to train")).toHaveValue("2");
     expect(calls.some((c) => c.path === "/auto-runs/defaults" && c.search === "?version=2")).toBe(true);
-    for (const kind of ["data", "pretrain", "midtrain", "sft", "rlvr", "distill", "dpo"]) expect(screen.getByTestId(`plan-${kind}`)).toBeVisible();
+    for (const kind of ["data", "pretrain", "midtrain", "sft", "rlvr", "distill", "dpo", "rlhf"]) expect(screen.getByTestId(`plan-${kind}`)).toBeVisible();
     expect(screen.getByRole("switch", { name: "Include Mid-training" })).not.toBeChecked(); // optional: off unless the person adds it
     expect(screen.getByLabelText("Overall time budget (hours)")).toHaveValue("12");
   });
@@ -387,6 +387,93 @@ describe("Auto Run page: the parameter controller", () => {
     await user.click(screen.getByRole("button", { name: "Save the plan" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("The limits for DPO beta must be numbers");
     expect(posted(calls, "/auto-runs/run1/plan")).toHaveLength(0);
+  });
+});
+
+describe("Auto Run page: the RLHF phase", () => {
+  const card = (improved: boolean, choice: number) => ({
+    ok: true,
+    improved,
+    entries: { choice_accuracy: { value: choice, band: [choice - 0.1, choice + 0.1], items: 40 }, heldout_bpc: { value: 1.9, band: [1.85, 1.95], items: 30 } },
+  });
+  const loop = (over: Partial<NonNullable<RunView["rlhf"]>> = {}): NonNullable<RunView["rlhf"]> => ({
+    id: "run1-7-1",
+    status: "running",
+    stop_reason: "",
+    kept: 1,
+    card_streak: 2,
+    phase: "round 3: training",
+    config: { card_patience: 3 },
+    rounds: [
+      { round: 1, status: "kept", reason: "Kept: nothing got worse and something improved.", checks: [], card: card(true, 0.6) },
+      {
+        round: 2,
+        status: "rolled_back",
+        reason: "Rolled back: report card: multiple-choice accuracy did not fall.",
+        checks: [
+          { name: "Held-back text: error did not rise", ok: true, detail: "fine" },
+          { name: "Report card: Frozen suite: multiple-choice accuracy did not fall", ok: false, detail: "accuracy changed by -0.150 over 40 shared items: the baseline is better by a paired test" },
+        ],
+        card: { ...card(false, 0.45), ok: false },
+      },
+    ],
+    ...over,
+  });
+  const withRlhf = (status: RunView["state"]["status"], rlhf: RunView["rlhf"]) => {
+    const view = run(status, "rlhf", { rlhf: { status: "running", job_id: "run1-7-1" } }, { rlhf });
+    view.plan.phases = view.plan.phases.map((p) => (p.kind === "rlhf" ? { ...p, enabled: true } : p));
+    return view;
+  };
+
+  test("the run page shows each round, kept or rolled back, with why and what the report card said", async () => {
+    server(withRlhf("running", loop()));
+    renderPage(<AutoRunPage />);
+    const rounds = await screen.findByTestId("auto-run-rlhf");
+    const first = within(within(rounds).getByTestId("rlhf-round-1"));
+    expect(first.getByText("Kept")).toBeVisible();
+    expect(first.getByText("Report card improved")).toBeVisible();
+    expect(first.getByText(/Multiple choice 60% \(50% to 70%\)/)).toBeVisible();
+    const second = within(within(rounds).getByTestId("rlhf-round-2"));
+    expect(second.getByText("Rolled back")).toBeVisible();
+    expect(second.getByText("Report card did not improve")).toBeVisible();
+    expect(second.getByText(/accuracy changed by -0.150 over 40 shared items/)).toBeVisible();
+    expect(second.queryByText(/Held-back text: error did not rise/)).toBeNull(); // only the checks that failed
+    expect(within(rounds).getByText("Now: round 3: training")).toBeVisible();
+    expect(within(rounds).getByText("2 of 3 rounds in a row without a report card gain")).toBeVisible();
+  });
+
+  test("a loop that stopped says why", async () => {
+    server(withRlhf("running", loop({ status: "finished", stop_reason: "The report card has not improved in 3 rounds in a row: the version has stopped improving here.", phase: "" })));
+    renderPage(<AutoRunPage />);
+    const rounds = await screen.findByTestId("auto-run-rlhf");
+    expect(within(rounds).getByText(/Stopped: The report card has not improved in 3 rounds in a row/)).toBeVisible();
+    expect(within(rounds).queryByText(/^Now:/)).toBeNull();
+  });
+
+  test("before the first round finishes it says so, and a run without the phase shows no rounds", async () => {
+    server(withRlhf("running", loop({ rounds: [], kept: 0, card_streak: 0 })));
+    renderPage(<AutoRunPage />);
+    expect(within(await screen.findByTestId("auto-run-rlhf")).getByText("No round has finished yet.")).toBeVisible();
+  });
+
+  test("a run without an rlhf loop shows no rounds", async () => {
+    server(run("running", "pretrain", { data: { status: "passed" } }));
+    renderPage(<AutoRunPage />);
+    await screen.findByTestId("auto-run-view");
+    expect(screen.queryByTestId("auto-run-rlhf")).toBeNull();
+  });
+
+  test("its settings go into the saved plan", async () => {
+    const { calls } = server(null);
+    const user = userEvent.setup();
+    renderPage(<AutoRunPage />);
+    await screen.findByTestId("plan-editor");
+    await user.click(screen.getByRole("switch", { name: "Include RLHF loop" }));
+    await user.type(screen.getByLabelText("Rounds without a gain before it stops, RLHF loop"), "2");
+    await user.click(screen.getByRole("button", { name: "Save as a draft" }));
+    await waitFor(() => expect(posted(calls, "/auto-runs")).toHaveLength(1));
+    const made = posted(calls, "/auto-runs")[0].body as { plan: Plan };
+    expect(made.plan.phases.find((p) => p.kind === "rlhf")).toMatchObject({ enabled: true, settings: { card_patience: 2 } });
   });
 });
 

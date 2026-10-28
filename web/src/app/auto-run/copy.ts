@@ -2,7 +2,7 @@
 
 export const T = {
   title: "Auto Run",
-  lead: "Plan the whole training once: pretrain, then the four post-training rounds. It runs them one after another on the queue and stops to ask you when a phase fails.",
+  lead: "Plan the whole training once: pretrain, then the four post-training rounds, then the RLHF loop. It runs them one after another on the queue and stops to ask you when a phase fails.",
   versionLabel: "Version to train",
   noVersions: "No versions yet. Build one in Build your model first.",
   loadingPlan: "Loading the plan",
@@ -70,6 +70,18 @@ export const T = {
   heldToLimit: "held to your limit",
   proposal: "Proposal (nothing was changed)",
   biggerDesign: "Bigger design",
+  rlhfTitle: "RLHF rounds",
+  rlhfHint: "Each round practises on problems a rule can check, then is kept or rolled back by the held-back checks and the report card.",
+  rlhfNone: "No round has finished yet.",
+  rlhfRound: "Round {n}",
+  rlhfKept: "Kept",
+  rlhfRolledBack: "Rolled back",
+  rlhfTooFew: "Too few pairs",
+  rlhfCardUp: "Report card improved",
+  rlhfCardFlat: "Report card did not improve",
+  rlhfStreak: "{n} of {max} rounds in a row without a report card gain",
+  rlhfStopped: "Stopped: {reason}",
+  rlhfDoing: "Now: {phase}",
   journal: "History",
   journalHint: "What the run did, newest last.",
   noJournal: "Nothing has happened yet.",
@@ -104,6 +116,12 @@ export const PHASE_STATUS_TEXT: Record<string, string> = {
   skipped: "Skipped",
   stopped: "Stopped",
   blocked: "Needs you",
+};
+
+export const ROUND_STATUS_TEXT: Record<string, string> = {
+  kept: T.rlhfKept,
+  rolled_back: T.rlhfRolledBack,
+  too_few_pairs: T.rlhfTooFew,
 };
 
 export function fill(text: string, values: Record<string, string | number>): string {

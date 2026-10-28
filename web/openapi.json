@@ -462,7 +462,7 @@
         "type": "object"
       },
       "AutoRunPhasePlan": {
-        "description": "One phase of a plan. kind: data | pretrain | midtrain | sft | rlvr | distill | dpo, each at most once, in that order.\non_pass: continue | pause. on_fail: pause | stop | skip. `settings` are the phase's own (the pretraining or round settings).",
+        "description": "One phase of a plan. kind: data | pretrain | midtrain | sft | rlvr | distill | dpo | rlhf, each at most once, in that order.\non_pass: continue | pause. on_fail: pause | stop | skip. `settings` are the phase's own (the pretraining or round settings).",
         "properties": {
           "enabled": {
             "title": "Enabled",
@@ -646,6 +646,106 @@
           "phases"
         ],
         "title": "AutoRunPlanModel",
+        "type": "object"
+      },
+      "AutoRunRlhfLoop": {
+        "additionalProperties": true,
+        "description": "The RLHF phase's loop, read from its folder, so its rounds show while it runs. card_streak: rounds in a row without a report card gain.",
+        "properties": {
+          "card_streak": {
+            "default": 0,
+            "title": "Card Streak",
+            "type": "integer"
+          },
+          "config": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Config",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kept": {
+            "default": 0,
+            "title": "Kept",
+            "type": "integer"
+          },
+          "phase": {
+            "default": "",
+            "title": "Phase",
+            "type": "string"
+          },
+          "rounds": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AutoRunRlhfRound"
+            },
+            "title": "Rounds",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "stop_reason": {
+            "default": "",
+            "title": "Stop Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "AutoRunRlhfLoop",
+        "type": "object"
+      },
+      "AutoRunRlhfRound": {
+        "additionalProperties": true,
+        "description": "One round of the RLHF loop. status: kept | rolled_back | too_few_pairs | judge_down. `card` is the report card's verdict on the round.",
+        "properties": {
+          "card": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Card"
+          },
+          "checks": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "round": {
+            "title": "Round",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "round",
+          "status"
+        ],
+        "title": "AutoRunRlhfRound",
         "type": "object"
       },
       "AutoRunRunState": {
@@ -855,6 +955,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/AutoRunJobProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rlhf": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutoRunRlhfLoop"
               },
               {
                 "type": "null"

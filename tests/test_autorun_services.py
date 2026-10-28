@@ -2,8 +2,11 @@
 a failed gate per policy, pause/stop/skip/continue, the pretrain phase waiting for its restore_answers round, the budget, and a
 restart in the middle of a phase. No runner, no worker, no window: tests end a job by hand with FakeServices.finish_job."""
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy
 
@@ -358,6 +361,99 @@ class ControllerTests(Base):
         self.auto.continue_run("run1", "retry")
         self.assertEqual(self.services.find_job("run1-0-2").params["learning_rate"], 1e-4)
         self.assertEqual(self.state().get("choices", []), [])
+
+
+class RlhfPhaseTests(Base):
+    """The RLHF loop as the last phase: rule-checked practice from the sft phase's best weights, gated by the report card."""
+
+    def loop_job(self, plan_kinds=("rlhf",)):
+        self.go(plan_of(plan_kinds))
+        return self.services.queue().up_next[0]
+
+    def test_the_phase_queues_the_loop_job_with_the_report_card_on_and_no_judge(self):
+        plan = plan_of(("rlhf",))
+        plan["phases"][0]["settings"] = {"max_rounds": 6, "card_patience": 2, "ignored": 9}
+        self.go(plan)
+        job = self.services.queue().up_next[0]
+        self.assertEqual((job.id, job.kind, job.params["auto_run"], job.params["auto_phase"]), ("run1-0-1", "rlhf_loop", "run1", "rlhf"))
+        self.assertEqual(job.params["config"], {"max_rounds": 6, "card_patience": 2})
+        self.assertEqual((job.params["no_judge"], job.params["report_card"], job.params["loop_id"]), (True, True, "run1-0-1"))   # its loop id is the job id
+        self.assertEqual(self.phase("rlhf")["status"], "queued")
+
+    def test_it_starts_from_the_sft_phases_best_weights(self):
+        self.go(plan_of(("sft", "rlhf")))
+        self.services._versions[0].best_checkpoint = "ck-sft"      # what Services.record_round does for a round that passed its gate
+        self.end("run1-0-1", result=GOOD)
+        job = self.services.queue().up_next[0]
+        self.assertEqual((job.kind, job.params["checkpoint"]), ("rlhf_loop", "ck-sft"))
+
+    def test_a_refused_setting_waits_for_the_person_with_the_sentence(self):
+        plan = plan_of(("rlhf",))
+        plan["phases"][0]["settings"] = {"card_patience": 0}
+        self.go(plan)
+        self.assertEqual(self.state()["status"], "waiting_user")
+        self.assertIn("card_patience", self.state()["reason"])
+
+    def test_the_data_phase_wants_checked_problems_and_held_back_data(self):
+        self.go(plan_of(("data", "rlhf")))
+        self.assertEqual(self.state()["status"], "waiting_user")
+        self.assertIn("no problems a rule can check yet for rlhf", self.state()["reason"])
+        self.assertIn("no held-back text or problems yet for rlhf", self.state()["reason"])
+        rows = {"problems": [{"prompt": "Copy: a", "rule": "copy", "params": {"text": "a"}}], "heldout_docs": ["a held-back text"]}
+        self.services.post_rows = lambda kind: rows.get(kind, [])
+        self.auto.resume("run1")
+        self.assertEqual(self.phase("data")["status"], "passed")
+        self.assertEqual(self.queued(), ["run1-1-1"])
+
+    def test_a_loop_that_leaves_no_result_fails_the_phase(self):
+        self.loop_job()
+        self.end("run1-0-1")
+        self.assertEqual(self.phase("rlhf")["status"], "failed")
+        self.assertIn("left no result", self.phase("rlhf")["error"])
+
+    def test_a_best_that_fails_the_full_held_back_check_fails_the_phase_by_policy(self):
+        self.loop_job()
+        self.end("run1-0-1", result={"ok": False, "round": 5, "checkpoint": "ck-best", "verdict": "The loop's best is worse on the held-back data.", "rounds": []})
+        self.assertEqual((self.phase("rlhf")["status"], self.state()["status"]), ("failed", "paused"))
+        self.assertIn("worse on the held-back data", self.phase("rlhf")["error"])
+        with self.assertRaises(ar.AutorunError):
+            self.auto.continue_run("run1", "adopt")        # only a post-training round keeps a checkpoint to adopt
+
+    def test_the_loop_keeps_and_rolls_back_rounds_by_the_gate_and_stops_when_the_card_flattens(self):
+        """The whole phase in a tiny Auto Run: studio_loop.run_job runs as the queue would, the model, the DPO step and the measurements are
+        scripted (no judge: the phase uses rule-checked problems only), and the run ends with the phase's result."""
+        import studio_jobs
+        import studio_loop
+        import tests.test_loop as scripted
+        job = self.loop_job()
+        table = {0: {"bpc": 2.0, "pass_k": 5}, 1: {"bpc": 1.9, "pass_k": 7},    # round 1: better on both
+                 2: {"bpc": 2.5, "pass_k": 7},                                   # round 2: held-back error rose
+                 3: {"bpc": 1.85, "pass_k": 8},                                  # round 3: better numbers, but the card says an entry got worse
+                 4: {"bpc": 1.9, "pass_k": 7}}                                   # round 4: nothing moved
+        card = scripted.scripted_card({1: {"improved": True}, 2: {}, 3: {"ok": False}, 4: {}})
+        real = studio_loop.collect
+        with tempfile.TemporaryDirectory() as tmp:
+            start = Path(tmp) / "start.npz"
+            start.write_text("weights", encoding="utf-8")
+            job.params.update(output_dir=str(Path(tmp) / "loop"), checkpoint=str(start), rows=scripted.ROWS)
+            context = SimpleNamespace(root=tmp, run_dir=tmp, post_rows=lambda kind: [])
+            with patch("studio_loop.report_card", lambda ctx: card), \
+                 patch("studio_loop.collect", lambda *a, **k: real(*a, **{**k, "model": scripted.PassingModel()})), \
+                 patch("studio_rl.measure", scripted.scripted_measure(table)), \
+                 patch("studio_eval.noise_band", lambda ckpt, docs: None), \
+                 patch("studio_rlhf.dpo_train", scripted.fake_trainer()):
+                studio_jobs.HANDLERS["rlhf_loop"](job, context, lambda event: None, threading.Event(), threading.Event())
+            result = job.params["result"]
+            self.end("run1-0-1", result=result)
+        rounds = result["rounds"]
+        self.assertEqual([r["status"] for r in rounds], ["kept", "rolled_back", "rolled_back", "rolled_back"])
+        self.assertIn("report card", rounds[2]["reason"].lower())                  # round 3 passed the numbers and failed the card
+        self.assertIn("report card has not improved", result["stop_reason"])      # three rounds in a row without the card improving
+        entry = self.phase("rlhf")
+        self.assertEqual(entry["status"], "passed")
+        self.assertTrue(entry["checkpoint"].replace("\\", "/").endswith("round_0001/dpo/last.npz"))
+        self.assertEqual((result["round"], result["ok"]), (5, True))              # the best was checked on all the held-back data
+        self.assertEqual(self.state()["status"], "done")
 
 
 if __name__ == "__main__":

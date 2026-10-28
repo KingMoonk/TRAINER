@@ -18,6 +18,12 @@ Everything is on disk: `state.json` (atomic, rewritten at each phase), `journal.
 the evidence), `pairs_kept.jsonl` (replay) and `round_NNNN/` folders (collect.jsonl is written prompt by prompt, so a restart in
 the middle of a day of judging does not pay for it twice). A restart reads the state and carries on from the last kept round.
 
+Report card (the Auto Run's last phase): `run_loop(..., card=...)` takes a callable `card(candidate, parent)` that scores both on the frozen
+assistant suite (`report_card` builds it from `Services.gate_eval`). Its checks join the gate, so a round that raises the judge score or
+the checked-problem pass rate but gets clearly worse (a paired test, so noise in the items does not count) on held-back text, multiple
+choice or checked answers is rolled back; a round the card says improved counts as an improvement; and a new stop rule appears:
+`card_patience` rounds in a row that did not improve the card end the loop.
+
 Placement: a round's collect phase is the `collect(spec, ...)` function, whose spec and result are plain JSON. `run_loop(...,
 collector=...)` takes any callable with that signature, which is where a peer-side runner plugs in (studio_remote, #442).
 """
@@ -48,7 +54,8 @@ DEFAULTS = {
     "max_length_ratio": 1.5,    # replies may not grow longer than this share of the parent's on the gate prompts
     "drift_bpc": .02,           # held-back error may rise this share above the starting model's, in total
     "drift_pass": .02,          # checked-problem pass rate may fall this much below the starting model's, in total
-    "audit_flags": 2,           # stop after this many kept rounds in a row that pass the gate and fail the audit
+    "card_patience": 3,         # stop rule, with a report card: this many rounds in a row that did not improve it
+    "audit_flags": 2,         # stop after this many kept rounds in a row that pass the gate and fail the audit
     "keep_checkpoints": 3,      # kept round folders on disk besides the starting model and the current best
     "judge_wait_s": 6 * 3600,   # how long to wait for an unreachable judge before stopping
     "max_failures": 8, "seed": 5,
@@ -70,7 +77,7 @@ class JudgeDown(RuntimeError):
 def clean_config(config):
     cfg = {**DEFAULTS, **{k: v for k, v in (config or {}).items() if k in DEFAULTS}}
     for key, low, high in (("max_rounds", 1, 100000), ("patience", 1, 1000), ("prompts_per_round", 2, 5000), ("candidates", 2, 8),
-                           ("dpo_steps", 1, 5000), ("gate_prompts", 0, 200), ("gate_samples", 1, 8), ("audit_flags", 1, 100),
+                           ("dpo_steps", 1, 5000), ("gate_prompts", 0, 200), ("gate_samples", 1, 8), ("audit_flags", 1, 100), ("card_patience", 1, 1000),
                            ("keep_checkpoints", 1, 50), ("replay", 0, 100000), ("max_failures", 1, 1000)):
         cfg[key] = int(cfg[key])
         if not low <= cfg[key] <= high:
@@ -155,7 +162,7 @@ def append_jsonl(path, row):
 def summary(state, journal_tail=None):
     """The state as the API shows it: the rounds without their bulky parts."""
     out = {k: state.get(k) for k in ("id", "version", "status", "stop_reason", "config", "anchor", "current", "kept", "failed_streak",
-                                     "audit_flagged", "elapsed_s", "created", "updated", "phase", "note", "current_eval", "anchor_eval")}
+                                     "audit_flagged", "elapsed_s", "created", "updated", "phase", "note", "current_eval", "anchor_eval", "card_streak", "report_card")}
     out["rounds"] = [{k: v for k, v in r.items() if k != "examples"} for r in state.get("rounds", [])]
     out["round"] = state.get("next_round", 1)
     return out
@@ -251,14 +258,42 @@ def collect(spec, judge, emit=None, stop=None, pause=None, done=None, record=Non
     return {"pairs": pairs, "skipped": skipped, "errors": errors}
 
 
+# --------------------------------------------------------------------------- the report card
+
+CARD_KEYS = ("heldout_bpc", "choice_accuracy", "checked_accuracy", "chat_win_rate")
+
+
+def report_card(context):
+    """The `card(candidate, parent)` a loop gates on, over `context.gate_eval` (Services): both checkpoints on the frozen assistant suite.
+    Returns {"ok", "checks", "improved", "entries"}: the checks are studio_bench.gate_verdict's (a clear regression on held-back text,
+    multiple choice or checked answers fails, by a paired test), improved is whether any of the three got better by the same test, and
+    entries are the candidate's report card values with their bands."""
+    import studio_eval
+
+    def score(candidate, parent):
+        got = context.gate_eval(candidate, baseline=parent)
+        verdict = got["verdict"]
+        gain = verdict.get("gain") or {}
+        entries = studio_eval.assistant_card_from_results(got["scores"], got["baseline"])["entries"]
+        return {"ok": bool(verdict["ok"]), "checks": [{**c, "name": f"Report card: {c['name']}"} for c in verdict["checks"]],
+                "improved": any((gain.get(k) or {}).get("better") for k in ("bpc", "few_shot", "problems")),
+                "entries": {k: {"value": entries[k]["value"], "band": entries[k]["band"], "items": entries[k]["items"]} for k in CARD_KEYS if k in entries}}
+    return score
+
+
 # --------------------------------------------------------------------------- the decision
 
-def decide(parent, candidate, anchor, band, anchor_band, judge, length_ratio, cfg):
+def decide(parent, candidate, anchor, band, anchor_band, judge, length_ratio, cfg, card=None):
     """(kept, checks, improved). parent/candidate/anchor: the gate half's {"bpc", "pass_k", "pass_n"}. band: the parent's noise band.
     judge: {"win_rate", "needed", ...} or None. A check's ok is None when nothing could be measured (it never fails a round).
 
-    Kept only when every check holds AND something improved (more checked problems solved, or the judge won)."""
+    card: the report card's {"ok", "checks", "improved"} (`report_card`) or None. Its checks join the others, and an improved card counts
+    as something improved.
+
+    Kept only when every check holds AND something improved (more checked problems solved, the judge won, or the card improved)."""
     ok, checks = studio_gate.passes(parent, candidate, band)
+    if card is not None:
+        checks += card["checks"]
     b0, b1 = anchor.get("bpc"), candidate.get("bpc")
     if b0 is not None and b1 is not None and math.isfinite(b0) and math.isfinite(b1):
         limit = max(b0 * (1 + cfg["drift_bpc"]), anchor_band[1] if anchor_band else b0)
@@ -281,6 +316,9 @@ def decide(parent, candidate, anchor, band, anchor_band, judge, length_ratio, cf
     solved_more = p0 is not None and p1 is not None and candidate["pass_k"] > parent["pass_k"] and p1 > p0
     judged = bool(judge) and judge.get("win_rate") is not None and judge["win_rate"] >= judge["needed"]
     said = []
+    carded = bool(card and card.get("improved"))
+    if carded:
+        said.append("the report card improved")
     if solved_more:
         said.append("more checked problems solved")
     if judged:
@@ -289,9 +327,9 @@ def decide(parent, candidate, anchor, band, anchor_band, judge, length_ratio, cf
         said.append("no more checked problems solved")
         if judge and judge.get("win_rate") is not None:
             said.append(f"the judge's win rate {judge['win_rate'] * 100:.0f}% is under the {judge['needed'] * 100:.0f}% needed")
-    checks.append({"name": "Something improved", "ok": bool(solved_more or judged), "detail": " and ".join(said)})
+    checks.append({"name": "Something improved", "ok": bool(solved_more or judged or carded), "detail": " and ".join(said)})
     kept = all(c["ok"] is not False for c in checks)
-    return kept, checks, {"solved_more": bool(solved_more), "judge": bool(judged)}
+    return kept, checks, {"solved_more": bool(solved_more), "judge": bool(judged), "card": carded}
 
 
 def audit_check(anchor_audit, candidate_audit, band):
@@ -305,6 +343,8 @@ def stop_reason(state, cfg, elapsed):
     """Why the loop must stop now (a sentence), or None."""
     if state["next_round"] > cfg["max_rounds"]:
         return f"Reached the {cfg['max_rounds']} rounds it was asked to try."
+    if state.get("report_card") and state.get("card_streak", 0) >= cfg["card_patience"]:
+        return f"The report card has not improved in {state['card_streak']} rounds in a row: the version has stopped improving here."
     if state["failed_streak"] >= cfg["patience"]:
         return f"{state['failed_streak']} rounds in a row were not kept: the version has stopped improving here."
     if cfg["max_hours"] is not None and elapsed >= cfg["max_hours"] * 3600:
@@ -331,9 +371,10 @@ def mean_length(examples, side):
 
 
 def run_loop(directory, checkpoint, rows, judge, config=None, emit=None, stop=None, pause=None, version=None, loop_id=None,
-             measure=None, band=None, trainer=None, versus=None, collector=None, wait=None, clock=None, budget_token=None):
+             measure=None, band=None, trainer=None, versus=None, collector=None, wait=None, clock=None, budget_token=None, card=None):
     """Run (or resume) the loop in `directory`. rows: {"conversations", "problems", "heldout_docs", "heldout_problems"} as
-    studio_jobs/post_rows give them. judge: an OllamaTeacher-like object or None (checked problems only). The keyword seams are
+    studio_jobs/post_rows give them. judge: an OllamaTeacher-like object or None (checked problems only). card: `report_card(...)` or None
+    (the report card then neither gates nor stops the loop). The keyword seams are
     for tests and for placing work elsewhere (collector); each defaults to the real thing. Returns the final state's summary."""
     import studio_eval
     import studio_rl
@@ -363,14 +404,14 @@ def run_loop(directory, checkpoint, rows, judge, config=None, emit=None, stop=No
         state = {"id": loop_id or uid("loop"), "version": version, "status": "running", "stop_reason": "", "config": cfg,
                  "anchor": str(checkpoint), "current": str(checkpoint), "anchor_eval": None, "current_eval": None, "anchor_audit": None,
                  "current_audit": None, "current_band": None, "anchor_band": None, "audit_band": None, "next_round": 1, "kept": 0,
-                 "failed_streak": 0, "audit_flagged": 0, "elapsed_s": 0., "created": now(), "rounds": [], "phase": "", "note": ""}
+                 "failed_streak": 0, "audit_flagged": 0, "card_streak": 0, "elapsed_s": 0., "created": now(), "rounds": [], "phase": "", "note": ""}
     elif budget_token and state.get("budget_token") != budget_token:
         # Continue, asked by the user: the stop rules are asked afresh (this many more rounds), the streaks start again. The token makes
         # an automatic re-run after a restart of the same job not do it twice.
         asked = clean_config(config)
         state["config"] = clean_config({**state["config"], **{k: v for k, v in (config or {}).items() if k in DEFAULTS},
                                         "max_rounds": state["next_round"] - 1 + asked["max_rounds"]})
-        state.update(failed_streak=0, audit_flagged=0, budget_token=budget_token)
+        state.update(failed_streak=0, audit_flagged=0, card_streak=0, budget_token=budget_token)
     cfg = clean_config(state["config"])
     judge_prompts = []
     if judge:
@@ -402,7 +443,7 @@ def run_loop(directory, checkpoint, rows, judge, config=None, emit=None, stop=No
             event.pop("total", None)
         emit(event)
 
-    save(status="running", stop_reason="", note="")
+    save(status="running", stop_reason="", note="", report_card=card is not None)
     # --- the starting point: measured once, and kept in the state
     if state["anchor_eval"] is None:
         save(phase="measuring the starting model")
@@ -490,8 +531,22 @@ def run_loop(directory, checkpoint, rows, judge, config=None, emit=None, stop=No
                         judged = {"win_rate": None, "needed": .5 + cfg["win_margin"], "error": str(exc)[:200]}
                 if stop.is_set():
                     break
+                scored = None
+                if card is not None:
+                    save(phase=f"round {number}: scoring the report card")
+                    try:
+                        scored = card(candidate_path, state["current"])
+                    except Exception as exc:  # a card that cannot be scored is no evidence: the round is rolled back, never kept unchecked
+                        if stop.is_set():
+                            break
+                        scored = {"ok": False, "improved": False, "entries": {}, "error": str(exc)[:200],
+                                  "checks": [{"name": "Report card: scored", "ok": False, "detail": f"could not be scored ({str(exc)[:200]})"}]}
+                if stop.is_set():
+                    break
                 kept, checks, improved = decide(state["current_eval"], after, state["anchor_eval"], state["current_band"], state["anchor_band"],
-                                                judged, ratio, cfg)
+                                                judged, ratio, cfg, scored)
+                if scored is not None:
+                    record["card"] = {k: scored.get(k) for k in ("ok", "improved", "entries", "error")}
                 audit_ok, audit_checks = audit_check(state["anchor_audit"], audit_after, state["audit_band"])
                 record.update(checks=checks, before=state["current_eval"], after=after, anchor=state["anchor_eval"], judge=judged,
                               length_ratio=ratio, improved=improved, audit={"before": state["anchor_audit"], "after": audit_after, "ok": audit_ok,
@@ -521,6 +576,8 @@ def run_loop(directory, checkpoint, rows, judge, config=None, emit=None, stop=No
                 append_jsonl(paths(directory)["replay"], pair)
         else:
             fields.update(failed_streak=state["failed_streak"] + 1, audit_flagged=state["audit_flagged"] + 1 if flagged else state["audit_flagged"])
+        if card is not None:  # the card stopped improving: a round that was not kept, or kept without it getting better, adds to the streak
+            fields["card_streak"] = 0 if verdict == KEPT and (record.get("card") or {}).get("improved") else state.get("card_streak", 0) + 1
         record["rolled_back_to"] = state["current"] if verdict != KEPT else None
         state["rounds"].append(record)
         append_jsonl(paths(directory)["journal"], record)
@@ -561,8 +618,30 @@ def run_job(job, context, emit, stop, pause):
     if model and not p.get("no_judge"):
         judge = studio_rlhf.OllamaTeacher(settings["url"], model, rubric=settings["rubric"],
                                           judge_model=None if p.get("judge_model") else settings.get("judge_model") or None, stop=stop).judge_teacher()
-    return run_loop(p["output_dir"], p.get("checkpoint"), rows, judge, p.get("config"), emit, stop, pause, version=p.get("version"),
-                    loop_id=p.get("loop_id"), budget_token=p.get("budget_token"))
+    final = run_loop(p["output_dir"], p.get("checkpoint"), rows, judge, p.get("config"), emit, stop, pause, version=p.get("version"),
+                     loop_id=p.get("loop_id"), budget_token=p.get("budget_token"), card=report_card(context) if p.get("report_card") else None)
+    if p.get("auto_run"):   # an Auto Run reads how the loop ended from the job's params, as it does for a round
+        adopted = adoption(final, rows) if final["status"] == "finished" and final["kept"] else None
+        job.params["result"] = phase_result(final, adopted)
+    return final
+
+
+def phase_result(final, adopted):
+    """What an Auto Run's RLHF phase reports (the fields studio_autorun.apply_outcome reads): `ok` and `checkpoint`, a `verdict` sentence,
+    the gate's `checks`, and `rounds`, one line per round tried. `final` is the loop's summary, `adopted` studio_loop.adoption of its best
+    on all the held-back data (None when no round was kept, or the loop did not finish). A loop that was stopped is reported as stopped;
+    one that kept no round passes and leaves the weights it started from as they were; one whose best fails on the full held-back data
+    fails, and keeps the best's checkpoint (a round-5 record, like the manual adoption) for the person to look at."""
+    rounds = [{"round": r["round"], "status": r.get("status"), "reason": r.get("reason", ""), "improved": bool((r.get("card") or {}).get("improved"))}
+              for r in final["rounds"]]
+    base = {"loop_id": final["id"], "kept": final["kept"], "rounds": rounds, "stop_reason": final["stop_reason"], "checks": []}
+    if final["status"] != "finished":
+        return {**base, "ok": False, "stopped": True, "checkpoint": final["current"],
+                "verdict": final["stop_reason"] or "The loop stopped before it finished."}
+    if adopted is None:
+        return {**base, "ok": True, "checkpoint": final["anchor"],
+                "verdict": f"No round was kept, so the version keeps the weights it started with. {final['stop_reason']}".strip()}
+    return {**base, **adopted, "verdict": f"{adopted['verdict']} {final['stop_reason']}".strip()}
 
 
 def adoption(state, rows, measure=None, band=None):

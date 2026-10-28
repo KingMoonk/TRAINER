@@ -17,23 +17,27 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { KeptCard } from "../post-training/kept-card";
-import { PHASE_STATUS_TEXT, STATUS_TEXT, T, fill } from "./copy";
+import { PHASE_STATUS_TEXT, ROUND_STATUS_TEXT, STATUS_TEXT, T, fill } from "./copy";
 import { PlanEditor } from "./plan-editor";
 import {
   PHASES,
   checkText,
   choiceLabel,
   controls,
+  failedChecks,
   phaseTitle,
   progressLine,
   resultChecks,
   resultVerdict,
+  roundCardImproved,
+  roundCardLines,
   runChoices,
   runLabel,
   timelinePhases,
   valueText,
   when,
   type Progress,
+  type RlhfLoop,
   type RunView,
 } from "./logic";
 import { useRunActions } from "./use-auto-run";
@@ -111,6 +115,51 @@ function Timeline({ run }: { run: RunView }) {
           );
         })}
       </ol>
+    </section>
+  );
+}
+
+/** The RLHF phase's rounds, read from its loop while it runs: kept or rolled back, why, and what the report card said of each. */
+function RlhfRounds({ loop }: { loop: RlhfLoop }) {
+  const patience = (loop.config as { card_patience?: number }).card_patience ?? 3;
+  return (
+    <section className="flex flex-col gap-2" aria-label={T.rlhfTitle} data-testid="auto-run-rlhf">
+      <h2 className="text-sm font-medium">{T.rlhfTitle}</h2>
+      <p className="text-sm text-muted-foreground">{T.rlhfHint}</p>
+      {loop.status === "running" && loop.phase && <p className="text-sm">{fill(T.rlhfDoing, { phase: loop.phase })}</p>}
+      <p className="text-sm text-muted-foreground">{fill(T.rlhfStreak, { n: loop.card_streak, max: patience })}</p>
+      {loop.stop_reason && loop.status !== "running" && <p className="text-sm">{fill(T.rlhfStopped, { reason: loop.stop_reason })}</p>}
+      {loop.rounds.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{T.rlhfNone}</p>
+      ) : (
+        <ol className="flex flex-col gap-2">
+          {loop.rounds.map((round) => {
+            const improved = roundCardImproved(round);
+            const lines = roundCardLines(round);
+            const failed = failedChecks(round);
+            return (
+              <li key={round.round} data-testid={`rlhf-round-${round.round}`} className="rounded-lg border p-3 text-sm">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="font-medium">{fill(T.rlhfRound, { n: round.round })}</span>
+                  <span className="text-xs uppercase tracking-wide text-muted-foreground">{ROUND_STATUS_TEXT[round.status] ?? round.status}</span>
+                </div>
+                {round.reason && <p className="mt-1 text-muted-foreground">{round.reason}</p>}
+                {failed.length > 0 && (
+                  <ul aria-label={`${T.checks}, ${fill(T.rlhfRound, { n: round.round })}`} className="mt-1 flex flex-col gap-0.5">
+                    {failed.map((check) => (
+                      <li key={check.name}>
+                        {check.name}: <span className="text-muted-foreground">{check.detail}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {improved !== null && <p className="mt-1">{improved ? T.rlhfCardUp : T.rlhfCardFlat}</p>}
+                {lines.length > 0 && <p className="mt-1 text-xs text-muted-foreground">{lines.join(" · ")}</p>}
+              </li>
+            );
+          })}
+        </ol>
+      )}
     </section>
   );
 }
@@ -245,6 +294,7 @@ export function RunPanel({ run }: { run: RunView }) {
       ) : (
         <Timeline run={run} />
       )}
+      {status !== "draft" && run.rlhf && <RlhfRounds loop={run.rlhf} />}
       {status !== "draft" && run.plan.controller && <Choices run={run} />}
       {status === "paused" && (
         <Disclosure title={T.changePlan} hint={T.changePlanHint}>

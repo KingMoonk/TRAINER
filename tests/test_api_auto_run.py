@@ -193,6 +193,31 @@ class AutoRunApiTest(Base):
         self.assertEqual((body["state"]["phases"][0]["status"], body["state"]["current"]), ("passed", "sft"))
 
 
+    def test_the_rlhf_phase_shows_its_loops_rounds_as_they_are_kept_or_rolled_back(self):
+        plan = plan_of(("rlhf",))
+        plan["phases"][0]["settings"] = {"max_rounds": 6}
+        body = self.go(plan)
+        self.assertIsNone(body["rlhf"])                                            # the loop has not written anything yet
+        job = self.services.queue().up_next[0]
+        self.assertEqual((job.kind, job.params["config"]), ("rlhf_loop", {"max_rounds": 6}))
+        card = {"ok": True, "improved": True, "entries": {"choice_accuracy": {"value": .6, "band": [.5, .7], "items": 40}}}
+        self.services._loops = [{"id": "other", "rounds": []},
+                                {"id": job.id, "version": 1, "status": "running", "stop_reason": "", "kept": 1, "card_streak": 1, "phase": "round 3: training",
+                                 "config": {"max_rounds": 6}, "report_card": True,
+                                 "rounds": [{"round": 1, "status": "kept", "reason": "Kept: nothing got worse and something improved.", "checks": [], "card": card},
+                                            {"round": 2, "status": "rolled_back", "reason": "Rolled back: report card: multiple-choice accuracy did not fall.",
+                                             "checks": [{"name": "Report card: multiple-choice accuracy did not fall", "ok": False, "detail": "x"}],
+                                             "card": {**card, "ok": False, "improved": False}}]}]
+        loop = self.client.get("/auto-runs/run1").json()["rlhf"]
+        self.assertEqual((loop["id"], loop["status"], loop["kept"], loop["card_streak"]), (job.id, "running", 1, 1))
+        self.assertEqual([r["status"] for r in loop["rounds"]], ["kept", "rolled_back"])
+        self.assertTrue(loop["rounds"][0]["card"]["improved"])
+        self.assertFalse(loop["rounds"][1]["checks"][0]["ok"])
+
+    def test_a_run_without_an_rlhf_phase_has_no_loop(self):
+        self.assertIsNone(self.go()["rlhf"])
+
+
 class PlanChangeTest(Base):
     def put(self, plan):
         return self.client.put("/auto-runs/run1/plan", json={"plan": plan})

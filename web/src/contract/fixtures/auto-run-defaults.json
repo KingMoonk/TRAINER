@@ -75,6 +75,13 @@
         "on_fail": "pause",
         "on_pass": "continue",
         "settings": {}
+      },
+      {
+        "enabled": false,
+        "kind": "rlhf",
+        "on_fail": "pause",
+        "on_pass": "continue",
+        "settings": {}
       }
     ],
     "version": "v0.0.0"

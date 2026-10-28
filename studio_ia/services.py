@@ -738,6 +738,11 @@ class Services:
         loop to carry on, from its last kept round. Raises ValueError with a sentence when it cannot start."""
         raise NotImplementedError
 
+    def loop_job(self, version, config=None, loop_id=None, judge_model=None, budget_token=None):
+        """The `rlhf_loop` job start_loop would queue, not queued (the Auto Run asks for it with its own job id and loop id). ValueError with a
+        sentence when the version, its weights or a setting is not there."""
+        raise NotImplementedError
+
     def adopt_loop(self, loop_id) -> dict:
         """Check a loop's best on all the held-back data and, if the gate passes, make it the version's checkpoint: the gate result."""
         raise NotImplementedError
@@ -1492,11 +1497,20 @@ class FakeServices(Services):
                              "anchor": v.best_checkpoint, "current": v.best_checkpoint, "kept": 0, "failed_streak": 0, "audit_flagged": 0,
                              "elapsed_s": 0., "created": "", "updated": "", "phase": "", "note": "", "anchor_eval": None,
                              "current_eval": None, "rounds": [], "round": 1})
-        job = Job(uuid.uuid4().hex[:8], "rlhf_loop", f"RLHF loop · version {v.number}", "automated preference rounds",
-                  params={"version": v.number, "checkpoint": v.best_checkpoint, "config": dict(config or {}), "loop_id": loop_id,
-                          "judge_model": judge_model})
+        job = self.loop_job(v.number, config, loop_id, judge_model)
         self.enqueue(job)
         return {"job": job.id, "loop_id": loop_id, "label": job.label}
+
+    def loop_job(self, version, config=None, loop_id=None, judge_model=None, budget_token=None):
+        v = next((x for x in self._versions if x.number == version), None) if version else (self._versions[-1] if self._versions else None)
+        if v is None or not v.best_checkpoint:
+            raise NoCheckpoint(getattr(v, "number", None))
+        import studio_loop
+        studio_loop.clean_config(config)
+        loop_id = loop_id or uuid.uuid4().hex[:8]
+        return Job(uuid.uuid4().hex[:8], "rlhf_loop", f"RLHF loop · version {v.number}", "automated preference rounds",
+                   params={"version": v.number, "checkpoint": v.best_checkpoint, "config": dict(config or {}), "loop_id": loop_id,
+                           "judge_model": judge_model})
 
     def adopt_loop(self, loop_id):
         return {"round": 5, "ok": False, "checks": [], "verdict": "Nothing to adopt: the fake services run no loops.", "checkpoint": ""}
@@ -2905,6 +2919,9 @@ class WorkspaceServices(Services):
         if job and job.kind in ("post_round", "restore_answers") and payload["status"] != "running" and job.params.get("result"):
             result = job.params["result"]  # the round ran in a worker: its gate result is kept here, in the app
             return self.record_round(result["round"], job.params.get("version"), result)
+        if job and job.kind == "rlhf_loop" and payload["status"] == "done" and (job.params.get("result") or {}).get("round") == 5:
+            result = job.params["result"]  # an Auto Run's loop that kept rounds: its best, checked on all the held-back data (studio_loop.adoption)
+            return self.record_round(5, job.params.get("version"), result)
         if job and job.kind == "midtrain" and payload["status"] == "done" and job.params.get("result"):
             return self.record_stage(job)
         number = job.params.get("version") if job and job.kind in VERSION_JOBS else None
@@ -3261,11 +3278,23 @@ class WorkspaceServices(Services):
                     and (j.params.get("loop_id") == loop_id or (not resume and j.params.get("version") == v.number))]
         if busy:
             raise ValueError("A loop is already queued or running for this version. Stop it first.")
-        params = {"version": v.number, "checkpoint": str(v.best_checkpoint), "config": dict(config or {}), "loop_id": loop_id,
-                  "output_dir": str(folder), "budget_token": uid("budget") if resume else None, "judge_model": judge_model}
-        job = Job(uuid.uuid4().hex[:8], "rlhf_loop", f"RLHF loop · version {v.number}", "automated preference rounds", params=params)
+        job = self.loop_job(v.number, config, loop_id, judge_model, uid("budget") if resume else None)
         self.enqueue(job)
         return {"job": job.id, "loop_id": loop_id, "label": job.label}
+
+    def loop_job(self, version, config=None, loop_id=None, judge_model=None, budget_token=None):
+        from studio_core import uid
+        import studio_loop
+        v = self._as_version(version) if version else self.current_version()
+        if v is None:
+            raise ValueError("There is no version yet. Build one first.")
+        if not v.best_checkpoint:
+            raise NoCheckpoint(v.number)
+        studio_loop.clean_config(config)
+        loop_id = loop_id or uid("loop")
+        params = {"version": v.number, "checkpoint": str(v.best_checkpoint), "config": dict(config or {}), "loop_id": loop_id,
+                  "output_dir": str(Path(self.workspace.run_dir) / f"rlhf_loop_{loop_id}"), "budget_token": budget_token, "judge_model": judge_model}
+        return Job(uuid.uuid4().hex[:8], "rlhf_loop", f"RLHF loop · version {v.number}", "automated preference rounds", params=params)
 
     def adopt_loop(self, loop_id):
         import studio_loop

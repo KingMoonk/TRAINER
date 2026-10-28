@@ -10,6 +10,7 @@ from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
+import studio_bench
 import studio_jobs
 import studio_loop
 import studio_rlhf
@@ -397,6 +398,112 @@ class RealPipeline(unittest.TestCase):
             self.assertTrue(json.dumps(entry))   # plain JSON all the way
             self.assertEqual(result["round"], 2)
             self.assertIn("bpc", entry["after"])
+
+
+def scripted_card(rounds):
+    """card(candidate, parent) from {round number: {"ok", "improved"}}: the report card's verdict on that round's candidate."""
+    def card(candidate, parent):
+        row = rounds[int(candidate.split("round_")[1][:4])]
+        ok = row.get("ok", True)
+        return {"ok": ok, "improved": row.get("improved", False), "entries": {"choice_accuracy": {"value": row.get("choice", .5), "band": [.4, .6], "items": 40}},
+                "checks": [{"name": "Report card: multiple-choice accuracy did not fall", "ok": ok, "detail": "scripted"}]}
+    return card
+
+
+def bench_result(bpc, hits, rate_hits, suite="s"):
+    """A studio_bench.run_suite result shaped like the real one, for the report card's paired tests."""
+    import studio_eval
+    return {"suite": suite, "bpc": bpc, "doc_scores": [[bpc * 100 * studio_eval.LN2, 100] for _ in range(30)], "bpc_band": [bpc - .01, bpc + .01], "dropped": {},
+            "few_shot": {"accuracy": sum(hits) / len(hits), "items": len(hits), "band": [0., 1.], "rows": [{"shots": 4, "hits": list(hits)}]},
+            "problems": {"rate": sum(rate_hits) / len(rate_hits), "each": list(rate_hits), "total": len(rate_hits)}}
+
+
+class ReportCard(LoopCase):
+    FLAT = {0: {"bpc": 2.0, "pass_k": 5}, 1: {"bpc": 1.9, "pass_k": 7}}   # from round 1 on the held-back numbers do not move
+
+    def table(self, rounds):
+        return {0: self.FLAT[0], **{n: self.FLAT[1] for n in range(1, rounds + 1)}}
+
+    def test_a_round_the_judge_likes_but_that_hurts_a_card_entry_is_rolled_back(self):
+        self.run_loop(scripted_measure(self.table(1)), win_rates({1: .9}), config={"max_rounds": 1}, card=scripted_card({1: {"ok": False}}))
+        entry = self.journal()[0]
+        self.assertGreaterEqual(entry["judge"]["win_rate"], entry["judge"]["needed"])   # the judge and the held-back numbers both like it
+        self.assertEqual(entry["status"], "rolled_back")
+        self.assertFalse(next(c for c in entry["checks"] if c["name"].startswith("Report card"))["ok"])
+        self.assertIn("report card", entry["reason"].lower())
+        self.assertFalse(entry["card"]["ok"])
+
+    def test_the_same_round_is_kept_when_the_card_agrees(self):
+        self.run_loop(scripted_measure(self.table(1)), win_rates({1: .9}), config={"max_rounds": 1}, card=scripted_card({1: {"ok": True, "improved": True}}))
+        entry = self.journal()[0]
+        self.assertEqual(entry["status"], "kept")
+        self.assertTrue(entry["card"]["improved"])
+        self.assertIn("report card improved", next(c for c in entry["checks"] if c["name"] == "Something improved")["detail"])
+
+    def test_the_loop_stops_when_the_card_flattens(self):
+        card = scripted_card({1: {"improved": True}, 2: {"improved": True}, 3: {}, 4: {}, 5: {}, 6: {}})   # better twice, then flat
+        result = self.run_loop(scripted_measure(self.table(6)), win_rates({n: .5 for n in range(1, 7)}), card=card,
+                               config={"max_rounds": 6, "patience": 6, "card_patience": 2})
+        # round 2 moves no held-back number: only the card says it improved, and that is enough to keep it
+        self.assertEqual([j["status"] for j in self.journal()], ["kept", "kept", "rolled_back", "rolled_back"])
+        self.assertEqual(result["status"], "finished")
+        self.assertEqual(result["card_streak"], 2)
+        self.assertIn("report card has not improved", result["stop_reason"])
+
+    def test_a_card_that_cannot_be_scored_rolls_the_round_back(self):
+        def broken(candidate, parent):
+            raise RuntimeError("the suite is missing")
+        self.run_loop(scripted_measure(self.table(1)), win_rates({1: .9}), config={"max_rounds": 1}, card=broken)
+        entry = self.journal()[0]
+        self.assertEqual(entry["status"], "rolled_back")
+        self.assertIn("the suite is missing", next(c for c in entry["checks"] if c["name"] == "Report card: scored")["detail"])
+
+    def test_without_a_card_nothing_changes(self):
+        result = self.run_loop(scripted_measure(self.table(1)), win_rates({1: .9}), config={"max_rounds": 1})
+        self.assertNotIn("card", self.journal()[0])
+        self.assertFalse(result["report_card"])
+        self.assertEqual(result["card_streak"], 0)
+
+    def test_the_card_checks_are_the_suites_paired_tests(self):
+        base = bench_result(2.0, [1, 1, 0] * 20, [1] * 30)
+        scores = {"a": base, "b": bench_result(2.4, [0, 1, 0] * 20, [0] * 30), "c": bench_result(1.8, [1, 1, 1] * 20, [1] * 30)}
+        context = SimpleNamespace(gate_eval=lambda candidate, baseline=None: {"scores": scores[candidate], "baseline": scores[baseline],
+                                                                              "verdict": studio_bench.gate_verdict(scores[baseline], scores[candidate])})
+        score = studio_loop.report_card(context)
+        worse = score("b", "a")
+        self.assertFalse(worse["ok"])
+        self.assertFalse(worse["improved"])
+        self.assertTrue(all(c["name"].startswith("Report card: ") for c in worse["checks"]))
+        better = score("c", "a")
+        self.assertTrue(better["ok"])
+        self.assertTrue(better["improved"])
+        self.assertEqual(set(better["entries"]), set(studio_loop.CARD_KEYS))
+
+
+class PhaseResult(unittest.TestCase):
+    FINAL = {"id": "run-1-4-1", "status": "finished", "kept": 0, "stop_reason": "Stopped.", "anchor": "start.npz", "current": "start.npz",
+             "rounds": [{"round": 1, "status": "rolled_back", "reason": "no", "card": {"improved": False}}]}
+
+    def test_a_loop_that_kept_nothing_passes_and_leaves_the_weights_alone(self):
+        got = studio_loop.phase_result(self.FINAL, None)
+        self.assertTrue(got["ok"])
+        self.assertEqual((got["checkpoint"], got["kept"]), ("start.npz", 0))
+        self.assertEqual(got["rounds"], [{"round": 1, "status": "rolled_back", "reason": "no", "improved": False}])
+
+    def test_a_best_that_passes_on_all_the_held_back_data_is_the_phases_checkpoint(self):
+        adopted = {"round": 5, "ok": True, "checks": [], "verdict": "Fine.", "before": {}, "after": {}, "band": None, "checkpoint": "best.npz"}
+        got = studio_loop.phase_result({**self.FINAL, "kept": 2, "current": "best.npz"}, adopted)
+        self.assertEqual((got["ok"], got["checkpoint"], got["round"]), (True, "best.npz", 5))
+
+    def test_a_best_that_fails_there_fails_the_phase(self):
+        adopted = {"round": 5, "ok": False, "checks": [{"name": "x", "ok": False, "detail": ""}], "verdict": "Worse.", "checkpoint": "best.npz"}
+        got = studio_loop.phase_result({**self.FINAL, "kept": 1, "current": "best.npz"}, adopted)
+        self.assertFalse(got["ok"])
+        self.assertIn("Worse.", got["verdict"])
+
+    def test_a_loop_that_was_stopped_is_a_stopped_phase(self):
+        got = studio_loop.phase_result({**self.FINAL, "status": "stopped", "stop_reason": "Stopped."}, None)
+        self.assertTrue(got["stopped"])
 
 
 class Job(unittest.TestCase):
