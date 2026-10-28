@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { ROUND2_SETTINGS, count, settingValue, spreadText, type Options, type Round2Key, type Status } from "./logic";
 
 export type Choices = {
+  method: "practice" | "rejection"; // Round 2: practise with rewards, or train once on the answers that passed
   round2: Record<Round2Key, string>; // text as typed; empty = the server's default
   lora: boolean | null; // null = follow the version's own setting
   rank: number;
@@ -177,6 +178,16 @@ function Round2({ live, gate, choices, set }: RoundProps) {
   const line = spreadText(taught, groups);
   return (
     <div className="flex flex-col gap-3">
+      <Choice
+        label={T.methodLabel}
+        value={choices.method}
+        items={[
+          { value: "practice", label: T.methodPractice },
+          { value: "rejection", label: T.methodRejection },
+        ]}
+        onChange={(method) => set({ method })}
+      />
+      <p className="max-w-prose text-sm text-muted-foreground">{choices.method === "rejection" ? T.methodDescRejection : T.methodDescPractice}</p>
       <Round2Settings choices={choices} set={set} />
       {group ? (
         <>

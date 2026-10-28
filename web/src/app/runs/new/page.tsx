@@ -160,7 +160,7 @@ function Fields({ defaults, sets, machines }: { defaults: UseQueryResult<Default
           : stage === "sft"
           ? (
               await unwrap(
-                api.POST("/post-training/rounds", { body: { round: 1, version: sftVersion, lora: null, lora_rank: 8, teacher: "version", teacher_version: null, leash: "Medium" } }),
+                api.POST("/post-training/rounds", { body: { round: 1, version: sftVersion, lora: null, lora_rank: 8, teacher: "version", teacher_version: null, leash: "Medium", method: "practice" } }),
               )
             ).id
           : (await unwrap(api.POST("/quicktest/run", { body: { dataset, minutes: Number(minutes) as 1 | 3 | 10, shrink: false } }))).job_id;

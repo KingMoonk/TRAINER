@@ -280,6 +280,55 @@ class RLChecks(unittest.TestCase):
         with self.assertRaises(ValueError):
             studio_rl.round_job(5, version)
 
+    def test_rejection_rows_are_only_verified_passes_that_ended_with_an_end_token(self):
+        problems = [{"prompt": "Copy: yes", "rule": "copy"}, {"prompt": "Copy: no", "rule": "copy"}]
+        replies = {"Copy: yes": ["yes", "yes", "no", "cat", "yes"], "Copy: no": ["maybe", "no"]}   # pass, repeat, fail, fail, repeat; then a fail and a pass that never stopped
+
+        def generate_group(local, messages, n, **kwargs):
+            return replies[messages[-1]["content"]]
+
+        with mock.patch.object(studio_rl.LocalModel, "generate_group", generate_group),              mock.patch.object(studio_rl, "is_cut", lambda tokenizer, text, budget: text == "no"):
+            found = studio_rl.rejection_rows(self.ckpt, problems, k=5, device="cpu")
+        self.assertEqual([r["messages"] for r in found["rows"]],
+                         [[{"role": "user", "content": "Copy: yes"}, {"role": "assistant", "content": "yes"}]])
+        self.assertEqual({k: found[k] for k in ("problems", "answers", "passed", "cut", "solved")},
+                         {"problems": 2, "answers": 7, "passed": 4, "cut": 1, "solved": 1})
+
+    def test_rejection_round_trains_on_the_passes_and_is_gated_like_round_1(self):
+        problems = [{"prompt": f"Copy: {w}", "rule": "copy"} for w in WORDS]
+        job = Job("post_round", "r", params={"round": 2, "method": "rejection", "checkpoint": str(self.ckpt), "output_dir": str(self.dir / "rej"),
+                                             "problems": problems, "heldout_docs": [], "heldout_problems": problems[:2], "heldout_conversations": EXAMPLES[:2]})
+        rows = [{"messages": [{"role": "user", "content": "Copy: yes"}, {"role": "assistant", "content": "yes"}]}]
+        found = {"rows": rows, "problems": 8, "answers": 64, "passed": 3, "cut": 0, "solved": 1}
+        events = []
+        with mock.patch.object(studio_rl, "rejection_rows", return_value=found), mock.patch.object(studio_rl, "train", return_value={"checkpoint": str(self.ckpt)}) as fit,              mock.patch.object(studio_rl, "pass_at_k") as probe,              mock.patch.object(studio_rl, "measure", return_value={"bpc": None, "conv_loss": 2., "eos_rate": 1., "pass_k": 1, "pass_n": 2}):
+            studio_rl.run_round(2, job, mock.Mock(run_dir=self.dir), events.append, threading.Event(), threading.Event())
+        probe.assert_not_called()
+        self.assertEqual(fit.call_args.args[1], rows)
+        gate = next(e for e in events if e["type"] == "gate")
+        self.assertEqual([c["name"] for c in gate["checks"]], ["Held-back conversations: answer error fell", "Answers still stop: end-of-answer rate did not fall",
+                                                               "Raw text: error stayed within the drift budget", "Checked problems: pass rate did not fall"])
+        self.assertFalse(gate["ok"])   # the loss did not fall, so the candidate is kept but not live, like any other round
+        self.assertEqual((gate["kept"], gate["checkpoint"]), (1, str(self.ckpt)))
+
+    def test_rejection_round_with_nothing_verified_is_skipped_without_training(self):
+        job = Job("post_round", "r", params={"round": 2, "method": "rejection", "checkpoint": str(self.ckpt), "problems": [{"prompt": "Copy: yes", "rule": "copy"}],
+                                             "heldout_docs": [], "heldout_problems": [], "heldout_conversations": []})
+        events = []
+        none = {"rows": [], "problems": 1, "answers": 8, "passed": 0, "cut": 0, "solved": 0}
+        with mock.patch.object(studio_rl, "rejection_rows", return_value=none), mock.patch.object(studio_rl, "train") as fit,              mock.patch.object(studio_rl, "measure", return_value={"bpc": None, "pass_k": 0, "pass_n": 0}):
+            done = studio_rl.run_round(2, job, mock.Mock(run_dir=self.dir), events.append, threading.Event(), threading.Event())
+        fit.assert_not_called()
+        self.assertFalse(done["ok"])
+        self.assertTrue(job.params["result"]["skipped"])
+
+    def test_round_job_marks_the_keep_the_passes_method_and_leaves_practice_alone(self):
+        version = mock.Mock(number=3, best_checkpoint="v3.npz")
+        job = studio_rl.round_job(2, version, {"method": "rejection", "group": 6})
+        self.assertEqual((job.label, job.params["method"], job.params["group"]), ("Round 2 · Practice with checks · keep passing answers", "rejection", 6))
+        self.assertNotIn("method", studio_rl.round_job(2, version, {"method": "practice"}).params)
+        self.assertEqual(studio_rl.rows_needed(2, {"method": "rejection"}), ["problems", "heldout_docs", "heldout_problems", "heldout_conversations"])
+
     def test_round_three_probe_is_not_always_the_first_prompts(self):
         prompts = [{"prompt": f"Copy: {w}"} for w in WORDS]
         events = []

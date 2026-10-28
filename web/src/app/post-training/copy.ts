@@ -42,6 +42,12 @@ export const T = {
     "Rules it can check: copy, reverse, sort, count, small addition, stay under a length, end cleanly, and the answer key an imported set came with (a final number or an option letter). A teacher's rubric can add a smaller second score, but an answer that fails a rule gets the minimum whatever the rubric says.",
   spreadSome: "{taught} of {groups} {groupsWord} had both a better and a worse answer; only those teach the model.",
   spreadNone: "None of the {groups} {groupsWord} had both a better and a worse answer, so nothing was learned.",
+  methodLabel: "How it learns",
+  methodPractice: "Practice with rewards",
+  methodRejection: "Keep the passes",
+  methodDescPractice: "It writes several answers to each problem and is pushed toward the ones that pass, away from the ones that fail.",
+  methodDescRejection:
+    "It writes several answers to each problem, keeps only the ones that pass the check and stop on their own (no repeats), then learns from those in one pass, the way it learns from conversations. It is held to the same checks as the conversations round, and its pass rate on held-back problems must not fall. Prompts per step and Stay close to the start do not apply; Steps, if filled in, sets the number of updates.",
   spreadHint: "Only a group with both a better and a worse answer teaches the model. How many did is shown here as it trains.",
   notSurprised: "not surprised",
   verySurprised: "very surprised · pushed toward what the teacher would write",

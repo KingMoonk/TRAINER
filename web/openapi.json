@@ -10262,6 +10262,15 @@
             ],
             "title": "Max Tokens"
           },
+          "method": {
+            "default": "practice",
+            "enum": [
+              "practice",
+              "rejection"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
           "prompts_per_step": {
             "anyOf": [
               {

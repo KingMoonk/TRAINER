@@ -47,6 +47,8 @@ SFT_EPOCHS = 2          # passes over the conversations
 SFT_MAX_STEPS = 2000
 SFT_WARMUP = .03        # share of the steps spent warming up; the cosine floor is the schedule's own 10% of the peak
 SFT_SAMPLE_PROMPT = "Hello, how can you help me?"
+REJECTION_PROBLEMS = 500   # problems answered in the keep-the-passes variant of Round 2 (a random sample when there are more)
+REJECTION_EPOCHS = 1       # passes over the kept answers
 
 
 def _messages(item):
@@ -268,6 +270,46 @@ def practice_with_checks(checkpoint, problems, output_dir, group=ROUND2_DEFAULTS
     return _finish(directory, local, optimizer, cfg, step, base_step, -best if math.isfinite(best) else None, history, extra, record, stop, keep_best=False)
 
 
+def rejection_rows(checkpoint, problems, k=ROUND2_DEFAULTS["group"], temperature=ROUND2_DEFAULTS["temperature"], max_tokens=None,
+                   limit=REJECTION_PROBLEMS, seed=7, device="auto", emit=None, stop=None):
+    """Round 2, keep-the-passes variant (rejection sampling): per checkable problem the live checkpoint writes k answers; each answer a
+    rule passes AND that ended on its own end token (not cut at its token budget) becomes one training row {"messages"}, identical
+    repeats of a problem's answer dropped. Returns {"rows", "problems", "answers", "passed", "cut", "solved"}; stopping early returns
+    what was kept so far (the caller checks `stop`)."""
+    emit, stop = emit or (lambda event: None), stop or threading.Event()
+    problems = [p for p in problems if p.get("rule") in studio_rules.CHECKABLE]
+    problems = random.Random(seed).sample(problems, min(int(limit), len(problems)))
+    local = LocalModel(checkpoint, device=device)
+    local.rng = np.random.default_rng(seed)
+    rows, seen = [], set()
+    answers = passed = cut = solved = 0
+    for done, problem in enumerate(problems, 1):
+        if stop.is_set():
+            break
+        messages = _messages(problem)
+        prompt = _prompt_text(messages)
+        budget = max_tokens or studio_rules.max_tokens(problem["rule"])
+        kept = 0
+        for answer in local.generate_group(messages, k, max_tokens=budget, temperature=temperature):
+            answers += 1
+            if not studio_rules.check(problem["rule"], prompt, answer, problem.get("params")):
+                continue
+            passed += 1
+            if is_cut(local.tokenizer, answer, budget):   # a pass that ran into its budget never stopped: no end token to learn
+                cut += 1
+                continue
+            key = (prompt, answer.strip())
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append({"messages": [*messages, {"role": "assistant", "content": answer}]})
+            kept += 1
+        solved += kept > 0
+        if done % 10 == 0 or done == len(problems):
+            emit({"type": "info", "text": f"sampling · {done} of {len(problems)} problems · {len(rows)} verified answers kept"})
+    return {"rows": rows, "problems": len(problems), "answers": answers, "passed": passed, "cut": cut, "solved": solved}
+
+
 # --------------------------------------------------------------------------- round 3
 
 class Teacher:
@@ -478,7 +520,7 @@ def _doc(row):
     return row if isinstance(row, str) else row.get("text") or f"{row.get('user', '')}\n{row.get('assistant', '')}"
 
 
-def sft_config(base, conversations, tokenizer_state=None, **overrides):
+def sft_config(base, conversations, tokenizer_state=None, epochs=SFT_EPOCHS, **overrides):
     """Round 1's own recipe on top of the base's config: it learns the chat format, it does not pretrain again.
 
     Learning rate min(1e-4, 0.1 x the pretraining peak); steps cover SFT_EPOCHS passes over the conversations' tokens (a batch is
@@ -492,7 +534,7 @@ def sft_config(base, conversations, tokenizer_state=None, **overrides):
     if conversations:
         tokenizer = Tokenizer.restore(tokenizer_state)
         tokens = sum(len(encode_example(row, tokenizer)[0]) for row in conversations)
-    steps = int(overrides.get("steps") or max(1, min(SFT_MAX_STEPS, math.ceil(SFT_EPOCHS * tokens / (batch * context)))))
+    steps = int(overrides.get("steps") or max(1, min(SFT_MAX_STEPS, math.ceil(epochs * tokens / (batch * context)))))
     validation = float(base.get("validation") or 0) or (DEFAULT_CONFIG["validation"] if len(conversations) >= 20 else 0.)
     return {**base, "objective": "assistant", "learning_rate": min(SFT_MAX_LR, SFT_LR_SHARE * peak), "steps": steps,
             "warmup": max(1, round(SFT_WARMUP * steps)), "eval_every": max(1, steps // 10), "validation": validation,
@@ -591,7 +633,7 @@ def number_of(job):
 def rows_needed(number, params):
     """The post_rows kinds round `number` reads when `params` does not already carry them (`_rows`): what the owner ships with a round
     that runs on another machine, whose stores hold none of it."""
-    kinds = {1: ("heldout_docs", "heldout_problems", "conversations", "heldout_conversations"), 2: ("problems", "heldout_docs", "heldout_problems"),
+    kinds = {1: ("heldout_docs", "heldout_problems", "conversations", "heldout_conversations"), 2: ("problems", "heldout_docs", "heldout_problems") + (("heldout_conversations",) if params.get("method") == "rejection" else ()),
              3: ("heldout_docs", "heldout_problems"), 4: ("heldout_docs", "heldout_problems", "pairs")}[number]
     if number == 3:
         kinds += ("corrections",) if params.get("teacher_choice") == "correction" else () if "prompts" in params else ("conversations",)
@@ -620,14 +662,14 @@ def resolve(number, job, services):
 
 
 ROUND_NAMES = ("Practice answers", "Practice with checks", "Learn from a teacher", "Your votes")
-TUNING = {1: ("steps", "learning_rate"), 2: ROUND2_KEYS, 3: ("steps", "learning_rate"), 4: ("steps", "learning_rate")}   # settings each round reads
+TUNING = {1: ("steps", "learning_rate"), 2: ROUND2_KEYS + ("method",), 3: ("steps", "learning_rate"), 4: ("steps", "learning_rate")}   # settings each round reads
 
 
 def round_job(number, version, settings=None):
     """The queue job (kind post_round) for round `number` on `version`, built from `settings` alone, so the API route and the Auto Run
     make the same job. Nothing is looked up here: the caller has already checked the round can run and resolved its choices.
 
-    settings: "lora" (round 1; a rank, or None for every weight; absent = the version's own), "teacher" (round 3: the teacher's
+    settings: "method" (round 2: "rejection" trains on the answers a rule passed instead of practising with rewards), "lora" (round 1; a rank, or None for every weight; absent = the version's own), "teacher" (round 3: the teacher's
     checkpoint path) with "teacher_choice" ("previous best" | "correction"), "beta" (round 4), and the round's tuning (TUNING;
     a missing or None one stays at the round's default)."""
     from studio_queue import Job
@@ -646,7 +688,9 @@ def round_job(number, version, settings=None):
         params["teacher_choice"] = settings.get("teacher_choice", "previous best")
     if number == 4 and "beta" in settings:
         params["beta"] = settings["beta"]
-    params.update({k: settings[k] for k in TUNING[number] if settings.get(k) is not None})
+    if number == 2 and settings.get("method") == "rejection":
+        name += " · keep passing answers"
+    params.update({k: settings[k] for k in TUNING[number] if settings.get(k) is not None and not (k == "method" and settings[k] != "rejection")})
     return Job("post_round", f"Round {number} · {name}", f"post-training round {number}", params=params)
 
 
@@ -662,7 +706,8 @@ def run_round(number, job, context, emit, stop, pause):
         raise NoCheckpoint(p.get("version"))
     out = Path(p.get("output_dir") or Path(context.run_dir) / f"queue_{job.id}")
     job.params["output_dir"] = str(out)
-    if number == 2:   # a model that solves nothing writes all-fail groups, which give no gradient: say so instead of running
+    rejection = number == 2 and p.get("method") == "rejection"   # Round 2 that trains on the passing answers instead of practising with rewards
+    if number == 2 and not rejection:   # a model that solves nothing writes all-fail groups, which give no gradient: say so instead of running
         problems = _rows(job, context, "problems", "problems")
         probe = pass_at_k(checkpoint, problems, temperature=p.get("temperature", ROUND2_DEFAULTS["temperature"]), seed=p.get("seed", 7))
         useful = probe.pop("useful", [])   # drawn first by the round; not part of the result
@@ -673,7 +718,7 @@ def run_round(number, job, context, emit, stop, pause):
             return {"round": number, "ok": False, "checkpoint": checkpoint}
     docs, held = _rows(job, context, "heldout_docs", "heldout_docs"), _rows(job, context, "heldout_problems", "heldout_problems")
     import studio_eval
-    held_conversations = _rows(job, context, "heldout_conversations", "heldout_conversations") if number == 1 else None   # round 1's chat checks
+    held_conversations = _rows(job, context, "heldout_conversations", "heldout_conversations") if number == 1 or rejection else None   # round 1's chat checks (the keep-the-passes variant is gated like round 1)
     try:   # held-back text is scored twice in all: here, where the bpc and the noise band come from the same per-document scores, and after training
         scores = doc_scores(checkpoint, docs, stop)
         band = studio_eval.band_from_scores(scores) if scores else None
@@ -688,6 +733,28 @@ def run_round(number, job, context, emit, stop, pause):
         cfg = sft_config(data["config"], conversations, data.get("tokenizer"), **{**kw, **p.get("config", {})})
         record = train(cfg, conversations, out, emit=emit, stop=stop, pause=pause, init_from=checkpoint,
                        token_budget=p.get("token_budget"), wall_seconds=p.get("wall_seconds"))
+    elif rejection:
+        problems = _rows(job, context, "problems", "problems")
+        found = rejection_rows(checkpoint, problems, k=p.get("group") or ROUND2_DEFAULTS["group"],
+                               temperature=p.get("temperature") or ROUND2_DEFAULTS["temperature"], max_tokens=p.get("max_tokens"),
+                               seed=p.get("seed", 7), emit=emit, stop=stop)
+        if stop.is_set():
+            return {"round": number, "ok": False, "checkpoint": checkpoint, "stopped": True}
+        sampled = {k: found[k] for k in ("problems", "answers", "passed", "cut", "solved")}
+        if not found["rows"]:
+            detail = f"{found['passed']} of {found['answers']} sampled answers passed" + (f", {found['cut']} of them never stopped" if found["cut"] else "")
+            result = {"round": number, "ok": False, "skipped": True, "checkpoint": str(checkpoint), "before": before, "after": None, "band": band, "sampled": sampled,
+                      "verdict": "Not run: no answer both passed its check and stopped on its own, so there was nothing to train on.",
+                      "checks": [{"name": "Some answers passed and stopped on their own", "detail": f"{detail}, on {found['problems']} problems", "ok": False}]}
+            emit({"type": "gate", **result})
+            job.params["result"] = result
+            return {"round": number, "ok": False, "checkpoint": checkpoint}
+        data = load_checkpoint(checkpoint)
+        cfg = sft_config(data["config"], found["rows"], data.get("tokenizer"), epochs=REJECTION_EPOCHS,
+                         **{k: v for k, v in kw.items() if k in ("steps", "learning_rate")})
+        record = train(cfg, found["rows"], out, emit=emit, stop=stop, pause=pause, init_from=checkpoint,
+                       token_budget=p.get("token_budget"), wall_seconds=p.get("wall_seconds"))
+        verdict = f"Trained one pass on {len(found['rows'])} answers that passed their check and stopped on their own."
     elif number == 2:
         record = practice_with_checks(checkpoint, problems, out, useful=useful, emit=emit, stop=stop, pause=pause, **kw)
         if (record.get("last_mean") or 0) < (record.get("first_mean") or 0):
@@ -712,16 +779,18 @@ def run_round(number, job, context, emit, stop, pause):
     else:
         raise ValueError(f"Unknown round: {number}")
     candidate = record.get("checkpoint") or str(out / "last.npz")
-    if number == 1 and (out / "best.npz").exists():   # the lowest held-back loss of the run, not wherever it ended
+    if (number == 1 or rejection) and (out / "best.npz").exists():   # the lowest held-back loss of the run, not wherever it ended
         candidate = str(out / "best.npz")
     try:
         after = measure(candidate, docs, held, stop, held_conversations)
     except studio_eval.Stopped:
         return {"round": number, "ok": False, "checkpoint": checkpoint, "stopped": True}
-    ok, checks = studio_gate.passes(before, after, band, number=number, record=record)
+    ok, checks = studio_gate.passes(before, after, band, number=number, record=record, rejection=rejection)
     result = {"round": number, "ok": ok, "checks": checks, "verdict": verdict_for(verdict, ok, checks), "before": before, "after": after,
               "band": band, "checkpoint": candidate}
-    if number == 2:   # groups that taught something: the share of reward groups with any spread
+    if rejection:
+        result.update(sampled=sampled, kept=len(found["rows"]))
+    elif number == 2:   # groups that taught something: the share of reward groups with any spread
         result.update(groups=record.get("groups"), taught=record.get("taught"), probe=probe, kl=record.get("kl"), mean_kl=record.get("mean_kl"))
     emit({"type": "gate", **result})
     job.params["result"] = result   # the app keeps it and moves Chat only when ok (WorkspaceServices.record_round)

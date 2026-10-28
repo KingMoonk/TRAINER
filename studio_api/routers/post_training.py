@@ -202,6 +202,7 @@ class RoundRequest(BaseModel):
     teacher: Literal["version", "correction"] = "version"  # round 3: another trained version, or this model shown a correction
     teacher_version: int | None = None  # None = the previous best
     leash: Literal["Close", "Medium", "Far"] = "Medium"  # round 4
+    method: Literal["practice", "rejection"] = "practice"  # round 2: practise with rewards, or train once on the answers that passed the check and stopped
     steps: int | None = Field(default=None, ge=1, le=5000)  # round 2: None = the round's default (studio_rl.ROUND2_DEFAULTS)
     prompts_per_step: int | None = Field(default=None, ge=1, le=64)  # round 2: prompts trained on each step
     group: int | None = Field(default=None, ge=2, le=32)  # round 2: answers sampled per prompt
@@ -409,7 +410,7 @@ def queue_round(body: RoundRequest, services=Depends(get_services)):
     if body.round == 4:
         settings["beta"] = next(beta for label, beta, _note in LEASH if label == body.leash)
     if body.round == 2:
-        settings.update(steps=body.steps, prompts_per_step=body.prompts_per_step, group=body.group, temperature=body.temperature,
+        settings.update(method=body.method, steps=body.steps, prompts_per_step=body.prompts_per_step, group=body.group, temperature=body.temperature,
                         max_tokens=body.max_tokens, kl=body.kl)
     job = studio_rl.round_job(body.round, version, settings)   # the Auto Run builds its rounds the same way
     params = job.params
