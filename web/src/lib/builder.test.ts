@@ -513,28 +513,6 @@ describe("queueJobs, pretraining and versions", () => {
       expect(calls.map((c) => Object.keys(c.body as object))).toEqual([["spec", "change"]]);
     });
   });
-
-  describe("importPretrained", () => {
-    test("sends the model name as a form and returns the new version", async () => {
-      let form: FormData | undefined;
-      mockApi({
-        "POST /post-training/imports": async (_, request) => {
-          form = await request.formData();
-          return { body: { number: 3, name: "version 3" } };
-        },
-      });
-      await expect(versions.importPretrained("gpt2")).resolves.toEqual({ number: 3, name: "version 3" });
-      expect(form?.get("name")).toBe("gpt2");
-    });
-
-    test("a refusal is an ApiError with the response text", async () => {
-      mockApi({ "POST /post-training/imports": { status: 409, body: { detail: "Already downloading." } } });
-      const error = await versions.importPretrained("gpt2").catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(ApiError);
-      expect(error).toMatchObject({ status: 409, path: "/post-training/imports", body: '{"detail":"Already downloading."}' });
-      expect(detailOf(error)).toBe("Already downloading.");
-    });
-  });
 });
 
 describe("where the size goes", () => {

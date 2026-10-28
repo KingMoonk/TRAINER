@@ -305,15 +305,6 @@ export function Builder() {
   });
   const startSave = () => save.mutate(base === null || !draftSpec ? null : heldQuestion);
 
-  const [note, setNote] = useState("");
-  const importGpt2 = () => {
-    if (!window.confirm(BUILDER.import_gpt2_ask)) return;
-    versions.importPretrained("gpt2").then(
-      () => setNote(BUILDER.import_gpt2_started),
-      (reason) => setNote(detailOf(reason)),
-    );
-  };
-
   const failed = registryQ.error ?? currentQ.error ?? curQ.error;
 
   return (
@@ -373,8 +364,6 @@ export function Builder() {
                   presets={presetsQ.data ?? []}
                   versions={versionsQ.data ?? []}
                   onLoad={loadSpec}
-                  onGpt2={importGpt2}
-                  note={note}
                 />
               </BuilderDisclosure>
               <BuilderDisclosure title={BUILDER.explain} hint={BUILDER.explanation_hint} reveal={explaining}>

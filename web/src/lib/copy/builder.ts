@@ -127,13 +127,7 @@ export const BUILDER = {
   start_from_version: "An earlier version…",
   start_from_version_tip: "Load a saved version's design into your draft. The current version stays the comparison.",
   preset_load: "Load into draft",
-  import_gpt2: "Start from GPT-2 (124M)",
-  import_gpt2_tip:
-    "Download OpenAI's small GPT-2 once and start from its trained weights instead of a blank model. It becomes a new version that continues text; it does not answer as a chat until you fine-tune it.",
-  import_gpt2_ask:
-    "This downloads about 548 MB from Hugging Face once and keeps it. Each time you start from GPT-2 the studio adds about 0.5 GB for the new version, and a full fine-tune saves checkpoints with their training state of about 1.5 GB each. Continue?",
-  import_gpt2_started:
-    "Downloading GPT-2 in the background. Its version is listed now but gets its weights only when the queue finishes it; if the download fails or you stop it, that version is removed or marked.",
+  start_from_pretrained: "Start from a pretrained model",
   preset_modern:
     "Where a new design starts: RMSNorm, rotary positions, shared look-back heads, SwiGLU of the same size, a warmup-stable-decay rate, and bfloat16 where this computer runs it.",
   preset_classic: "The studio's original recipe (LayerNorm, GELU, learned positions, float32), kept to compare against older results.",

@@ -1,8 +1,9 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
+import { useQuery } from "@tanstack/react-query";
 import { BUILDER } from "@/lib/copy/builder";
-import type { Preset } from "@/lib/builder";
+import { versions, type Preset } from "@/lib/builder";
 import { mockApi } from "@/test/network";
 import { renderPage } from "@/test/render";
 import { Builder } from "./builder";
@@ -37,9 +38,8 @@ describe("StartFrom", () => {
     mockApi({ "POST /design/preset-cost": { body: { params: 1, need: 1, fits: true, rows: 1, step: 1, slow: false, lines: [], recipe: "r" } } });
     const onLoad = vi.fn();
     renderPage(
-      <StartFrom presets={[preset("modern", "Modern preset"), preset("classic", "Classic preset")]} versions={[]} onLoad={onLoad} onGpt2={() => {}} note="bf16 note" />,
+      <StartFrom presets={[preset("modern", "Modern preset"), preset("classic", "Classic preset")]} versions={[]} onLoad={onLoad} />,
     );
-    expect(screen.getByText("bf16 note")).toBeInTheDocument();
     await userEvent.click(screen.getByTestId("preset-pick"));
     const options = await screen.findAllByRole("option");
     expect(options.map((o) => o.textContent)).toEqual(["Modern preset", "Classic preset"]);
@@ -47,5 +47,44 @@ describe("StartFrom", () => {
     await userEvent.click(await screen.findByTestId("preset-load"));
     expect(onLoad).toHaveBeenCalledWith({ name: "Classic preset" });
     expect(screen.getByText(BUILDER.preset_classic)).toBeInTheDocument();
+  });
+});
+
+describe("StartFrom pretrained import", () => {
+  const models = [{ id: "gpt2", name: "GPT-2 (124M)", size: 548_000_000 }];
+
+  test("importing GPT-2 posts the form and the new version shows in the saved list", async () => {
+    const saved: unknown[] = [];
+    let form: FormData | undefined;
+    mockApi({
+      "GET /post-training/import-models": { body: models },
+      "GET /post-training/options": { body: { lora_ranks: [4, 8] } },
+      "GET /versions": () => ({ body: saved }),
+      "POST /post-training/imports": async (_, request) => {
+        form = await request.formData();
+        saved.push({ number: 2, name: "version 2", change: "Started from GPT-2 (124M)", spec: { name: "GPT-2" } });
+        return { body: saved[0] };
+      },
+    });
+    function Probe() {
+      const list = useQuery({ queryKey: ["versions"], queryFn: () => versions.list() });
+      return <StartFrom presets={[]} versions={list.data ?? []} onLoad={() => {}} />;
+    }
+    renderPage(<Probe />);
+    expect(screen.queryByTestId("version-pick")).toBeNull();
+    await userEvent.click(screen.getByText(BUILDER.start_from_pretrained, { selector: "summary" }));
+    expect(await screen.findByText(/0\.5 GB/)).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Import GPT-2 (124M)" }));
+    expect(await screen.findByTestId("version-pick")).toBeInTheDocument();
+    expect(form?.get("name")).toBe("gpt2");
+  });
+
+  test("a failed model list shows the retry", async () => {
+    mockApi({
+      "GET /post-training/import-models": { status: 500, body: { detail: "down" } },
+      "GET /post-training/options": { body: { lora_ranks: [4, 8] } },
+    });
+    renderPage(<StartFrom presets={[]} versions={[]} onLoad={() => {}} />);
+    expect(await screen.findByRole("button", { name: "Retry model list" })).toBeInTheDocument();
   });
 });

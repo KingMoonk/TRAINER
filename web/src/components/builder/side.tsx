@@ -12,6 +12,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Disclosure } from "@/components/disclosure";
+import { ImportModelCard } from "@/components/import-model-card";
 import { DiscreteControl } from "@/components/builder/discrete-control";
 import {
   bar,
@@ -60,11 +62,9 @@ type StartFromProps = {
   presets: Preset[];
   versions: Version[];
   onLoad: (spec: Spec) => void;
-  onGpt2: () => void;
-  note: string | null;
 };
 
-export function StartFrom({ presets, versions, onLoad, onGpt2, note }: StartFromProps) {
+export function StartFrom({ presets, versions, onLoad }: StartFromProps) {
   const [key, setKey] = useState<string | null>(null);
   const preset = presets.find((p) => p.key === key) ?? null;
   const costQ = useQuery({
@@ -126,12 +126,9 @@ export function StartFrom({ presets, versions, onLoad, onGpt2, note }: StartFrom
           </SelectContent>
         </Select>
       )}
-      <div>
-        <Button size="sm" variant="outline" title={BUILDER.import_gpt2_tip} onClick={onGpt2} data-testid="import-gpt2">
-          {BUILDER.import_gpt2}
-        </Button>
-      </div>
-      {note && <p className="text-xs text-muted-foreground">{note}</p>}
+      <Disclosure title={BUILDER.start_from_pretrained} testId="import-disclosure">
+        <ImportModelCard />
+      </Disclosure>
     </Panel>
   );
 }

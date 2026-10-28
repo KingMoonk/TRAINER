@@ -116,7 +116,7 @@ describe("Post-training page", () => {
     await user.click(await screen.findByText("Start from a pretrained model", { selector: "summary" }));
     await user.click(await screen.findByRole("combobox", { name: "Pretrained model" }));
     await user.click(await screen.findByRole("option", { name: "New server model" }));
-    expect(await screen.findByText("About 12 MB to download once.")).toBeVisible();
+    expect(await screen.findByText(/^About 12 MB to download once./)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Import New server model" }));
     await waitFor(() => expect(state.imports).toHaveLength(1));
     // the body is a multipart form: the model goes by its ID, not its display name
