@@ -3088,6 +3088,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/queue/done": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Done
+         * @description Services.done_jobs: the jobs that ended done and the queue still remembers (the last few), newest first. The queue's own state
+         *     lists only failed ones, so this is how Runs finds a finished job to list and open.
+         */
+        get: operations["list_done_queue_done_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/queue/jobs": {
         parameters: {
             query?: never;
@@ -15207,6 +15228,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["studio_api__routers__queue__Started"];
+                };
+            };
+        };
+    };
+    list_done_queue_done_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobModel"][];
                 };
             };
         };

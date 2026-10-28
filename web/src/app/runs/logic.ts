@@ -48,7 +48,7 @@ export type RunRow = {
   canJoin: boolean;
 };
 
-export type Inputs = { queue: Queue | undefined; runs: Run[] | undefined; clusterJobs: ClusterJob[] | undefined; nodes: ClusterNode[] | undefined };
+export type Inputs = { queue: Queue | undefined; runs: Run[] | undefined; clusterJobs: ClusterJob[] | undefined; done?: Job[] | undefined; nodes: ClusterNode[] | undefined };
 
 const LIVE_RUN = ["starting", "waiting", "running"];
 const DISTRIBUTED = "pretrain_distributed";
@@ -127,14 +127,15 @@ function blank(id: string): RunRow {
 }
 
 /** Every run the page lists, merged by id. Active first as they came, scheduled in queue order, completed newest first. */
-export function buildRows({ queue, runs, clusterJobs, nodes }: Inputs): RunRow[] {
+export function buildRows({ queue, runs, clusterJobs, done, nodes }: Inputs): RunRow[] {
   const here = thisComputer(nodes);
   const name = (raw: string) => machineName(raw, nodes);
   const rows = new Map<string, RunRow>();
   const queued = queue?.up_next ?? [];
   const failed = queue?.failed ?? [];
-  // Failed jobs are listed too, under Completed with their reason, so they can be restarted from here.
-  const jobs = new Map<string, Job>([...(queue?.job ? [queue.job] : []), ...queued, ...failed].map((j) => [j.id, j]));
+  // Failed jobs are listed too, under Completed with their reason, so they can be restarted from here. So are the done ones the
+  // queue still remembers (GET /queue/done), which its own state no longer carries.
+  const jobs = new Map<string, Job>([...(queue?.job ? [queue.job] : []), ...queued, ...failed, ...(done ?? [])].map((j) => [j.id, j]));
 
   for (const run of runs ?? []) {
     const job = jobs.get(run.id);

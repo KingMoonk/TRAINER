@@ -103,6 +103,16 @@ describe("Runs page", () => {
     await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/queue/jobs/f1/restart")).toBe(true));
   });
 
+  test("a single-machine job that finished done is listed under Completed and opens its Run view", async () => {
+    server([diloco()], [], { "GET /queue/done": { body: [job("d1", "v2 solo", { status: "done", params: { version: 2 } })] } });
+    renderPage(<RunsPage />);
+    const row = await screen.findByTestId("completed-d1");
+    expect(row).toHaveAttribute("href", expect.stringMatching(/^\/runs\/view\/?\?id=d1$/));
+    expect(row).toHaveTextContent("v2 · v2 solo");
+    expect(row).toHaveTextContent("finished");
+    expect(screen.queryByRole("button", { name: /^Restart: .*v2 solo/ })).toBeNull();
+  });
+
   test("a finished run is completed with its val loss, a failed one with its reason", async () => {
     server([diloco(), diloco({ id: "done", label: "v1", state: "finished", started_at: 1 }), diloco({ id: "bad", label: "ablation", state: "failed", note: "out of memory", started_at: 2 })]);
     renderPage(<RunsPage />);

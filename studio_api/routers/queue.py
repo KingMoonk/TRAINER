@@ -162,6 +162,13 @@ def list_jobs(services: Services) -> list[JobModel]:
     return [JobModel.model_validate(j) for j in local_jobs(services)]
 
 
+@router.get("/done")
+def list_done(services: Services) -> list[JobModel]:
+    """Services.done_jobs: the jobs that ended done and the queue still remembers (the last few), newest first. The queue's own state
+    lists only failed ones, so this is how Runs finds a finished job to list and open."""
+    return [JobModel.model_validate(j) for j in reversed(services.done_jobs())]
+
+
 @router.post("/jobs", status_code=201)
 def enqueue(job: NewJob, services: Services) -> JobModel:
     """Services.enqueue: add a job to the end of Up next, or answer the job already queued under the caller's `id`. An unknown kind is a
