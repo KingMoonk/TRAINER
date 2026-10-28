@@ -37,6 +37,72 @@ def tokenizer_folder(root, split_hash, spec):
     return Path(root) / f"tok-{key_for('tokenizer', split_hash, spec)}"
 
 
+def manifest_key(dataset_ids, revisions, hold, seed, context, windowing, objective, tokenizer_spec):
+    """Deterministic hash identifying a dataset and configuration combination for pre-sharded data."""
+    parts = [
+        "prepared",
+        sorted(dataset_ids),
+        sorted((k, revisions.get(k, 0)) for k in dataset_ids),
+        float(hold),
+        int(seed),
+        int(context),
+        str(windowing),
+        str(objective),
+        tokenizer_spec,
+    ]
+    return hashlib.sha256(json.dumps(parts, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:24]
+
+
+def get_prepared(shard_dir, key):
+    """Retrieve verified prepared shard metadata from prepared.json, or None if missing or unreadable."""
+    path = Path(shard_dir) / "prepared.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        entry = data.get(key)
+        if not entry or not isinstance(entry, dict):
+            return None
+        folder = Path(shard_dir) / entry["folder"]
+        loaded = load(folder, entry["shard_key"], entry["vocab_size"])
+        if loaded is None:
+            return None
+        return entry
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def _json_safe(obj):
+    if isinstance(obj, (np.integer, int)):
+        return int(obj)
+    if isinstance(obj, (np.floating, float)):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(x) for x in obj]
+    return obj
+
+
+def record_prepared(shard_dir, key, entry):
+    """Record prepared shard metadata atomically in prepared.json under shard_dir."""
+    from studio_core import atomic_json
+
+    shard_dir = Path(shard_dir)
+    shard_dir.mkdir(parents=True, exist_ok=True)
+    path = shard_dir / "prepared.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    data[key] = _json_safe(entry)
+    atomic_json(path, data)
+
+
 def load_tokenizer(folder):
     """The serialized tokenizer fitted earlier into `folder`, or None when there is none or the file cannot be read."""
     try:

@@ -2880,6 +2880,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/pretraining/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pretrain Prepare
+         * @description Prepare tokenized binary shards on disk upfront before starting a training run.
+         */
+        post: operations["pretrain_prepare_pretraining_prepare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pretraining/prepared": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Pretrain Prepared
+         * @description Check whether binary shards exist on disk for the chosen datasets and model version.
+         */
+        get: operations["pretrain_prepared_pretraining_prepared_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/pretraining/preview": {
         parameters: {
             query?: never;
@@ -7384,6 +7424,69 @@ export interface components {
             phase: "reading" | "teacher" | "tokenizer" | "tokenizing" | "cached" | "inviting";
             /** Total */
             total: number;
+        };
+        /** PrepareJob */
+        PrepareJob: {
+            /** Created At */
+            created_at: number;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Finished At */
+            finished_at?: number | null;
+            /** Fraction */
+            fraction?: number | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Progress
+             * @default
+             */
+            progress: string;
+            result?: components["schemas"]["PreparedStatus"] | null;
+            /** Started At */
+            started_at?: number | null;
+            /** Status */
+            status: string;
+        };
+        /** PrepareRequest */
+        PrepareRequest: {
+            /**
+             * Dataset Ids
+             * @default []
+             */
+            dataset_ids: string[];
+            /**
+             * Hold
+             * @default 0.05
+             */
+            hold: number;
+            /**
+             * Rows
+             * @default 16
+             */
+            rows: number;
+            /** Version */
+            version?: number | null;
+        };
+        /** PreparedStatus */
+        PreparedStatus: {
+            /** Folder */
+            folder?: string | null;
+            /** Prepared */
+            prepared: boolean;
+            /** Tokens */
+            tokens?: number | null;
+            /** Val Tokens */
+            val_tokens?: number | null;
+            /** Val Windows */
+            val_windows?: number | null;
+            /** Windows */
+            windows?: number | null;
         };
         /** Preset */
         Preset: {
@@ -15037,6 +15140,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Pool"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pretrain_prepare_pretraining_prepare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrepareRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrepareJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pretrain_prepared_pretraining_prepared_get: {
+        parameters: {
+            query?: {
+                dataset_ids?: string[];
+                version?: number | null;
+                hold?: number;
+                rows?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreparedStatus"];
                 };
             };
             /** @description Validation Error */

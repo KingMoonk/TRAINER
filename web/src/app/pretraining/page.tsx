@@ -12,7 +12,7 @@ import { useApiEvents } from "../your-data/events";
 import { runJob, type JobLike } from "../your-data/jobs";
 import { BatchesCard, EnoughCard, SetsCard } from "./cards";
 import { T } from "./copy";
-import { DEFAULT_HOURS, HOLD, PREVIEW_ROWS, DEFAULT_ROWS, chosenIds, errorText, planBody, type Chat, type Hours, type Length, type Preview, type StepRate, savedRows, type StopWhenFlat } from "./logic";
+import { DEFAULT_HOURS, HOLD, PREVIEW_ROWS, DEFAULT_ROWS, chosenIds, errorText, planBody, type Chat, type Hours, type Length, type PreparedStatus, type Preview, type StepRate, savedRows, type StopWhenFlat } from "./logic";
 import { LrCard } from "./lr-card";
 import { ScalingCard } from "./scaling-card";
 import { SizingCard } from "./sizing-card";
@@ -79,6 +79,59 @@ export default function PretrainingPage() {
   }, [previewJob.error]);
   const estimating = ids.length > 0 && (plan.data?.estimating ?? true);
 
+  // Whether binary token shards are already prepared on disk for these choices.
+  const preparedKey = useMemo(() => ["pretraining", "prepared", ids, version, hold, rows], [ids, version, hold, rows]);
+  const prepared = useQuery({
+    queryKey: preparedKey,
+    queryFn: () =>
+      unwrap(
+        api.GET("/pretraining/prepared", {
+          params: {
+            query: {
+              dataset_ids: ids,
+              version: version ?? undefined,
+              hold: Number(hold.slice(0, -1)) / 100,
+              rows: Number(rows),
+            },
+          },
+        }),
+      ),
+    enabled: sets.isSuccess && ids.length > 0 && version !== null,
+    staleTime: 10_000,
+  });
+
+  const [preparing, setPreparing] = useState(false);
+  const [prepareProgress, setPrepareProgress] = useState<{ note: string; fraction: number | null } | null>(null);
+
+  const prepare = useCallback(async () => {
+    if (ids.length === 0 || version === null) return;
+    setPreparing(true);
+    setPrepareProgress({ note: T.preparingData, fraction: 0 });
+    try {
+      const result = await runJob<PreparedStatus>(
+        () =>
+          unwrap(
+            api.POST("/pretraining/prepare", {
+              body: {
+                dataset_ids: ids,
+                version,
+                hold: Number(hold.slice(0, -1)) / 100,
+                rows: Number(rows),
+              },
+            }),
+          ) as Promise<JobLike>,
+      );
+      queryClient.setQueryData(preparedKey, result);
+      queryClient.invalidateQueries({ queryKey: ["pretraining", "prepared"] });
+      toast.success(T.dataPreparedToast);
+    } catch (err) {
+      toast.error(errorText(err));
+    } finally {
+      setPreparing(false);
+      setPrepareProgress(null);
+    }
+  }, [ids, version, hold, rows, preparedKey, queryClient]);
+
   // How long a step takes on this computer: a few timed steps of the design, as a job, once the size of the text is known.
   const needsRate = plan.data?.sizing != null && !plan.data.sizing.measured && version !== null;
   const rateJob = useQuery({
@@ -101,8 +154,16 @@ export default function PretrainingPage() {
 
   const onEvent = useCallback(
     (event: ApiEvent) => {
-      if (event.kind === "data" || event.kind === "downloads_finished") {
+      if (event.kind === "data" || event.kind === "downloads_finished" || event.kind === "prepared") {
         queryClient.invalidateQueries({ queryKey: ["pretraining"] });
+      } else if (event.kind === "job") {
+        const payload = event.payload as { kind?: string; progress?: string; fraction?: number | null } | undefined;
+        if (payload?.kind === "pretrain_prepare") {
+          setPrepareProgress({
+            note: payload.progress || T.preparingData,
+            fraction: payload.fraction ?? null,
+          });
+        }
       } else if (event.kind === "versions") {
         queryClient.invalidateQueries({ queryKey: ["versions"] });
         queryClient.invalidateQueries({ queryKey: ["pretraining"] });
@@ -135,7 +196,16 @@ export default function PretrainingPage() {
         )}
       </div>
 
-      <SetsCard sets={sets.data} loading={sets.isLoading} chosen={ids} onToggle={toggle} />
+      <SetsCard
+        sets={sets.data}
+        loading={sets.isLoading}
+        chosen={ids}
+        onToggle={toggle}
+        prepared={prepared.data}
+        preparing={preparing}
+        onPrepare={prepare}
+        progress={prepareProgress}
+      />
       <Disclosure title="Download more text" testId="collection-disclosure">
         <CollectionCard kind="text" description={T.collectionDesc} />
       </Disclosure>
@@ -151,6 +221,7 @@ export default function PretrainingPage() {
         length={length}
         stopWhenFlat={stopWhenFlat}
         onStopWhenFlat={setStopWhenFlat}
+        prepared={prepared.data}
         onLength={(next) => {
           setChosenSteps(null);
           setLength(next);

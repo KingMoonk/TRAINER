@@ -14,7 +14,7 @@ import { api, unwrap } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Choice } from "./cards";
 import { T, fill } from "./copy";
-import { LENGTHS, STOP_WHEN_FLAT, errorText, lrLine, modeTexts, poolLines, queueNote, stepsLine, type Length, type Plan, type PlanBody, type StopWhenFlat } from "./logic";
+import { LENGTHS, STOP_WHEN_FLAT, errorText, lrLine, modeTexts, poolLines, queueNote, stepsLine, type Length, type Plan, type PlanBody, type PreparedStatus, type StopWhenFlat } from "./logic";
 import { optionBox } from "@/components/option-box";
 
 /** Continue or start over, how long, and Add to the queue: the job is the one the server's plan built. While the size of the text is
@@ -29,6 +29,7 @@ export function TrainCard({
   onLength,
   stopWhenFlat,
   onStopWhenFlat,
+  prepared,
 }: {
   plan: Plan | undefined;
   body: PlanBody;
@@ -39,6 +40,7 @@ export function TrainCard({
   onLength: (l: Length) => void;
   stopWhenFlat: StopWhenFlat;
   onStopWhenFlat: (s: StopWhenFlat) => void;
+  prepared?: PreparedStatus | null;
 }) {
   const queryClient = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
@@ -159,6 +161,11 @@ export function TrainCard({
                 </p>
               ))}
             </div>
+          )}
+          {prepared?.prepared && (
+            <p className="text-xs text-success flex items-center gap-1.5" data-testid="train-prepared-note">
+              <span>✓</span> {T.readyToTrain}: {fill(T.shardedOnDisk, { windows: (prepared.windows ?? 0).toLocaleString("en-US"), tokens: (prepared.tokens ?? 0).toLocaleString("en-US") })}
+            </p>
           )}
           <div className="flex items-center gap-3">
             <Button disabled={!(plan?.can_add || sizeFirst) || busy || (pool.isLoading && !sizeFirst)} onClick={() => (plan?.can_add && !pooled ? add.mutate() : start.mutate())}>

@@ -198,6 +198,26 @@ class WorkspaceRows(unittest.TestCase):
         self.assertGreater(after["pieces"], preview["pieces"])
         self.assertTrue(after["estimated"])
 
+    def test_pretrain_prepare_builds_shards_and_prepared_status_finds_them(self):
+        self.svc.save_version(default_spec(), "first design")
+        status = self.svc.prepared_status([self.text])
+        self.assertFalse(status["prepared"])
+        prepared = self.svc.pretrain_prepare([self.text])
+        self.assertTrue(prepared["prepared"])
+        self.assertGreater(prepared["windows"], 0)
+        self.assertGreater(prepared["tokens"], 0)
+        status_after = self.svc.prepared_status([self.text])
+        self.assertTrue(status_after["prepared"])
+        self.assertEqual(status_after["windows"], prepared["windows"])
+        self.assertEqual(status_after["tokens"], prepared["tokens"])
+
+    def test_prepared_status_invalidates_when_dataset_is_modified(self):
+        self.svc.save_version(default_spec(), "first design")
+        self.svc.pretrain_prepare([self.text])
+        self.assertTrue(self.svc.prepared_status([self.text])["prepared"])
+        self.ws.add(self.text, [{"text": "yet another story row"}])
+        self.assertFalse(self.svc.prepared_status([self.text])["prepared"])
+
     def test_a_set_of_unreviewed_generated_text_is_reported_as_having_nothing_to_train_on(self):
         drafts = self.ws.create_dataset("generated stories")
         self.ws.add(drafts, [{"text": f"a generated tale {i} " * 6, "synthetic": True, "quality": "Review"} for i in range(12)])

@@ -84,8 +84,8 @@ const SCALING = {
 
 const NO_POOL = { pooled: false, machines: [], left_out: [], reason: "No other machine is on the Machines list." };
 
-function server({ known = true, sizing = SIZING as unknown, batchSize, scaling = null, refusal = "", pool = NO_POOL as unknown }: { known?: boolean; sizing?: unknown; batchSize?: number; scaling?: unknown; refusal?: string; pool?: unknown } = {}) {
-  const state = { plans: [] as PlanBody[], lr: [] as unknown[], known, sizing, rates: [] as unknown[], starts: [] as unknown[], scaling, pools: [] as { solo: boolean }[], queued: [] as unknown[] };
+function server({ known = true, sizing = SIZING as unknown, batchSize, scaling = null, refusal = "", pool = NO_POOL as unknown, prepared = false }: { known?: boolean; sizing?: unknown; batchSize?: number; scaling?: unknown; refusal?: string; pool?: unknown; prepared?: boolean } = {}) {
+  const state = { plans: [] as PlanBody[], lr: [] as unknown[], known, sizing, rates: [] as unknown[], starts: [] as unknown[], scaling, pools: [] as { solo: boolean }[], queued: [] as unknown[], prepared };
   mockApi({
     "GET /versions": {
       body: [
@@ -147,6 +147,15 @@ function server({ known = true, sizing = SIZING as unknown, batchSize, scaling =
     "POST /queue/jobs": ({ body }) => {
       state.queued.push(body);
       return { status: 201, body: { id: "j1", label: "Version 2 from scratch" } };
+    },
+    "GET /pretraining/prepared": () => ({
+      body: state.prepared
+        ? { prepared: true, tokens: 12345, windows: 100, val_tokens: 1200, val_windows: 10, folder: "tok-test" }
+        : { prepared: false, tokens: null, windows: null, val_tokens: null, val_windows: null, folder: null },
+    }),
+    "POST /pretraining/prepare": () => {
+      state.prepared = true;
+      return { status: 202, body: job("prep1", "pretrain_prepare", { prepared: true, tokens: 12345, windows: 100 }, "done") };
     },
     "GET /pretraining/hardware": { body: HARDWARE },
     "GET /pretraining/preview": () => json(state.known ? preview : null), // mockApi turns a null body into {}, so a null answer is sent as a Response
