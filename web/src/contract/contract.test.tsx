@@ -91,7 +91,7 @@ describe("pages on recorded responses", () => {
 });
 
 describe("Auto Run on recorded responses", () => {
-  test("with no runs, offers a card for each phase of the plan the API ships (mid-training stays off)", async () => {
+  test("with no runs, offers a card for each phase of the plan the API ships ", async () => {
     replay(["auto-runs-empty", "auto-run-defaults"], { "GET /versions": { body: [{ number: 1, name: "tiny", best_checkpoint: null }] } });
     renderPage(<AutoRunPage />);
     expect(await screen.findByTestId("plan-editor")).toBeVisible();
