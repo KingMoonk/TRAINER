@@ -9,6 +9,7 @@ import math
 import random
 import re
 import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -450,6 +451,110 @@ def accuracy_band(hits, confidence=.95):
     p = sum(hits) / n
     centre, spread = (p + z * z / (2 * n)) / (1 + z * z / n), z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
     return max(0., centre - spread), min(1., centre + spread)
+
+
+def bootstrap_mean_band(values, resamples=1000, seed=0, confidence=.95):
+    """Percentile interval for a mean of paired outcomes, including ties scored as one half."""
+    values = np.asarray(values, dtype=np.float64)
+    if not len(values):
+        return None
+    rng = np.random.default_rng(seed)
+    means = np.empty(resamples)
+    step = max(1, BOOTSTRAP_ELEMENTS // len(values))
+    for first in range(0, resamples, step):
+        picks = rng.integers(0, len(values), (min(step, resamples - first), len(values)))
+        means[first:first + len(picks)] = values[picks].mean(axis=1)
+    tail = (1 - confidence) * 50
+    return [float(np.percentile(means, tail)), float(np.percentile(means, 100 - tail))]
+
+
+def _finite_json(value):
+    """Keep a small-sample gate's undefined bounds as JSON null, not nonstandard NaN literals."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _finite_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite_json(item) for item in value]
+    return value
+
+
+def assistant_card(checkpoint, suite, *, baseline=None, skip=None, baseline_skip=None, target_seconds=120):
+    """Score one checkpoint on a fixed held-out suite and optionally compare its replies with a baseline.
+
+    `suite` is the frozen workspace suite from studio_bench; callers must keep its items out of training and pass the
+    per-checkpoint contamination masks when training provenance is available. Chat win rate uses the suite's rule-checked
+    user prompts: a candidate wins when it answers correctly and the baseline does not, and a tie counts as half. It does
+    not claim to measure open-ended chat quality. Missing kinds are explicit, never filled with invented scores.
+    """
+    import studio_bench
+
+    started = time.monotonic()
+    measured = studio_bench.run_suite((None, checkpoint), suite, skip=skip)
+    earlier = studio_bench.run_suite((None, baseline), suite, skip=baseline_skip) if baseline else None
+    card = assistant_card_from_results(measured, earlier)
+    elapsed = time.monotonic() - started
+    return {**card, "seconds": elapsed, "target_seconds": target_seconds, "within_target": elapsed <= target_seconds}
+
+
+def assistant_card_from_results(measured, earlier=None):
+    """The report card from already scored frozen-suite results; reuses the benchmark cache without running inference again."""
+    import studio_bench
+
+    def entry(value, band, count, method):
+        return {"value": value, "band": band, "items": count, "method": method}
+
+    choice = measured.get("few_shot") or {}
+    choice_rows = choice.get("rows") or []
+    choice_hits = [hit for hit in (choice_rows[-1].get("hits") or []) if hit is not None] if choice_rows else []
+    checked = measured.get("problems") or {}
+    hits = checked.get("each") or []
+    valid_hits = [hit for hit in hits if hit is not None]
+    bpc = measured.get("bpc")
+    entries = {
+        "heldout_bpc": entry(bpc, measured.get("bpc_band"), sum(row is not None for row in measured.get("doc_scores") or []), "held-out text"),
+        "choice_accuracy": entry(choice.get("accuracy"), bootstrap_mean_band(choice_hits) if choice_hits else choice.get("band"),
+                                 choice.get("items", 0), "choice log-likelihood"),
+        "checked_accuracy": entry(checked.get("rate"), bootstrap_mean_band(valid_hits) if valid_hits else None,
+                                  checked.get("total", 0), "rule-checked answers"),
+    }
+    chat = entry(None, None, 0, "head-to-head rule-checked replies")
+    if earlier:
+        before = (earlier.get("problems") or {}).get("each") or []
+        paired = [(new, old) for new, old in zip(hits, before) if new is not None and old is not None]
+        if paired:
+            outcomes = [1. if new > old else 0. if new < old else .5 for new, old in paired]
+            chat = entry(sum(outcomes) / len(outcomes), bootstrap_mean_band(outcomes), len(outcomes),
+                         "head-to-head rule-checked replies")
+    entries["chat_win_rate"] = chat
+    return _finite_json({"suite": measured["suite"], "entries": entries, "sample_size": {key: row["items"] for key, row in entries.items()},
+            "decontam": measured.get("decontam"),
+            "gate": studio_bench.gate_verdict(earlier, measured) if earlier else None})
+
+
+def assistant_card_gate(baseline, candidate):
+    """Conservative band check for a phase: reject a clear regression on any measured shared entry.
+
+    This is useful when only persisted cards are available. When the two checkpoints can be scored together, prefer
+    `assistant_card(..., baseline=...)` and its paired-item gate, which removes shared question difficulty.
+    """
+    if baseline.get("suite") != candidate.get("suite"):
+        return {"ok": False, "checks": [{"name": "Same frozen suite", "ok": False, "detail": "Suite ids differ."}]}
+    checks = []
+    measured = 0
+    for key in ("heldout_bpc", "choice_accuracy", "checked_accuracy", "chat_win_rate"):
+        old = (baseline.get("entries") or {}).get(key) or {}
+        new = (candidate.get("entries") or {}).get(key) or {}
+        old_band, new_band = old.get("band"), new.get("band")
+        if not old_band or not new_band:
+            checks.append({"name": key, "ok": True, "detail": "Not measured on both cards."})
+            continue
+        measured += 1
+        worse = new_band[0] > old_band[1] if key == "heldout_bpc" else new_band[1] < old_band[0]
+        checks.append({"name": key, "ok": not worse, "detail": "Clear regression outside both intervals." if worse else "No clear regression."})
+    if not measured:
+        checks.append({"name": "Measured entries", "ok": False, "detail": "No shared scores with uncertainty bands."})
+    return {"ok": all(check["ok"] for check in checks), "checks": checks}
 
 
 def _erfinv(p):

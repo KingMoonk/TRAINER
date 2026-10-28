@@ -15,6 +15,7 @@ import { routeFor } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 import { T } from "./copy";
 import { useLive } from "@/lib/live";
+import { AssistantReportCard } from "@/components/assistant-report-card";
 
 type Version = components["schemas"]["Version"];
 type Queue = components["schemas"]["QueueStateModel"];
@@ -80,6 +81,11 @@ export function VersionTray({ editingVersion }: { editingVersion?: number }) {
   const [picked, setPicked] = useState<number>();
   const rows = versions.data ?? [];
   const selected = rows.find((version) => version.number === picked) ?? rows.at(-1);
+  const chosenCard = selected?.scorecard?.assistant_card as { suite?: string } | undefined;
+  const cardTrend = chosenCard?.suite ? rows.flatMap((version) => {
+    const card = version.scorecard?.assistant_card as { suite?: string; entries?: Record<string, unknown> } | undefined;
+    return card && card.suite === chosenCard.suite && card.entries ? [{ version: version.number, entries: card.entries }] : [];
+  }) : [];
   const parent = selected && (rows.find((version) => version.number === selected.parent) ?? rows[rows.indexOf(selected) - 1]);
   const shown = [parent, selected].filter((version): version is Version => !!version);
   const curves = useQueries({ queries: shown.map((version) => ({
@@ -122,6 +128,7 @@ export function VersionTray({ editingVersion }: { editingVersion?: number }) {
       </CardContent>
     </Card>
     {selected && <>
+      <AssistantReportCard card={selected.scorecard?.assistant_card} trend={cardTrend} />
       <Card>
         <CardHeader><CardTitle>{T.version} {selected.number}{parent ? ` ${T.afterVersion} ${parent.number}` : ` · ${T.trainingHistory}`}</CardTitle>
           <CardDescription>{selected.change || T.modelDesign}</CardDescription></CardHeader>

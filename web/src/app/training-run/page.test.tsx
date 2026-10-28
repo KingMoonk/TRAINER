@@ -212,6 +212,26 @@ describe("Training run page", () => {
     expect(screen.getByRole("button", { name: "Stop after a short cool-down" })).toBeDisabled();
   });
 
+  test("a scored run shows measured assistant entries and their version trend", async () => {
+    const entries = {
+      choice_accuracy: { value: .5, band: [.3, .7], items: 40, method: "choice log-likelihood" },
+      checked_accuracy: { value: .6, band: [.4, .8], items: 30, method: "rule-checked answers" },
+      heldout_bpc: { value: 2.1, band: [2.0, 2.2], items: 24, method: "held-out text" },
+      chat_win_rate: { value: .65, band: [.55, .75], items: 30, method: "head-to-head rule-checked replies" },
+    };
+    mockApi({
+      "GET /training-run": () => ({ body: { ...runPage(6, false), report_card: { suite: "fixed", entries, seconds: 3.2, decontam: "checked" },
+        report_card_trend: [{ version: 1, entries: { ...entries, choice_accuracy: { ...entries.choice_accuracy, value: .4 } } }, { version: 2, entries }] } }),
+      "GET /queue": () => ({ body: queue(0) }),
+    });
+    renderPage(<TrainingRunPage />);
+    const card = await screen.findByTestId("assistant-report-card");
+    expect(card).toHaveTextContent("Multiple-choice accuracy");
+    expect(card).toHaveTextContent("50.0%");
+    expect(card).toHaveTextContent("Checked reply win rate vs previous version");
+    expect(within(card).getByTestId("report-card-trend")).toHaveTextContent("40.0%");
+  });
+
   test("Pause is sent to the queue", async () => {
     const state = server();
     const user = userEvent.setup();

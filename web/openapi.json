@@ -11355,6 +11355,26 @@
           "references": {
             "$ref": "#/components/schemas/ReferencesModel"
           },
+          "report_card": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Card"
+          },
+          "report_card_trend": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Report Card Trend",
+            "type": "array"
+          },
           "running": {
             "default": false,
             "title": "Running",

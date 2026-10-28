@@ -8,6 +8,7 @@ from unittest import mock
 
 import studio_bench
 import studio_catalog
+import studio_decontam
 import studio_eval
 from studio_model import train
 
@@ -86,6 +87,27 @@ class Suite(unittest.TestCase):
         rows = [problem(0), {"prompt": "Q\n\nA) x\nB) y", "rule": "choice", "params": {"answer": "B"}}]
         suite = studio_bench.suite_from_rows(["a document"], rows, rows)
         self.assertEqual((len(suite["docs"]), len(suite["choice"]), len(suite["problems"])), (1, 1, 1))
+
+    def test_assistant_card_uses_only_measured_held_back_items_and_paired_replies(self):
+        earlier = {"suite": "fixed", "decontam": "checked", "bpc": 2.2, "bpc_band": [2.1, 2.3],
+                   "doc_scores": [[1., 1.]], "few_shot": {"accuracy": .5, "band": [.2, .8], "items": 2,
+                   "rows": [{"hits": [0, 1]}]}, "problems": {"rate": 1 / 3, "total": 3, "each": [0, 0, 1, None]}}
+        current = {**earlier, "bpc": 2.0, "bpc_band": [1.9, 2.1], "few_shot": {"accuracy": 1., "band": [.34, 1.],
+                   "items": 2, "rows": [{"hits": [1, 1]}]}, "problems": {"rate": 1., "total": 3, "each": [1, 1, 1, None]}}
+        card = studio_eval.assistant_card_from_results(current, earlier)
+        self.assertEqual(card["suite"], "fixed")
+        self.assertEqual(card["entries"]["checked_accuracy"]["items"], 3)
+        self.assertEqual(card["entries"]["chat_win_rate"]["items"], 3)
+        self.assertAlmostEqual(card["entries"]["chat_win_rate"]["value"], 2.5 / 3)
+        self.assertEqual(card["decontam"], "checked")
+        self.assertIsNone(studio_eval.assistant_card_from_results(current)["entries"]["chat_win_rate"]["value"])
+
+    def test_card_gate_rejects_only_measured_regression_outside_bands(self):
+        old = {"suite": "fixed", "entries": {"choice_accuracy": {"band": [.6, .8]}, "heldout_bpc": {"band": [2.0, 2.2]}}}
+        new = {"suite": "fixed", "entries": {"choice_accuracy": {"band": [.2, .4]}, "heldout_bpc": {"band": [2.1, 2.3]}}}
+        self.assertFalse(studio_eval.assistant_card_gate(old, new)["ok"])
+        self.assertTrue(studio_eval.assistant_card_gate(old, {**new, "entries": {"choice_accuracy": {"band": [.55, .7]}}})["ok"])
+        self.assertFalse(studio_eval.assistant_card_gate(old, {**new, "suite": "other"})["ok"])
 
 
 class Tokens(unittest.TestCase):
@@ -280,13 +302,21 @@ class RealModel(unittest.TestCase):
     """A tiny trained model: the same suite gives the same numbers, and the numbers are in range."""
 
     def test_running_the_suite_twice_gives_the_same_numbers(self):
-        rows = [json.loads(line) for line in FIXTURE.read_text().splitlines()][:20]
-        suite = studio_bench.build_suite(docs=[r["user"] + "\n" + r["assistant"] for r in rows[:6]], choice=[choice(i) for i in range(6)],
+        rows = [json.loads(line) for line in FIXTURE.read_text().splitlines()][:26]
+        suite = studio_bench.build_suite(docs=[r["user"] + "\n" + r["assistant"] for r in rows[20:26]], choice=[choice(i) for i in range(6)],
                                          pool=[choice(i) for i in range(12)], problems=[problem(i) for i in range(4)])
         with tempfile.TemporaryDirectory() as tmp:
             cfg = dict(width=16, layers=1, heads=2, context=64, steps=4, batch_size=4, eval_every=4, validation=.2, device="cpu")
-            train(cfg, [{"text": r["user"] + "\n" + r["assistant"]} for r in rows], Path(tmp) / "r")
+            train(cfg, [{"text": r["user"] + "\n" + r["assistant"]} for r in rows[:20]], Path(tmp) / "r")
+            overlap = studio_bench.contaminated(suite, studio_decontam.index_of_runs([Path(tmp) / "r"]))
+            self.assertTrue(all(not positions for positions in overlap.values()))
             version = (1, Path(tmp) / "r" / "last.npz")
+            card = studio_eval.assistant_card(version[1], suite, baseline=version[1], skip=overlap, baseline_skip=overlap)
+            json.dumps(card, allow_nan=False)
+            self.assertEqual(card["decontam"], "checked")
+            self.assertEqual(card["sample_size"], {"heldout_bpc": 6, "choice_accuracy": 6, "checked_accuracy": 4, "chat_win_rate": 4})
+            self.assertTrue(all(entry["band"] for entry in card["entries"].values()))
+            self.assertEqual(card["entries"]["chat_win_rate"]["value"], .5)
             first = studio_bench.run_suite(version, suite, tokens=123)
             second = studio_bench.run_suite(version, suite, tokens=123)
             stored = studio_bench.benchmark(tmp, version, suite, 123)

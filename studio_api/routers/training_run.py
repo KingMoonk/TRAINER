@@ -7,6 +7,7 @@ The run is found from the queue and the version store, never from a path the cli
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import Field
 
 from studio_api.app import get_services
 from studio_api.models_queue_data import Model
@@ -67,6 +68,8 @@ class RunPageModel(Model):
     gate_vs: int | None = None  # the version the finished run was weighed against
     switch: SwitchNote
     ended: Ended | None = None  # why the finished run ended itself, when it did
+    report_card: dict[str, Any] | None = None  # the current version's frozen assistant measurements
+    report_card_trend: list[dict[str, Any]] = Field(default_factory=list)  # earlier versions scored on the same suite
 
 
 def _current(services):
@@ -114,6 +117,10 @@ def training_run(services: Services) -> RunPageModel:
     except NotImplementedError:
         gate = None
     chat = services.best_version() if version else None
+    cards = [(v.number, (v.scorecard or {}).get("assistant_card")) for v in services.versions()]
+    card = (version.scorecard or {}).get("assistant_card") if version else None
+    suite = card.get("suite") if card else next((c["suite"] for _, c in reversed(cards) if c), None)
+    trend = [{"version": number, "entries": c["entries"]} for number, c in cards if c and c.get("suite") == suite]
     key, extra = page.switch_note(running, held[-1][1] if held else None, references.get("best_so_far_bpc"), gate)
     return RunPageModel(
         version=version.number if version else None, parent=parent.number if parent else None, change=version.change if version else "",
@@ -121,4 +128,5 @@ def training_run(services: Services) -> RunPageModel:
         phase=phase, status=studio_eval.run_status(history) if history else None, curve=CurveModel.model_validate(curve),
         references=ReferencesModel.model_validate(references), chat_version=(chat.number if chat else parent.number if parent else None),
         gate_vs=gate["vs"] if gate else None, switch=SwitchNote(key=key, **extra), ended=_ended(services, state, version),
+        report_card=card, report_card_trend=trend,
     )
