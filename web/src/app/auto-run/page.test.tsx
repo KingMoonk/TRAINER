@@ -56,8 +56,9 @@ describe("Auto Run page: a new run", () => {
     expect(await screen.findByTestId("plan-editor")).toBeVisible();
     expect(screen.getByLabelText("Version to train")).toHaveValue("2");
     expect(calls.some((c) => c.path === "/auto-runs/defaults" && c.search === "?version=2")).toBe(true);
-    for (const kind of ["data", "pretrain", "midtrain", "sft", "rlvr", "distill", "dpo"]) expect(screen.getByTestId(`plan-${kind}`)).toBeVisible();
+    for (const kind of ["data", "pretrain", "midtrain", "sft", "rlvr", "distill", "dpo", "rlhf"]) expect(screen.getByTestId(`plan-${kind}`)).toBeVisible();
     expect(screen.getByRole("switch", { name: "Include Mid-training" })).not.toBeChecked(); // optional: off unless the person adds it
+    expect(screen.getByRole("switch", { name: "Include RLHF loop · Keep what the report card confirms" })).not.toBeChecked(); // it can run for hours
     expect(screen.getByLabelText("Overall time budget (hours)")).toHaveValue("12");
   });
 
@@ -231,6 +232,25 @@ describe("Auto Run page: a run that waits for the person", () => {
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(posted(calls, "/auto-runs/run1/resume")).toHaveLength(1));
     await waitFor(() => expect(screen.getByTestId("auto-run-status")).toHaveTextContent("Running"));
+  });
+
+  test("the RLHF phase lists its rounds with what the judge and the report card said", async () => {
+    const rounds = [
+      { round: 1, status: "kept", reason: "Kept: nothing got worse and something improved.", judge_win_rate: 0.75, card_better: ["multiple-choice accuracy"] },
+      { round: 2, status: "rolled_back", reason: "Rolled back: report card: checked-answer pass rate did not clearly fall.", judge_win_rate: 0.9, card_better: [] },
+    ];
+    const phases = plan().phases.map((p) => ({ ...p, enabled: true }));
+    const view = run("running", "rlhf", { rlhf: { status: "running", result: { rounds, verdict: "round 3: training", live: true } } }, { plan: plan({ phases }) });
+    server(view);
+    renderPage(<AutoRunPage />);
+    const phase = await screen.findByTestId("phase-rlhf");
+    const list = within(phase).getByRole("list", { name: "Rounds, RLHF loop · Keep what the report card confirms" });
+    const items = within(list).getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent("Round 1: kept · the judge preferred it in 75% of comparisons · report card better: multiple-choice accuracy");
+    expect(items[1]).toHaveTextContent("Round 2: rolled back · the judge preferred it in 90% of comparisons");
+    expect(items[1]).toHaveTextContent("Rolled back: report card: checked-answer pass rate did not clearly fall.");
+    expect(within(phase).getByText("round 3: training")).toBeVisible();
   });
 
   test("a failed phase shows its checks and can be tried again or skipped", async () => {

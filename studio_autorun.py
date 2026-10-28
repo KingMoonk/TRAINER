@@ -6,9 +6,10 @@ Files, in `data/auto_runs/<id>/`: `plan.json` (what to do), `state.json` (where 
 events it made are kept in `state["events"]` until `save_state` writes them to the journal and drops them.
 
 Plan: `{id, name, version, budget: {hours}, phases: [{kind, enabled, settings, on_pass, on_fail}]}`.
-* kinds, in this fixed order, each at most once: data, pretrain, midtrain, sft, rlvr, distill, dpo (`KINDS`). Each maps to a queue
+* kinds, in this fixed order, each at most once: data, pretrain, midtrain, sft, rlvr, distill, dpo, rlhf (`KINDS`). Each maps to a queue
   job kind in `JOB_KIND` (data is not a job; pretrain, midtrain and sft are the jobs of the same name, midtrain/sft from
-  studio_training_stages (#836); rlvr, distill and dpo are `post_round` jobs, the orchestrator picks the round number);
+  studio_training_stages (#836); rlvr, distill and dpo are `post_round` jobs, the orchestrator picks the round number; rlhf is the `rlhf_loop` job
+  (studio_loop), the automated preference loop from the sft phase's best weights, gated and stopped by the report card);
 * `on_pass`: continue | pause (pause after the phase passed, so the person can look);
 * `on_fail`: pause (wait for the person, who retries or skips) | stop (end the run) | skip (carry on without the phase);
 * `budget.hours`: wall-clock hours from `start`, or None for no limit. No phase starts past the deadline, and a pretrain phase's
@@ -51,9 +52,9 @@ from pathlib import Path
 
 from studio_core import atomic_json, now as clock
 
-KINDS = ("data", "pretrain", "midtrain", "sft", "rlvr", "distill", "dpo")
+KINDS = ("data", "pretrain", "midtrain", "sft", "rlvr", "distill", "dpo", "rlhf")
 JOB_KIND = {"pretrain": "pretrain", "midtrain": "midtrain", "sft": "sft", "rlvr": "post_round", "distill": "post_round",
-            "dpo": "post_round"}  # the queue job kind of each phase; data runs in process
+            "dpo": "post_round", "rlhf": "rlhf_loop"}  # the queue job kind of each phase; data runs in process
 ON_PASS = ("continue", "pause")
 ON_FAIL = ("pause", "stop", "skip")
 RUN_STATUSES = ("draft", "running", "pausing", "paused", "waiting_user", "stopped", "done", "failed")
@@ -75,10 +76,11 @@ class AutorunError(ValueError):
 # --------------------------------------------------------------------------- the plan
 
 def DEFAULT_PLAN(version):
-    """The plan a new Auto Run starts from: every phase on except mid-training, continue on a pass, pause on a failure."""
+    """The plan a new Auto Run starts from: every phase on except mid-training and the RLHF loop (which can run for days), continue on a
+    pass, pause on a failure."""
     return {
         "id": "", "name": "Auto Run", "version": version, "budget": {"hours": DEFAULT_HOURS},
-        "phases": [{"kind": kind, "enabled": kind != "midtrain", "settings": {}, "on_pass": "continue", "on_fail": "pause"} for kind in KINDS],
+        "phases": [{"kind": kind, "enabled": kind not in ("midtrain", "rlhf"), "settings": {}, "on_pass": "continue", "on_fail": "pause"} for kind in KINDS],
         "controller": _autotune().default_controller(),
     }
 
@@ -133,6 +135,13 @@ def validate(plan):
             problems.append(f"{label} has the bad on_pass {phase.get('on_pass')!r}; use {' or '.join(ON_PASS)}.")
         if phase.get("on_fail") not in ON_FAIL:
             problems.append(f"{label} has the bad on_fail {phase.get('on_fail')!r}; use {', '.join(ON_FAIL[:-1])} or {ON_FAIL[-1]}.")
+    loop = next((p for p in phases if isinstance(p, dict) and p.get("kind") == "rlhf" and isinstance(p.get("settings"), dict)), None)
+    if loop is not None:
+        import studio_loop
+        try:
+            studio_loop.clean_config(loop["settings"])
+        except (ValueError, TypeError) as exc:
+            problems.append(f"The rlhf phase: {exc}")
     if not any(isinstance(p, dict) and p.get("enabled") is True for p in phases):
         problems.append("At least one phase must be enabled.")
     if plan.get("controller") is not None:

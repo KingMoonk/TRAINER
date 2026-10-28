@@ -14,6 +14,11 @@ Phases and the jobs they become (`JOB_KIND` in studio_autorun is the plan's view
 * pretrain: `build_pretrain(settings, version)` makes the job, the same way POST /pretraining/start does (sizing and fitting
   included); it counts as done only once the restore_answers round a pretrain on new text leaves behind is no longer waiting or running;
 * sft, rlvr, distill, dpo: `post_round` jobs for rounds 1-4, built by `studio_rl.round_job`, on the version's newest checkpoint;
+* rlhf: the `rlhf_loop` job (`Services.loop_job`, studio_loop) on the sft phase's checkpoint when sft passed, else the version's best weights.
+  Its loop id is `<run>-rlhf`, so a retry carries on from the loop's folder. The phase's settings are the loop's config (studio_loop.DEFAULTS:
+  max_rounds, patience, card_patience, ...); the loop gates every round on the report card as well and stops when the card stops
+  improving. When it kept a round, the phase asks `Services.adopt_loop` (the gate on all the held-back data) and passes only when that passes;
+  a loop that kept nothing passes without a checkpoint. While it runs, the run's view shows its rounds so far in the phase's result;
 * midtrain: the `midtrain` stage job (what POST /post-training/stages queues) on the version's best weights; the plan's `steps`
   setting becomes `params["config"]["steps"]`. Its result (ok, checkpoint, checks) lands in the job's params like a round's; only a
   passing stage becomes the version's best (Services.record_stage), and a failing one fails the phase by the plan's on_fail policy.
@@ -104,7 +109,7 @@ class Orchestrator:
         """{"plan", "state", "journal"} of one run: the journal is its last 50 lines."""
         with self.lock:
             run = self._get(run_id)
-            return {"plan": run["plan"], "state": run["state"], "journal": ar.read_journal(self._folder(run_id))[-50:]}
+            return {"plan": run["plan"], "state": self._live(run), "journal": ar.read_journal(self._folder(run_id))[-50:]}
 
     # ---- making a run
     def create(self, plan):
@@ -239,7 +244,11 @@ class Orchestrator:
                 return self.resume(run_id)
             if not phase:
                 raise ar.AutorunError("There is no phase to skip.")
-            if choice == "adopt":
+            if choice == "adopt" and phase == "rlhf":
+                adopted = self.services.adopt_loop(self._loop_id(run["plan"]))
+                if not adopted.get("ok"):
+                    raise ar.AutorunError(adopted.get("verdict") or "The loop's best did not pass the check.")
+            elif choice == "adopt":
                 if phase not in ROUND:
                     raise ar.AutorunError("Only a post-training round keeps a checkpoint to adopt.")
                 self.services.adopt_round(run["plan"]["version"], ROUND[phase])   # ValueError with a sentence when there is none
@@ -357,7 +366,16 @@ class Orchestrator:
 
     def _result(self, run_id, kind, job):
         result = {}
-        if kind in ROUND or kind == "midtrain":
+        if kind == "rlhf":
+            result = dict(job.params.get("result") or {})
+            if job.status == "done" and not result:
+                result = {"passed": False, "error": "The RLHF loop left no result."}
+            elif job.status == "done" and result.get("ok") and result.get("checkpoint") and result.get("loop_id"):
+                adopted = self.services.adopt_loop(result["loop_id"])    # the gate on all the held-back data, then the version's own
+                result.update(ok=bool(adopted.get("ok")), verdict=adopted.get("verdict") or result.get("verdict", ""))
+                if not adopted.get("ok"):
+                    result.pop("checkpoint", None)
+        elif kind in ROUND or kind == "midtrain":
             result = dict(job.params.get("result") or {})
             if job.status == "done" and not result:
                 what = f"Round {ROUND[kind]}" if kind in ROUND else "Mid-training"
@@ -461,6 +479,39 @@ class Orchestrator:
             self._put(run_id, tune.add_choices(run["state"], choices, self.now()))
         return tune.settings_with(settings, choices)
 
+    @staticmethod
+    def _loop_id(plan):
+        return f"{plan['id']}-rlhf"
+
+    def _loop_start(self, run_id, version):
+        """The weights the RLHF loop starts from: the sft phase's checkpoint when that phase passed, else the version's best."""
+        run = self.runs[run_id]
+        sft = next((e for e, p in zip(run["state"]["phases"], run["plan"]["phases"]) if p["kind"] == "sft" and e["status"] == "passed"), None)
+        return (sft or {}).get("checkpoint") or version.best_checkpoint
+
+    def _live(self, run):
+        """The run's state for a reader: while the rlhf phase has its job, its result shows the loop's rounds so far (read from the loop's
+        folder, never written to the run's state)."""
+        state = run["state"]
+        entry = next((e for e in state["phases"] if e["kind"] == "rlhf" and e["status"] in ("queued", "running")), None)
+        if entry is None:
+            return state
+        try:
+            loop = next((x for x in self.services.post_loops() if x.get("id") == self._loop_id(run["plan"])), None)
+        except NotImplementedError:
+            loop = None
+        if loop is None:
+            return state
+        import studio_loop
+        live = studio_loop.phase_result(loop)
+        for key in ("ok", "checkpoint", "stopped", "loop_id"):
+            live.pop(key, None)
+        live["verdict"] = loop.get("phase") or loop.get("note") or ""
+        live["live"] = True
+        state = copy.deepcopy(state)
+        next(e for e in state["phases"] if e["kind"] == "rlhf").update(result=live)
+        return state
+
     def _build(self, run_id, kind, job_id):
         run = self.runs[run_id]
         plan, state = run["plan"], run["state"]
@@ -476,6 +527,15 @@ class Orchestrator:
             if build is None:
                 raise ValueError("This app cannot start a pretraining run from an Auto Run.")
             job = build(settings, version.number)
+        elif kind == "rlhf":
+            start = self._loop_start(run_id, version)
+            if not start:
+                raise ValueError(f"Version {version.number} has no trained weights yet. Pretrain it first, or skip this phase.")
+            import studio_loop
+            config = {k: v for k, v in settings.items() if k in studio_loop.DEFAULTS and v is not None}
+            job = self.services.loop_job(version.number, start, config, self._loop_id(plan))
+            if settings.get("judge_model"):
+                job.params["judge_model"] = settings["judge_model"]
         elif kind == "midtrain":
             if not version.best_checkpoint:
                 raise ValueError(f"Version {version.number} has no trained weights yet. Pretrain it first, or skip this phase.")

@@ -67,6 +67,18 @@ export const PHASES: Record<string, PhaseSpec> = {
   },
   distill: { title: "Round 3 · Learn from a teacher", blurb: "Move its answers toward a teacher's.", href: "/post-training", link: "Open Post-training", settings: [STEPS] },
   dpo: { title: "Round 4 · Prefer the better answer", blurb: "Learn from the answer pairs you rated.", href: "/post-training", link: "Open Post-training", settings: [STEPS] },
+  rlhf: {
+    title: "RLHF loop · Keep what the report card confirms",
+    blurb:
+      "Starts from the Round 1 weights and repeats preference rounds on its own. A round is kept only if nothing got worse, including the report card, and it stops when the report card has stopped improving. Off unless you add it: it can run for hours.",
+    href: "/post-training",
+    link: "Open Post-training",
+    settings: [
+      { key: "max_rounds", label: "Most rounds", hint: "It stops after this many rounds, kept or not.", min: 1, max: 1000, integer: true, fallback: 20 },
+      { key: "card_patience", label: "Rounds without a better report card", hint: "It stops when the report card has not clearly improved for this many rounds in a row.", min: 1, max: 1000, integer: true, fallback: 3 },
+      { key: "patience", label: "Rounds in a row not kept", hint: "It also stops after this many rounds in a row that were rolled back.", min: 1, max: 1000, integer: true, fallback: 4 },
+    ],
+  },
 };
 
 export function phaseTitle(kind: string): string {
@@ -259,6 +271,23 @@ export function resultChecks(result: PhaseState["result"]): { name: string; deta
 export function resultVerdict(result: PhaseState["result"]): string {
   const verdict = (result as { verdict?: unknown } | null | undefined)?.verdict;
   return typeof verdict === "string" ? verdict : "";
+}
+
+/** One round of the RLHF loop as its phase keeps it (studio_loop.phase_result). */
+export type LoopRound = { round: number; status: string; reason: string; judge_win_rate: number | null; card_better: string[] };
+
+/** The rounds an rlhf phase's result lists, in order (while the loop runs, the rounds so far). */
+export function loopRounds(result: PhaseState["result"]): LoopRound[] {
+  const rounds = (result as { rounds?: unknown } | null | undefined)?.rounds;
+  return Array.isArray(rounds) ? (rounds as LoopRound[]) : [];
+}
+
+/** The line a round gets: its number and how it ended, then what the judge and the report card said. */
+export function roundText(round: LoopRound): string {
+  const parts = [fill(T.roundLine, { n: round.round, status: T.roundStatus[round.status] ?? round.status })];
+  if (typeof round.judge_win_rate === "number") parts.push(fill(T.judgeWin, { pct: Math.round(round.judge_win_rate * 100) }));
+  if (round.card_better?.length) parts.push(fill(T.cardBetter, { what: round.card_better.join(", ") }));
+  return parts.join(" · ");
 }
 
 export function checkText(ok: boolean | null): string {

@@ -24,10 +24,12 @@ import {
   checkText,
   choiceLabel,
   controls,
+  loopRounds,
   phaseTitle,
   progressLine,
   resultChecks,
   resultVerdict,
+  roundText,
   runChoices,
   runLabel,
   timelinePhases,
@@ -75,6 +77,7 @@ function Timeline({ run }: { run: RunView }) {
         {timelinePhases(run).map(({ state }) => {
           const checks = resultChecks(state.result);
           const verdict = resultVerdict(state.result);
+          const rounds = loopRounds(state.result);
           const current = run.state.current === state.kind;
           const spec = PHASES[state.kind];
           return (
@@ -96,6 +99,16 @@ function Timeline({ run }: { run: RunView }) {
                     </li>
                   ))}
                 </ul>
+              )}
+              {rounds.length > 0 && (
+                <ol aria-label={`${T.rounds}, ${phaseTitle(state.kind)}`} className="mt-1 flex flex-col gap-1 text-sm">
+                  {rounds.map((round) => (
+                    <li key={round.round}>
+                      {roundText(round)}
+                      {round.reason && <span className="block text-xs text-muted-foreground">{round.reason}</span>}
+                    </li>
+                  ))}
+                </ol>
               )}
               {state.checkpoint && (
                 <p className="mt-1 break-all text-xs text-muted-foreground">

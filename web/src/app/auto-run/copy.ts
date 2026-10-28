@@ -2,7 +2,7 @@
 
 export const T = {
   title: "Auto Run",
-  lead: "Plan the whole training once: pretrain, then the four post-training rounds. It runs them one after another on the queue and stops to ask you when a phase fails.",
+  lead: "Plan the whole training once: pretrain, then the four post-training rounds, and if you add it the RLHF loop. It runs them one after another on the queue and stops to ask you when a phase fails.",
   versionLabel: "Version to train",
   noVersions: "No versions yet. Build one in Build your model first.",
   loadingPlan: "Loading the plan",
@@ -53,6 +53,11 @@ export const T = {
   attempt: "attempt {n}",
   checkpoint: "Checkpoint",
   checks: "Checks",
+  rounds: "Rounds",
+  roundLine: "Round {n}: {status}",
+  roundStatus: { kept: "kept", rolled_back: "rolled back", too_few_pairs: "too few answer pairs", judge_down: "judge unavailable" } as Record<string, string>,
+  judgeWin: "the judge preferred it in {pct}% of comparisons",
+  cardBetter: "report card better: {what}",
   checkPassed: "passed",
   checkFailed: "failed",
   checkUnmeasured: "not measured",
