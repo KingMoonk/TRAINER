@@ -8,12 +8,15 @@ runner's own subscribers after `_record_job` for the real app, so `record_round`
 `auto_run` event, {"id", "status", "current", "reason"}.
 
 Phases and the jobs they become (`JOB_KIND` in studio_autorun is the plan's view; this is the queue's):
-* data: no job. A readiness check run in process: the workspace needs text a run may train on, else the run waits for the person;
+* data: no job. A readiness check run in process, for what the plan's own later phases train on: text a run may train on for
+  pretrain and midtrain, conversations marked Good for sft. When something is missing the run waits for the person with a sentence
+  naming it and the phase that needs it;
 * pretrain: `build_pretrain(settings, version)` makes the job, the same way POST /pretraining/start does (sizing and fitting
   included); it counts as done only once the restore_answers round a pretrain on new text leaves behind is no longer waiting or running;
 * sft, rlvr, distill, dpo: `post_round` jobs for rounds 1-4, built by `studio_rl.round_job`, on the version's newest checkpoint;
-* midtrain: no queue job of that name exists yet (studio_training_stages is not merged), so an enabled midtrain phase waits for the
-  person (waiting_user), who skips it.
+* midtrain: the `midtrain` stage job (what POST /post-training/stages queues) on the version's best weights; the plan's `steps`
+  setting becomes `params["config"]["steps"]`. Its result (ok, checkpoint, checks) lands in the job's params like a round's; only a
+  passing stage becomes the version's best (Services.record_stage), and a failing one fails the phase by the plan's on_fail policy.
 
 What the budget covers today: the overall deadline is checked between phases, and a pretrain phase's `hours` is capped to what is
 left. Rounds 1-4 honour no wall-clock budget of their own (their steps decide how long they take).
@@ -32,6 +35,7 @@ import uuid
 from pathlib import Path
 
 import studio_autorun as ar
+import studio_autotune as tune
 from studio_core import now as clock
 
 LOG = logging.getLogger("groundwork.autorun")
@@ -353,10 +357,11 @@ class Orchestrator:
 
     def _result(self, run_id, kind, job):
         result = {}
-        if kind in ROUND:
+        if kind in ROUND or kind == "midtrain":
             result = dict(job.params.get("result") or {})
             if job.status == "done" and not result:
-                result = {"passed": False, "error": f"Round {ROUND[kind]} left no result."}
+                what = f"Round {ROUND[kind]}" if kind in ROUND else "Mid-training"
+                result = {"passed": False, "error": f"{what} left no result."}
         elif kind == "pretrain" and job.status == "done":
             found = self._version(self.runs[run_id]["plan"]["version"])
             result = {"checkpoint": str(found.best_checkpoint)} if found is not None and found.best_checkpoint else {}
@@ -366,7 +371,8 @@ class Orchestrator:
 
     def _finish_phase(self, run_id, kind, status, result):
         run = self.runs[run_id]
-        self._put(run_id, ar.apply_outcome(run["plan"], run["state"], kind, status, result, self.now()))
+        state = tune.record_attempt(run["plan"], run["state"], kind, status, result, self.now())   # (what the controller reads of it later)
+        self._put(run_id, ar.apply_outcome(run["plan"], state, kind, status, result, self.now()))
 
     def _park(self, run_id):
         """A pause is waiting for a phase whose job has not started: hold the job and park the phase. True when one was parked."""
@@ -393,22 +399,30 @@ class Orchestrator:
     def _data(self, run_id):
         run = self.runs[run_id]
         action = ("data", "data")
-        reason = self._no_text()
+        reason = self._missing_data({p["kind"] for p in run["plan"]["phases"] if p["enabled"]})
         if reason:
             return self._block(run_id, "data", reason, action)
         self._put(run_id, ar.begin(run["plan"], run["state"], action, self.now()))
         self._finish_phase(run_id, "data", "done", {})
 
-    def _no_text(self):
-        """Why no run could train on the workspace's text yet, or ""."""
+    def _missing_data(self, kinds):
+        """Why the plan's enabled phases cannot train on the workspace's data yet, or "": text a run may train on for pretrain and
+        midtrain, conversations marked Good for sft. Every missing piece is named with the phase that needs it."""
+        problems = []
         try:
-            from studio_ia import pretraining_plan as plan
-            ids = [s["id"] for s in self.services.text_sets() if not plan.held_out(s["id"])]
-            if ids and self.services.has_reviewed_text(ids):
-                return ""
+            if kinds & {"pretrain", "midtrain"}:
+                from studio_ia import pretraining_plan as plan
+                ids = [s["id"] for s in self.services.text_sets() if not plan.held_out(s["id"])]
+                if not (ids and self.services.has_reviewed_text(ids)):
+                    needs = " and ".join(k for k in ("pretrain", "midtrain") if k in kinds)
+                    problems.append(f"There is no text to train on yet for {needs}. Add text in Your data and mark it Good.")
+            if "sft" in kinds:
+                ids = [s["id"] for s in self.services.conversation_sets()]
+                if not (ids and self.services.has_conversations(ids, reviewed_only=True)):
+                    problems.append("There are no conversations marked Good yet for sft. Add some in Your data and mark them Good.")
         except NotImplementedError:
             return ""
-        return "There is no text to train on yet. Add text in Your data and mark it Good."
+        return " ".join(problems)
 
     def _enqueue(self, run_id, kind, job_id):
         """Ask the queue for the phase's job (by its deterministic id) and record it. A phase that cannot be built waits for the person."""
@@ -427,20 +441,49 @@ class Orchestrator:
             self.services.enqueue(job)
         self._put(run_id, ar.begin(plan, self.runs[run_id]["state"], action, self.now()))   # (a phase already queued is only re-recorded)
 
+    def _tuned(self, run_id, version, kind, settings):
+        """`settings` with what the parameter controller (studio_autotune) chose for this phase from the evidence so far; the choices
+        are kept in the run's state and journal, with that evidence, before the job is asked for."""
+        run = self.runs[run_id]
+        plan = run["plan"]
+        if not tune.enabled(plan):
+            return settings
+        points = None
+        if any(p["kind"] == "pretrain" and p["enabled"] for p in plan["phases"]):
+            try:
+                found = self.services.loss_evidence(version)
+            except (NotImplementedError, OSError, ValueError):
+                found = None
+            points = found["points"] if found else None
+        width = ((version.spec or {}).get("dims") or {}).get("d_model")
+        choices = tune.decide(plan, run["state"], kind, points, width)
+        if choices:
+            self._put(run_id, tune.add_choices(run["state"], choices, self.now()))
+        return tune.settings_with(settings, choices)
+
     def _build(self, run_id, kind, job_id):
         run = self.runs[run_id]
         plan, state = run["plan"], run["state"]
-        if kind not in ar.JOB_KIND or kind == "midtrain":
-            raise ValueError("Mid-training is not available yet. Skip this phase." if kind == "midtrain" else f"The {kind} phase has no job.")
+        if kind not in ar.JOB_KIND:
+            raise ValueError(f"The {kind} phase has no job.")
         version = self._version(plan["version"])
         if version is None:
             raise ValueError(f"There is no version {plan['version']}.")
         settings = ar.phase_settings(plan, state, kind, self.now())
+        settings = self._tuned(run_id, version, kind, settings)
         if kind == "pretrain":
             build = self.build_pretrain or getattr(self.services, "build_pretrain", None)   # the API app sets the services' one
             if build is None:
                 raise ValueError("This app cannot start a pretraining run from an Auto Run.")
             job = build(settings, version.number)
+        elif kind == "midtrain":
+            if not version.best_checkpoint:
+                raise ValueError(f"Version {version.number} has no trained weights yet. Pretrain it first, or skip this phase.")
+            params = {"version": version.number}
+            if isinstance(settings.get("steps"), int) and settings["steps"] > 0:
+                params["config"] = {"steps": settings["steps"]}
+            from studio_queue import Job
+            job = Job("midtrain", f"Version {version.number} \u00b7 mid-training", "midtrain stage", params=params)
         else:
             if not version.best_checkpoint:
                 raise ValueError(f"Version {version.number} has no trained weights yet. Pretrain it first, or skip this phase.")

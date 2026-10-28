@@ -22,10 +22,8 @@ T = {  # short_* is the one visible line; the rest is the hover text behind the 
     "custom_pieces": "custom word pieces",
     "chat_scale": "Answers that hold a conversation need hundreds of millions of parameters and billions of word pieces; this app teaches the same steps at laptop scale.",
     "byte": "Letters (bytes) spell every word out letter by letter, so a small model mostly learns spelling-shaped output and its context covers fewer words.",
-    "bpe_custom": "Custom word pieces come out as whole common words, so the same context covers about 3 to 4 times more text; the word list costs parameters (list size × width).",
     "bpe_fast": "Learned word pieces come out as common words and word parts, so the same context covers about 3 to 4 times more text than letters; they are learned from a sample of all your text, and the word list costs parameters (list size × width).",
     "bpe_gpt2": "GPT-2 word pieces give the same benefit, but the list has about 50,000 entries.",
-    "word": "Whole words are one token each, so the same context covers about 5 times more text than letters and each token carries more meaning; but a rare word, or one your data never shows, is lost (it becomes an unknown mark), and the word list costs parameters (list size × width).",
     "table_heavy": "More than half of the parameters sit in the word table rather than in the blocks that do the thinking, so only the rest counts toward what it can learn.",
     "continues": "Plain-text training makes it continue text rather than answer; Post-training round 1 teaches it to answer.",
 }
@@ -35,7 +33,7 @@ LITTLE_TEXT = 5_000_000  # word pieces seen: below this a model only picks up le
 ENOUGH_TEXT = 20_000_000  # about 80 MB of text as word pieces
 SMALL, MEDIUM = 1_000_000, 10_000_000  # parameters that do the thinking
 FIXED_WORD_LIST = {"byte": 256, "character": 256, "bpe_gpt2": 50257}  # custom word lists are sized by the data
-WORD_PIECES = ("bpe_custom", "bpe_fast", "bpe_gpt2", "word")
+WORD_PIECES = ("bpe_fast", "bpe_gpt2")
 
 
 def table_params(tokenizer, d_model, vocab=None):
@@ -47,7 +45,7 @@ def table_params(tokenizer, d_model, vocab=None):
 def expectation(params, tokenizer, tokens_seen=None, data_kind=None, embedding_params=None):
     """(headline, details): the headline names the tier; the details add what would move it up, the word list's effect and, for plain text, that it continues text.
 
-    params: all parameters. tokenizer: "byte" | "character" | "bpe_custom" | "bpe_gpt2" | "word". tokens_seen: word pieces it
+    params: all parameters. tokenizer: "byte" | "character" | "bpe_fast" | "bpe_gpt2". tokens_seen: word pieces it
     will read (None = not known yet). data_kind: "text" for a plain-text run, which adds that answering comes from
     post-training. embedding_params: the word table's parameters, if known; when that is over half the total, only
     the rest counts as thinking capacity."""

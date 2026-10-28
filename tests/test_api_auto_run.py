@@ -180,6 +180,18 @@ class AutoRunApiTest(Base):
         self.assertEqual(body["state"]["status"], "waiting_user")
         self.assertIn("no trained weights", body["state"]["reason"])
 
+    def test_an_enabled_midtrain_phase_queues_the_stage_job_and_a_pass_moves_on(self):
+        plan = plan_of()
+        plan["phases"] = [{"kind": "midtrain", "enabled": True, "settings": {"steps": 20}, "on_pass": "continue", "on_fail": "pause"},
+                          {"kind": "sft", "enabled": True, "settings": {}, "on_pass": "continue", "on_fail": "pause"}]
+        body = self.go(plan)
+        self.assertEqual((body["state"]["current"], body["progress"]["kind"]), ("midtrain", "midtrain"))
+        job = self.services.queue().up_next[0]
+        self.assertEqual((job.params["version"], job.params["config"], job.params["auto_run"]), (1, {"steps": 20}, "run1"))
+        self.end(job.id, result={"stage": "midtrain", "ok": True, "checkpoint": "ck-mid", "checks": []})
+        body = self.client.get("/auto-runs/run1").json()
+        self.assertEqual((body["state"]["phases"][0]["status"], body["state"]["current"]), ("passed", "sft"))
+
 
 class PlanChangeTest(Base):
     def put(self, plan):

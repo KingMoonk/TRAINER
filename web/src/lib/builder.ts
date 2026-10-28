@@ -167,7 +167,6 @@ export function wordChanged(cur: Choices, draft: Choices): boolean {
 export function tokenizerDefaultSize(v: number, width: number, layers: number): number {
   if (v === 0) return 263;
   if (v === 2) return 50264;
-  if (v === 3) return 8192;
   const wanted = 4 * layers * width;
   return Math.min(32768, Math.max(1024, Math.round(wanted / 1024) * 1024));
 }
@@ -291,14 +290,12 @@ export type PiecesView = { chips: PieceChip[]; note: string | null; line: string
 /** The example sentence under word list v, and the count line that puts every list's count side by side (design.pieces_for).
  *  `lists` is the word-lists job's result, or undefined while it is still being read. */
 export function piecesFor(v: number, lists: WordLists | undefined): PiecesView {
-  const counts = lists ? lists.lists.map((l) => (l ? l.count.toLocaleString("en-US") : "–")) : ["–", "–", "–", "–"];
-  let line = `${counts.join(" · ")} ${BUILDER.pieces_unit}`;
+  const counts = lists ? lists.lists.map((l) => (l ? l.count.toLocaleString("en-US") : "–")) : ["–", "–", "–"];
+  const line = `${counts.join(" · ")} ${BUILDER.pieces_unit}`;
   if (!lists) return { chips: [], note: BUILDER.pieces_reading, line };
   const found = lists.lists[v] ?? null;
   if (!found) return { chips: [], note: v === 2 ? BUILDER.pieces_gpt2_missing : BUILDER.pieces_needs_text, line };
   const chips = found.chips.map((c): PieceChip => ({ label: c.label, state: c.known ? "pieces" : "lost" }));
-  const lost = chips.filter((c) => c.state === "lost").length;
-  if (lost) line += `, ${fill(lost > 1 ? BUILDER.pieces_lost_many : BUILDER.pieces_lost_one, { n: String(lost) })}`;
   return { chips, note: null, line };
 }
 

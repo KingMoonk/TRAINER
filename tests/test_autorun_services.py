@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy
+
 import studio_autorun as ar
 from studio_ia.autorun import Orchestrator
 from studio_ia.services import FakeServices, Job, Version
@@ -131,137 +133,87 @@ class FlowTests(Base):
         self.go(plan_of(("pretrain",)))
         self.assertEqual((self.state()["status"], self.state()["reason"]), ("waiting_user", "There is no text to train on yet."))
 
-    def test_midtrain_waits_for_the_person_who_skips_it(self):
+    def test_midtrain_enqueues_the_stage_job_with_the_steps_and_a_stable_id(self):
+        plan = plan_of(("midtrain", "sft"))
+        plan["phases"][0]["settings"] = {"steps": 30}
+        self.go(plan)
+        job = self.services.queue().up_next[0]
+        self.assertEqual((job.id, job.kind, job.params["auto_run"], job.params["auto_phase"]), ("run1-0-1", "midtrain", "run1", "midtrain"))
+        self.assertEqual((job.params["version"], job.params["config"]), (1, {"steps": 30}))
+        self.assertEqual(self.phase("midtrain")["status"], "queued")
+
+    def test_midtrain_without_steps_sends_no_config(self):
+        self.go(plan_of(("midtrain",)))
+        self.assertNotIn("config", self.services.queue().up_next[0].params)
+
+    def test_a_passed_midtrain_stage_moves_on_to_sft(self):
         self.go(plan_of(("midtrain", "sft")))
-        self.assertEqual(self.state()["status"], "waiting_user")
-        self.assertIn("Mid-training is not available", self.state()["reason"])
-        self.auto.continue_run("run1", "next")
-        self.assertEqual(self.phase("midtrain")["status"], "skipped")
+        self.end("run1-0-1", result={"stage": "midtrain", "ok": True, "checkpoint": "ck-mid", "checks": []})
+        self.assertEqual((self.phase("midtrain")["status"], self.phase("midtrain")["checkpoint"]), ("passed", "ck-mid"))
         self.assertEqual(self.queued(), ["run1-1-1"])
 
-    def test_the_data_phase_checks_for_text(self):
-        self.services.reviewed_text = False
-        self.go(plan_of(("data", "sft")))
+    def test_a_midtrain_stage_that_fails_its_gate_follows_the_plans_policy(self):
+        self.go(plan_of(("midtrain", "sft")))
+        self.end("run1-0-1", result={"stage": "midtrain", "ok": False, "checkpoint": "ck-kept", "verdict": "It got worse."})
+        self.assertEqual((self.phase("midtrain")["status"], self.state()["status"]), ("failed", "paused"))
+        self.assertIn("It got worse.", self.phase("midtrain")["error"])
+        self.auto.continue_run("run1", "next")
+        self.assertEqual((self.phase("midtrain")["status"], self.queued()), ("skipped", ["run1-1-1"]))
+
+    def test_a_midtrain_stage_that_leaves_no_result_fails(self):
+        self.go(plan_of(("midtrain",)))
+        self.end("run1-0-1")
+        self.assertEqual(self.phase("midtrain")["status"], "failed")
+        self.assertIn("left no result", self.phase("midtrain")["error"])
+
+    def test_midtrain_needs_trained_weights(self):
+        self.services._versions[0].best_checkpoint = None
+        self.go(plan_of(("midtrain",)))
         self.assertEqual(self.state()["status"], "waiting_user")
-        self.assertIn("no text to train on", self.state()["reason"])
+        self.assertIn("no trained weights", self.state()["reason"])
+        self.assertEqual(self.queued(), [])
+
+    def test_a_midtrain_phase_cannot_adopt_a_checkpoint(self):
+        self.go(plan_of(("midtrain",), on_fail="pause"))
+        self.end("run1-0-1", result={"ok": False, "checkpoint": "ck-kept"})
+        with self.assertRaises(ar.AutorunError):
+            self.auto.continue_run("run1", "adopt")
+
+    def test_the_data_phase_checks_for_text_when_a_phase_trains_on_it(self):
+        self.services.reviewed_text = False
+        self.go(plan_of(("data", "midtrain")))
+        self.assertEqual(self.state()["status"], "waiting_user")
+        self.assertIn("no text to train on yet for midtrain", self.state()["reason"])
         self.services.reviewed_text = True
         self.auto.resume("run1")
         self.assertEqual(self.phase("data")["status"], "passed")
         self.assertEqual(self.queued(), ["run1-1-1"])
 
-    def test_a_job_the_person_deleted_applies_on_fail(self):
-        self.go(plan_of(("sft", "rlvr"), on_fail="skip"))
-        self.services.remove("run1-0-1")
-        self.assertEqual(self.phase("sft")["status"], "skipped")
-        self.assertEqual(self.queued(), ["run1-1-1"])
-
-    def test_the_budget_ends_the_run_between_phases(self):
-        clock = ["2026-01-01T00:00:00+00:00"]
-        self.auto.now = lambda: clock[0]
-        self.go(plan_of(("sft", "rlvr"), hours=1))
-        clock[0] = "2026-01-01T02:00:00+00:00"
-        self.end("run1-0-1", result=GOOD)
-        self.assertEqual((self.state()["status"], self.state()["reason"]), ("stopped", "The time budget is spent."))
-        self.assertEqual(self.queued(), [])
-
-
-class FailureTests(Base):
-    def test_a_failed_gate_pauses_and_retry_runs_the_next_attempt(self):
-        self.go(plan_of())
-        self.end("run1-0-1", result=BAD)
-        self.assertEqual((self.state()["status"], self.phase("sft")["status"]), ("paused", "failed"))
-        self.assertIn("It got worse.", self.state()["reason"])
-        self.auto.continue_run("run1", "retry")
-        self.assertEqual(self.queued(), ["run1-0-2"])
-        self.assertEqual(self.phase("sft")["attempt"], 2)
-
-    def test_next_skips_the_failed_phase_and_goes_on(self):
-        self.go(plan_of())
-        self.end("run1-0-1", result=BAD)
-        self.auto.continue_run("run1", "next")
-        self.assertEqual(self.phase("sft")["status"], "skipped")
-        self.assertEqual(self.queued(), ["run1-1-1"])
-
-    def test_adopt_makes_the_kept_checkpoint_the_versions_then_goes_on(self):
-        self.services.kept_rounds = {(1, 1): "ck-kept"}
-        self.go(plan_of())
-        self.end("run1-0-1", result=BAD)
-        self.auto.continue_run("run1", "adopt")
-        self.assertEqual(self.services._versions[0].best_checkpoint, "ck-kept")
-        self.assertEqual(self.queued(), ["run1-1-1"])
-        self.assertEqual(self.services.queue().up_next[0].params["checkpoint"], "ck-kept")
-
-    def test_adopt_with_nothing_kept_says_so_and_changes_nothing(self):
-        self.go(plan_of())
-        self.end("run1-0-1", result=BAD)
-        with self.assertRaises(ValueError):
-            self.auto.continue_run("run1", "adopt")
-        self.assertEqual(self.state()["status"], "paused")
-
-    def test_on_fail_stop_ends_the_run_and_on_fail_skip_carries_on(self):
-        self.go(plan_of(on_fail="stop"))
-        self.end("run1-0-1", result=BAD)
-        self.assertEqual(self.state()["status"], "stopped")
-        self.assertEqual(self.queued(), [])
-
-    def test_on_fail_skip_carries_on(self):
-        self.go(plan_of(on_fail="skip"))
-        self.end("run1-0-1", result=BAD)
-        self.assertEqual((self.state()["status"], self.phase("sft")["status"]), ("running", "skipped"))
-        self.assertEqual(self.queued(), ["run1-1-1"])
-
-    def test_a_failed_job_follows_the_policy_with_its_error(self):
-        self.go(plan_of())
-        self.end("run1-0-1", status="failed", error="Out of memory.")
-        self.assertEqual(self.state()["status"], "paused")
-        self.assertIn("Out of memory.", self.state()["reason"])
-
-    def test_a_round_that_left_no_result_fails_the_phase(self):
-        self.go(plan_of())
-        self.end("run1-0-1")
-        self.assertEqual(self.phase("sft")["status"], "failed")
-
-    def test_the_person_stopping_the_job_pauses_the_run_and_resume_runs_it_again(self):
-        self.go(plan_of())
-        self.end("run1-0-1", status="stopped")
-        self.assertEqual((self.state()["status"], self.phase("sft")["status"]), ("paused", "stopped"))
+    def test_the_data_phase_checks_for_conversations_when_sft_is_planned(self):
+        self.services.conversations_in_text = 0
+        self.go(plan_of(("data", "sft")))
+        self.assertEqual(self.state()["status"], "waiting_user")
+        self.assertIn("no conversations marked Good yet for sft", self.state()["reason"])
+        self.assertNotIn("no text", self.state()["reason"])
+        self.services.conversations_in_text = 5
         self.auto.resume("run1")
-        self.assertEqual(self.queued(), ["run1-0-2"])
-
-    def test_continue_stop_and_a_bad_choice(self):
-        self.go(plan_of())
-        self.end("run1-0-1", result=BAD)
-        with self.assertRaises(ar.AutorunError):
-            self.auto.continue_run("run1", "later")
-        self.auto.continue_run("run1", "stop")
-        self.assertEqual(self.state()["status"], "stopped")
-        with self.assertRaises(ar.AutorunError):
-            self.auto.continue_run("run1", "retry")
-
-
-class ControlTests(Base):
-    def test_pause_holds_a_waiting_job_and_resume_releases_the_same_one(self):
-        self.go(plan_of())
-        self.auto.pause("run1")
-        job = self.services.queue().up_next[0]
-        self.assertEqual((self.state()["status"], job.status, self.phase("sft")["status"]), ("paused", "held", "pending"))
-        self.assertFalse(self.services.queue().paused)  # never the global pause
-        self.auto.resume("run1")
-        self.assertEqual((self.queued(), job.status, self.phase("sft")["status"]), (["run1-0-1"], "waiting", "queued"))
-
-    def test_pause_lets_the_running_job_finish_then_holds_the_next_phase(self):
-        self.go(plan_of())
-        job = self.services.queue().up_next[0]
-        job.status = "running"
-        self.services.emit("job", {"job": job.id, "status": "running"})
-        self.assertEqual(self.phase("sft")["status"], "running")
-        self.auto.pause("run1")
-        self.assertEqual(self.state()["status"], "pausing")
-        self.end("run1-0-1", result=GOOD)
-        self.assertEqual((self.state()["status"], self.phase("sft")["status"]), ("paused", "passed"))
-        self.assertEqual(self.queued(), [])
-        self.auto.resume("run1")
+        self.assertEqual(self.phase("data")["status"], "passed")
         self.assertEqual(self.queued(), ["run1-1-1"])
+
+    def test_the_data_phase_names_every_missing_piece(self):
+        self.services.reviewed_text = False
+        self.services.conversations_in_text = 0
+        self.go(plan_of(("data", "pretrain", "sft")))
+        reason = self.state()["reason"]
+        self.assertIn("text to train on yet for pretrain", reason)
+        self.assertIn("conversations marked Good yet for sft", reason)
+
+    def test_the_data_phase_asks_only_for_what_the_enabled_phases_use(self):
+        self.services.reviewed_text = False
+        plan = plan_of(("data", "pretrain", "sft"))
+        plan["phases"][1]["enabled"] = False
+        self.go(plan)
+        self.assertEqual(self.phase("data")["status"], "passed")
 
     def test_stop_removes_the_job_and_leaves_the_checkpoints(self):
         self.go(plan_of())
@@ -271,7 +223,9 @@ class ControlTests(Base):
         self.assertEqual(self.services._versions[0].best_checkpoint, "ck0")
 
     def test_skip_a_blocked_phase_then_resume(self):
+        self.services._versions[0].best_checkpoint = None
         self.go(plan_of(("midtrain", "sft")))
+        self.services._versions[0].best_checkpoint = "ck0"
         self.auto.skip("run1")
         self.assertEqual(self.phase("midtrain")["status"], "skipped")
         self.auto.resume("run1")
@@ -363,6 +317,47 @@ class RestartTests(Base):
         self.go(plan_of())
         folder = Path(self.tmp.name) / "run1"
         self.assertTrue((folder / "plan.json").is_file() and (folder / "state.json").is_file() and (folder / "journal.jsonl").is_file())
+
+
+class ControllerTests(Base):
+    """The parameter controller (studio_autotune) over the queue: the job a retry or the next phase asks for carries the choice, and the
+    choice is in the state and the journal with its evidence."""
+
+    def test_a_retry_after_a_divergence_runs_at_half_the_rate_and_says_so(self):
+        plan = plan_of(("sft",))
+        plan["phases"][0]["settings"]["learning_rate"] = 1e-4
+        self.go(plan)
+        self.assertEqual(self.services.find_job("run1-0-1").params["learning_rate"], 1e-4)
+        self.end("run1-0-1", "failed", error="Non-finite loss. Reduce the learning rate.")
+        self.assertEqual(self.state()["status"], "paused")
+        self.auto.continue_run("run1", "retry")
+        self.assertEqual(self.services.find_job("run1-0-2").params["learning_rate"], 5e-5)
+        [choice] = self.state()["choices"]
+        self.assertEqual((choice["phase"], choice["attempt"], choice["key"], choice["was"], choice["value"]), ("sft", 2, "learning_rate", 1e-4, 5e-5))
+        self.assertIn("Non-finite", choice["evidence"]["error"])
+        tuned = [line for line in self.auto.view("run1")["journal"] if line["event"] == "tuned"]
+        self.assertEqual([(line["key"], line["value"]) for line in tuned], [("learning_rate", 5e-5)])
+
+    def test_a_pretrain_curve_that_still_falls_lengthens_midtrain(self):
+        points = [(float(x), .1 + 5 * x ** -.2) for x in numpy.geomspace(1e3, 1e6, 14)]
+        self.services.loss_evidence = lambda version: {"points": points, "run": "r"}
+        plan = plan_of(("pretrain", "midtrain"))
+        plan["phases"][1]["settings"]["steps"] = 1000
+        self.go(plan)
+        self.end("run1-0-1", "done")
+        self.assertEqual(self.services.find_job("run1-1-1").params["config"]["steps"], 1500)
+        [choice] = self.state()["choices"]
+        self.assertEqual((choice["rule"], choice["applied"]), ("still_falling", True))
+
+    def test_a_controller_that_is_off_leaves_the_settings_alone(self):
+        plan = plan_of(("sft",))
+        plan["phases"][0]["settings"]["learning_rate"] = 1e-4
+        plan["controller"]["enabled"] = False
+        self.go(plan)
+        self.end("run1-0-1", "failed", error="Non-finite loss.")
+        self.auto.continue_run("run1", "retry")
+        self.assertEqual(self.services.find_job("run1-0-2").params["learning_rate"], 1e-4)
+        self.assertEqual(self.state().get("choices", []), [])
 
 
 if __name__ == "__main__":

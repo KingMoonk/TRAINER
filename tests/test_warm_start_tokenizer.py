@@ -39,7 +39,7 @@ class WarmStartTokenizer(unittest.TestCase):
             return before["tokenizer"], load_checkpoint(child / "last.npz")["tokenizer"]
 
     def test_the_checkpoint_tokenizer_survives_a_warm_start(self):
-        for tokenizer in ("bpe_fast", "bpe_custom", "word", "character"):
+        for tokenizer in ("bpe_fast", "character"):
             for lora in (None, {"rank": 2, "alpha": 4}):
                 with self.subTest(tokenizer=tokenizer, lora=bool(lora)):
                     before, after = self.warm_start(tokenizer, lora)

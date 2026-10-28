@@ -7,6 +7,7 @@ import hashlib
 import itertools
 import re
 import sys
+import threading
 import zlib
 from array import array
 from dataclasses import dataclass, field, replace
@@ -134,23 +135,69 @@ def text_characters(workspace, dataset_ids, exclude=()):
             on_disk.append(dataset_id)
             continue
         total += sum(len(e["text"]) for e in pretraining_examples(workspace, [dataset_id]) if e.get("text") and e["text"] not in exclude)
-    if on_disk:
-        marks = ",".join("?" * len(on_disk))
+    return total + sum(_disk_characters(workspace, on_disk, exclude).values())
+
+
+_HELD_LOCK = threading.Lock()
+_HELD_PRINTS = []  # (the held-back set, its fingerprints), newest last: a frozenset is hashed once per change, not once per request
+_DISK_CHARS = {}  # (database, dataset id) -> (rev, the held-back set it was counted against, characters)
+
+
+def _held_fingerprints(exclude):
+    """The fingerprints of the held-back texts, remembered for a frozenset (services keeps one per version of heldout.json)."""
+    if not isinstance(exclude, frozenset):
+        return [studio_core.fingerprint({"text": text}) for text in exclude if text]
+    with _HELD_LOCK:
+        for held, prints in _HELD_PRINTS:
+            if held is exclude:
+                return prints
+    prints = [studio_core.fingerprint({"text": text}) for text in exclude if text]
+    with _HELD_LOCK:
+        _HELD_PRINTS.append((exclude, prints))
+        del _HELD_PRINTS[:-2]
+    return prints
+
+
+def _disk_characters(workspace, dataset_ids, exclude):
+    """{dataset id: counted characters} of disk sets, minus the held-back documents. A frozenset `exclude` caches each set's answer
+    by the set's rev, so a repeat costs nothing until the set or the held-back file changes."""
+    if not dataset_ids:
+        return {}
+    cacheable = isinstance(exclude, frozenset)
+    out, missing = {}, []
+    for dataset_id in dataset_ids:
+        hit = _DISK_CHARS.get((str(workspace.db_path), dataset_id)) if cacheable else None
+        rev = (workspace._dataset(dataset_id) or {}).get("rev", 0)
+        if hit and hit[0] == rev and hit[1] is exclude:
+            out[dataset_id] = hit[2]
+        else:
+            missing.append((dataset_id, rev))
+    if missing:
+        ids = [m[0] for m in missing]
+        marks = ",".join("?" * len(ids))
         counted = f"dataset_id IN ({marks}) AND kind='text' AND NOT (quality='Review' AND json_extract(payload, '$.synthetic')=1)"
-        held = [studio_core.fingerprint({"text": text}) for text in set(exclude) if text]
+        held = _held_fingerprints(exclude)
+        found = dict.fromkeys(ids, 0)
         with workspace._connect() as connection:
-            total += connection.execute(f"SELECT COALESCE(SUM(characters),0) FROM records WHERE {counted}", on_disk).fetchone()[0]
+            for dataset_id, chars in connection.execute(f"SELECT dataset_id, COALESCE(SUM(characters),0) FROM records WHERE {counted} GROUP BY dataset_id", ids):
+                found[dataset_id] = chars
             for start in range(0, len(held), 500):  # SQLite caps the parameters of one statement
                 chunk = held[start:start + 500]
-                total -= connection.execute(f"SELECT COALESCE(SUM(characters),0) FROM records WHERE {counted} "
-                                            f"AND fingerprint IN ({','.join('?' * len(chunk))})", (*on_disk, *chunk)).fetchone()[0]
-    return total
+                for dataset_id, chars in connection.execute(f"SELECT dataset_id, SUM(characters) FROM records WHERE {counted} "
+                                                            f"AND fingerprint IN ({','.join('?' * len(chunk))}) GROUP BY dataset_id", (*ids, *chunk)):
+                    found[dataset_id] -= chars
+        for dataset_id, rev in missing:
+            out[dataset_id] = found[dataset_id]
+            if cacheable:
+                with _HELD_LOCK:
+                    _DISK_CHARS[(str(workspace.db_path), dataset_id)] = (rev, exclude, found[dataset_id])
+    return out
 
 
 def text_fingerprints(workspace, dataset_ids, exclude=()):
     """The fingerprints of the chosen sets' training text, the rows `text_characters` counts, without tokenizing or reading their text:
     disk sets give them from the records table, in-memory sets are fingerprinted as they are read. `exclude` (held-back texts) is left out."""
-    held = {studio_core.fingerprint({"text": text}) for text in exclude if text}
+    held = set(_held_fingerprints(exclude))
     on_disk = []
     for dataset_id in dataset_ids:
         if (workspace._dataset(dataset_id) or {}).get("storage") == "sqlite":

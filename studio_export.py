@@ -196,34 +196,18 @@ def byte_level_vocab(tokenizer):
 
 NO_TOKENIZER = {
     "character": "The character tokenizer has no counterpart in Hugging Face or llama.cpp (one token per character you trained on).",
-    "word": "The whole-word tokenizer has no counterpart in Hugging Face or llama.cpp (a list of frequent words and punctuation).",
-    "bpe_custom": "The custom BPE tokenizer splits text at spaces and puts the space at the end of each word, which GPT-2's byte-level "
-                  "tokenizers (the only ones Hugging Face and llama.cpp share with this app) do not do, so it cannot be written as one."}
+}
 
 
 def vocabulary_json(tokenizer):
     """A tokenizer Hugging Face cannot load, as plain JSON: the vocabulary by id and what is needed to apply it."""
     if tokenizer.kind == "character":
         pieces, how = list(tokenizer.characters), "One token per character. A character not listed becomes <|unk|>."
-    elif tokenizer.kind == "word":
-        from studio_modules.tokenizer.word import PIECE
-        pieces = list(tokenizer.words)
-        how = (f"Split text with the regular expression {PIECE.pattern!r} (re.findall); each match is one token. "
-               "A match not listed becomes <|unk|>.")
-    elif tokenizer.kind == "bpe_custom":
-        table = bytes_to_unicode()
-        pieces = ["".join(table[byte] for byte in piece) for piece in tokenizer.pieces]
-        how = ("Encode the text as UTF-8 bytes and split it at spaces, keeping each space at the end of the word before it. "
-               "Inside a word start from single bytes and apply the merges in order (each merge joins the two pieces at the "
-               "listed ids into the next id, which is 256 + its position); pieces are spelled with GPT-2's printable byte alphabet.")
     else:
         raise ExportError(f"The {tokenizer.kind} tokenizer needs no vocabulary file.")
-    out = {"format": "groundwork-tokenizer/1", "kind": tokenizer.kind, "vocab_size": tokenizer.vocab_size,
-           "special_tokens": {name: i for i, name in enumerate(SPECIAL_TOKENS)},
-           "vocabulary": list(SPECIAL_TOKENS) + pieces, "how_it_works": how}
-    if tokenizer.kind == "bpe_custom":
-        out["merges"] = [[left[0], right[0]] for left, right in tokenizer.merges]
-    return out
+    return {"format": "groundwork-tokenizer/1", "kind": tokenizer.kind, "vocab_size": tokenizer.vocab_size,
+            "special_tokens": {name: i for i, name in enumerate(SPECIAL_TOKENS)},
+            "vocabulary": list(SPECIAL_TOKENS) + pieces, "how_it_works": how}
 
 
 def hf_tokenizer_files(tokenizer, n_ctx):

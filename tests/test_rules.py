@@ -197,6 +197,30 @@ class Kinds(unittest.TestCase):
         held = {docs[0], docs[7], "text that is in no set"}
         self.assertEqual(dk.text_characters(ws, [disk], exclude=held), sum(map(len, docs)) - len(docs[0]) - len(docs[7]))
 
+    def test_text_characters_hashes_and_queries_once_per_change(self):
+        from unittest import mock
+        ws = workspace()
+        a, b = ws.create_dataset("a", storage="sqlite"), ws.create_dataset("b", storage="sqlite")
+        docs = [f"document {i:03d} " + "x" * 40 for i in range(30)]
+        ws.add(a, docs)
+        ws.add(b, docs[:10] + ["only in b"])
+        held = frozenset({docs[0], docs[7], "in no set"})
+        want = {a: sum(map(len, docs)) - len(docs[0]) - len(docs[7]), b: sum(map(len, docs[:10])) + len("only in b") - len(docs[0]) - len(docs[7])}
+        with mock.patch.object(studio_core, "fingerprint", wraps=studio_core.fingerprint) as hashed:
+            self.assertEqual({i: dk.text_characters(ws, [i], exclude=held) for i in (a, b)}, want)
+            first = hashed.call_count
+            self.assertEqual(first, len(held))
+            statements = []
+            real = ws._connect
+            self.assertEqual({i: dk.text_characters(ws, [i], exclude=held) for i in (a, b)}, want)
+            self.assertEqual(hashed.call_count, first)  # no hashing again
+            with mock.patch.object(ws, "_connect", side_effect=lambda *x, **k: statements.append(1) or real(*x, **k)):
+                self.assertEqual(dk.text_characters(ws, [a, b], exclude=held), sum(want.values()))
+            self.assertEqual(statements, [])  # no query either
+            ws.add(a, ["a new document"])  # a changed set is counted again
+            self.assertEqual(dk.text_characters(ws, [a], exclude=held), want[a] + len("a new document"))
+            self.assertEqual(dk.text_characters(ws, [a], exclude=frozenset()), sum(map(len, docs)) + len("a new document"))
+
     def test_interleaved_shares_follow_text_not_record_weight(self):
         ws = workspace()
         a, b = ws.create_dataset("a", storage="sqlite"), ws.create_dataset("b", storage="sqlite")

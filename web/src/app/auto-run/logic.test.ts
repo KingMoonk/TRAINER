@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { PHASES, buildPlan, budgetText, checkText, controls, defaultVersion, errorText, keptRound, pickRun, progressLine, resultChecks, settingTexts, timelinePhases, when } from "./logic";
+import { PHASES, boundTexts, buildPlan, budgetText, checkText, controls, defaultVersion, errorText, keptRound, pickRun, progressLine, resultChecks, settingTexts, timelinePhases, valueText, when } from "./logic";
 import { plan, run, summary } from "./test-data";
 
 describe("buildPlan", () => {
@@ -145,5 +145,31 @@ describe("small helpers", () => {
   test("when trims a time to the second", () => {
     expect(when("2026-10-27T10:20:30.123456+00:00")).toBe("2026-10-27 10:20:30");
     expect(when("2026-10-27T10:20:30Z")).toBe("2026-10-27 10:20:30");
+  });
+});
+
+describe("the parameter controller's limits", () => {
+  test("are shown as text and built back into the plan", () => {
+    const texts = boundTexts(plan())!;
+    expect(texts.steps).toEqual({ min: "10", max: "20000" });
+    texts.steps.max = "8000";
+    const built = buildPlan(plan(), {}, "12", texts);
+    expect("plan" in built && built.plan.controller!.bounds.steps).toEqual({ min: 10, max: 8000 });
+  });
+
+  test("a plan without a controller has no limits to show", () => {
+    expect(boundTexts(plan({ controller: null }))).toBeNull();
+  });
+
+  test("refuses limits that are not numbers, are reversed, or have no highest above 0", () => {
+    for (const [key, min, max] of [["steps", "a", "5"], ["beta", "0.9", "0.1"], ["learning_rate", "0", "0"], ["kl", "", "1"]] as const) {
+      const texts = boundTexts(plan())!;
+      texts[key] = { min, max };
+      expect(buildPlan(plan(), {}, "12", texts)).toMatchObject({ error: expect.stringContaining("The limits for") });
+    }
+  });
+
+  test("names a value the way the page says it", () => {
+    expect([valueText(0.00005), valueText(0.0001), valueText(3000), valueText(0.15), valueText(null)]).toEqual(["5e-5", "1e-4", "3,000", "0.15", ""]);
   });
 });

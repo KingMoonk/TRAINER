@@ -178,7 +178,7 @@ def build_optimizer(model, offload=False):
 
 
 def vocabulary_guess(cfg, vocab=263):
-    """The vocabulary a config will have: fixed tokenizers know it, custom BPE and whole words are capped by their setting, characters are unknown."""
+    """The vocabulary a config will have: fixed tokenizers know it, learned BPE is capped by its setting, characters are unknown."""
     spec = cfg.get("architecture")
     if is_model_spec(spec):
         entry = spec.get("tokenizer", {})
@@ -190,7 +190,7 @@ def vocabulary_guess(cfg, vocab=263):
         fixed = module.vocab(config)
         if fixed:
             return fixed
-        if module.short in ("bpe_custom", "bpe_fast", "word"):
+        if module.short == "bpe_fast":
             return config.vocab_size
     return vocab
 

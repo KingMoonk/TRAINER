@@ -56,8 +56,8 @@ describe("Auto Run page: a new run", () => {
     expect(await screen.findByTestId("plan-editor")).toBeVisible();
     expect(screen.getByLabelText("Version to train")).toHaveValue("2");
     expect(calls.some((c) => c.path === "/auto-runs/defaults" && c.search === "?version=2")).toBe(true);
-    for (const kind of ["data", "pretrain", "sft", "rlvr", "distill", "dpo"]) expect(screen.getByTestId(`plan-${kind}`)).toBeVisible();
-    expect(screen.queryByTestId("plan-midtrain")).toBeNull(); // not available yet: no control for it
+    for (const kind of ["data", "pretrain", "midtrain", "sft", "rlvr", "distill", "dpo"]) expect(screen.getByTestId(`plan-${kind}`)).toBeVisible();
+    expect(screen.getByRole("switch", { name: "Include Mid-training" })).not.toBeChecked(); // optional: off unless the person adds it
     expect(screen.getByLabelText("Overall time budget (hours)")).toHaveValue("12");
   });
 
@@ -87,6 +87,21 @@ describe("Auto Run page: a new run", () => {
     expect(byKind.midtrain.enabled).toBe(false);
     expect(posted(calls, "/auto-runs/run1/start")).toHaveLength(1);
     expect(screen.getByTestId("auto-run-status")).toHaveTextContent("Running");
+  });
+
+  test("includes mid-training with its steps", async () => {
+    const running = run("running", "data", { data: { status: "running" } });
+    const { calls } = server(null, { start: running });
+    const user = userEvent.setup();
+    renderPage(<AutoRunPage />);
+    await screen.findByTestId("plan-editor");
+    expect(screen.queryByLabelText("Steps, Mid-training")).toBeNull(); // off: no settings yet
+    await user.click(screen.getByRole("switch", { name: "Include Mid-training" }));
+    await user.type(screen.getByLabelText("Steps, Mid-training"), "60000");
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    await screen.findByTestId("auto-run-view");
+    const made = posted(calls, "/auto-runs")[0].body as { plan: Plan };
+    expect(made.plan.phases.find((p) => p.kind === "midtrain")).toMatchObject({ enabled: true, settings: { steps: 60000 } });
   });
 
   test("says what to fix instead of sending a setting the server would refuse", async () => {
@@ -281,6 +296,97 @@ describe("Auto Run page: a run that waits for the person", () => {
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(posted(calls, "/auto-runs/run1/plan")).toHaveLength(1));
     expect((posted(calls, "/auto-runs/run1/plan")[0].body as { plan: Plan }).plan.phases.find((p) => p.kind === "distill")!.enabled).toBe(false);
+  });
+});
+
+describe("Auto Run page: the parameter controller", () => {
+  const choices = [
+    {
+      phase: "sft",
+      attempt: 2,
+      key: "learning_rate",
+      was: 0.0001,
+      value: 0.00005,
+      rule: "divergence",
+      why: "Attempt 1 stopped on a loss that was not a number, so the learning rate is cut to 50% of 0.0001.",
+      evidence: { attempt: 1, error: "Non-finite loss." },
+      applied: true,
+      clamped: false,
+    },
+    {
+      phase: "midtrain",
+      attempt: 1,
+      key: "steps",
+      was: 2000,
+      value: 3000,
+      rule: "still_falling",
+      why: "The pretraining curve still falls 9.8% for every doubling of what it read, so mid-training runs 1.5 times as many steps.",
+      evidence: {},
+      applied: true,
+      clamped: true,
+    },
+    {
+      phase: "midtrain",
+      attempt: 1,
+      key: "design",
+      was: null,
+      value: null,
+      rule: "bigger_design",
+      why: "On the newest text the model's held-out loss barely fell, so this design has learned what it can.",
+      evidence: {},
+      applied: false,
+      clamped: false,
+    },
+  ];
+
+  test("the run page lists what was chosen for each phase and why", async () => {
+    const view = run("paused", "sft", { pretrain: { status: "passed" } });
+    view.state.choices = choices;
+    server(view);
+    renderPage(<AutoRunPage />);
+    const list = await screen.findByTestId("auto-run-choices");
+    expect(within(list).getByText("Learning rate for Round 1 · Learn to answer, attempt 2: 1e-4 to 5e-5")).toBeVisible();
+    expect(within(list).getByText(/not a number, so the learning rate is cut/)).toBeVisible();
+    expect(within(list).getByText("Steps for Mid-training, attempt 1: 2,000 to 3,000 (held to your limit)")).toBeVisible();
+    expect(within(list).getByText("Bigger design: Proposal (nothing was changed)")).toBeVisible();
+    expect(within(list).getByText(/barely fell/)).toBeVisible();
+  });
+
+  test("a run with nothing chosen yet says when the controller acts, and a run with the controller off says it is off", async () => {
+    server(run("running", "pretrain", { data: { status: "passed" } }));
+    const { unmount } = renderPage(<AutoRunPage />);
+    expect(await screen.findByText(/has not changed anything yet/)).toBeVisible();
+    unmount();
+    const off = run("running", "pretrain", { data: { status: "passed" } });
+    off.plan = plan({ id: "run1", controller: { ...plan().controller!, enabled: false } });
+    server(off);
+    renderPage(<AutoRunPage />);
+    expect(await screen.findByText(/Off: every phase runs with exactly the settings in the plan/)).toBeVisible();
+  });
+
+  test("the limits are shown in the plan and a change goes into the saved plan", async () => {
+    const { calls } = server(run("draft", null));
+    const user = userEvent.setup();
+    renderPage(<AutoRunPage />);
+    await screen.findByTestId("plan-controller");
+    expect(screen.getByLabelText("Highest, Steps")).toHaveValue("20000");
+    await user.clear(screen.getByLabelText("Highest, Steps"));
+    await user.type(screen.getByLabelText("Highest, Steps"), "8000");
+    await user.click(screen.getByRole("button", { name: "Save the plan" }));
+    await waitFor(() => expect(posted(calls, "/auto-runs/run1/plan")).toHaveLength(1));
+    expect((posted(calls, "/auto-runs/run1/plan")[0].body as { plan: Plan }).plan.controller!.bounds.steps).toEqual({ min: 10, max: 8000 });
+  });
+
+  test("limits that cannot be are not sent", async () => {
+    const { calls } = server(run("draft", null));
+    const user = userEvent.setup();
+    renderPage(<AutoRunPage />);
+    await screen.findByTestId("plan-controller");
+    await user.clear(screen.getByLabelText("Lowest, DPO beta"));
+    await user.type(screen.getByLabelText("Lowest, DPO beta"), "0.9");
+    await user.click(screen.getByRole("button", { name: "Save the plan" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The limits for DPO beta must be numbers");
+    expect(posted(calls, "/auto-runs/run1/plan")).toHaveLength(0);
   });
 });
 

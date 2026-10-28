@@ -35,12 +35,33 @@ class AutoRunBudget(BaseModel):
     hours: float | None = None  # wall-clock hours for the whole run; null: no limit
 
 
+class AutoRunBound(BaseModel):
+    min: float
+    max: float
+
+
+class AutoRunBounds(BaseModel):
+    """The limits no choice of the parameter controller leaves."""
+    learning_rate: AutoRunBound
+    steps: AutoRunBound
+    beta: AutoRunBound  # DPO beta
+    kl: AutoRunBound  # the KL coefficient of round 2
+
+
+class AutoRunController(BaseModel):
+    """The parameter controller (studio_autotune): between phases it picks the next phase's learning rate, steps, DPO beta and KL
+    coefficient from what the last phases showed, inside `bounds`. enabled false: every phase runs with the plan's settings."""
+    enabled: bool = True
+    bounds: AutoRunBounds
+
+
 class AutoRunPlanModel(BaseModel):
     id: str = ""  # empty on a new run: the server makes one
     name: str
     version: int
     budget: AutoRunBudget
     phases: list[AutoRunPhasePlan]
+    controller: AutoRunController | None = None  # null: no tuning (a plan from before the controller)
 
 
 class AutoRunNewRun(BaseModel):
@@ -68,6 +89,20 @@ class AutoRunPhaseState(BaseModel):
     error: str = ""
 
 
+class AutoRunChoiceRecord(BaseModel):
+    """One decision of the parameter controller. key: learning_rate | steps | beta | kl, or design (a proposal, applied false)."""
+    phase: str
+    attempt: int
+    key: str
+    was: float | None = None  # what the phase would have run with
+    value: float | None = None  # what it runs with (inside the plan's bounds)
+    rule: str  # divergence | still_falling | gate_history | bigger_design
+    why: str
+    evidence: dict = {}
+    applied: bool
+    clamped: bool = False  # the value was held to a bound
+
+
 class AutoRunRunState(BaseModel):
     model_config = ConfigDict(extra="allow")
     id: str
@@ -78,6 +113,8 @@ class AutoRunRunState(BaseModel):
     deadline: str | None = None  # null: no budget limit
     updated: str | None = None
     phases: list[AutoRunPhaseState]
+    choices: list[AutoRunChoiceRecord] = []  # what the parameter controller chose, oldest first, with the evidence
+    attempts: list[dict] = []  # what each ended attempt showed (the controller's evidence)
 
 
 class AutoRunJournalLine(BaseModel):
