@@ -48,7 +48,7 @@ export function useRunView(id: string): RunView {
   const machines = useMachines();
   const here = thisComputer(machines.data);
   // a job that ended failed stays in `failed` (the same list the Runs page shows under Completed), so its page opens read-only
-  const job = queue.data ? [...(queue.data.job ? [queue.data.job] : []), ...queue.data.up_next, ...queue.data.failed].find((j) => j.id === id) : undefined;
+  const job = queue.data ? [...(queue.data.job ? [queue.data.job] : []), ...queue.data.up_next, ...(queue.data.failed ?? [])].find((j) => j.id === id) : undefined;
   const invites = useInvites();
   const invite = job?.kind === MEMBER ? inviteFor(invites.data, job.id) : undefined;
   const coordinated = useDilocoRun(invite?.run_id ?? ""); // the owner's account of the run this job is a member of, from the replica
