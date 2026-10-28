@@ -1215,7 +1215,7 @@
             "type": "integer"
           },
           "V": {
-            "maximum": 3.0,
+            "maximum": 2.0,
             "minimum": 0.0,
             "title": "V",
             "type": "integer"
@@ -2093,7 +2093,7 @@
             "type": "object"
           },
           "v": {
-            "maximum": 3.0,
+            "maximum": 2.0,
             "minimum": 0.0,
             "title": "V",
             "type": "integer"
@@ -12110,7 +12110,7 @@
             "type": "object"
           },
           "v": {
-            "maximum": 3.0,
+            "maximum": 2.0,
             "minimum": 0.0,
             "title": "V",
             "type": "integer"
