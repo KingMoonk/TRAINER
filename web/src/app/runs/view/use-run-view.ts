@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { Run } from "@/app/cluster/training/logic";
 import { useMachines } from "@/app/cluster/training/use-training";
 import { thisComputer } from "@/app/runs/logic";
+import { useDoneJobs } from "@/app/runs/use-runs";
 import type { Job, Queue } from "@/app/queue/logic";
 import { useQueue } from "@/app/queue/use-queue";
 import { api, ApiError, unwrap } from "@/lib/api";
@@ -45,9 +46,11 @@ function useDilocoRun(id: string) {
 export function useRunView(id: string): RunView {
   const run = useDilocoRun(id);
   const queue = useQueue();
+  const done = useDoneJobs();
   const machines = useMachines();
   const here = thisComputer(machines.data);
-  const job = queue.data ? [...(queue.data.job ? [queue.data.job] : []), ...queue.data.up_next].find((j) => j.id === id) : undefined;
+  const live = queue.data ? [...(queue.data.job ? [queue.data.job] : []), ...queue.data.up_next].find((j) => j.id === id) : undefined;
+  const job = live ?? done.data?.find((j) => j.id === id); // a job that finished done is no longer in the queue's state
   const invites = useInvites();
   const invite = job?.kind === MEMBER ? inviteFor(invites.data, job.id) : undefined;
   const coordinated = useDilocoRun(invite?.run_id ?? ""); // the owner's account of the run this job is a member of, from the replica
@@ -64,7 +67,7 @@ export function useRunView(id: string): RunView {
 
   if (id === "") return { kind: "missing" };
   if (run.isError) return { kind: "error", error: run.error };
-  if (run.isPending || queue.isPending) return queue.isError ? { kind: "error", error: queue.error } : { kind: "loading" };
+  if (run.isPending || queue.isPending || (live === undefined && done.isPending)) return queue.isError ? { kind: "error", error: queue.error } : { kind: "loading" };
   if (run.data) return { kind: "diloco", run: run.data, machine: here };
   if (run.data === null && job?.kind === MEMBER) return { kind: "member", job, invite, run: coordinated.data ?? null, machine: job.node || here };
   if (solo && queue.data && job) return { kind: "solo", job, queue: queue.data, running, machine: job.node || here, curve: curve.data };

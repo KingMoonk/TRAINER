@@ -22788,6 +22788,32 @@
         ]
       }
     },
+    "/queue/done": {
+      "get": {
+        "description": "Services.done_jobs: the jobs that ended done and the queue still remembers (the last few), newest first. The queue's own state\nlists only failed ones, so this is how Runs finds a finished job to list and open.",
+        "operationId": "list_done_queue_done_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/JobModel"
+                  },
+                  "title": "Response List Done Queue Done Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Done",
+        "tags": [
+          "queue"
+        ]
+      }
+    },
     "/queue/jobs": {
       "get": {
         "description": "The running job first, then the jobs running on a peer, then Up next in order.",

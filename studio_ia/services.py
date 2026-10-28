@@ -356,6 +356,10 @@ class Services:
         """The jobs that are waiting, held or running."""
         raise NotImplementedError
 
+    def done_jobs(self):
+        """The jobs that ended done and the queue still remembers (the last few), oldest first."""
+        raise NotImplementedError
+
     def refresh_downloads(self):
         """Rebuild catalogue downloads converted by an older app version; returns the ids rebuilt (no-op without a workspace)."""
         return []
@@ -985,6 +989,9 @@ class FakeServices(Services):
     def live_jobs(self):
         q = self._queue
         return [j for j in [*([q.job] if q.job else []), *q.up_next] if j.status in ("waiting", "held", "running")]
+
+    def done_jobs(self):
+        return [j for j in self._ended.values() if j.status == "done"]
 
     def finish_job(self, job_id, status="done", result=None, error=""):
         """Test hook: end a waiting or running job the way the real runner does, with the result a round leaves in its params."""
@@ -2196,6 +2203,10 @@ class WorkspaceServices(Services):
     def live_jobs(self):
         with self.runner.lock:
             return [j for j in self.runner.jobs if j.status in ("waiting", "held", "running")]
+
+    def done_jobs(self):
+        with self.runner.lock:
+            return [j for j in self.runner.jobs if j.status == "done"]
 
     @timed("services.refresh_downloads")
     def refresh_downloads(self):

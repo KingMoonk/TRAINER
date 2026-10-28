@@ -96,6 +96,13 @@ class QueueRouterTests(ApiCase):
         self.assertEqual((again["kind"], again["label"], again["note"], again["params"], again["status"]), ("pretrain", "the one that broke", "v2", {"version": 2}, "waiting"))
         self.assertNotEqual(again["id"], "f1")
         self.assertEqual((ids(state)[1:], state["failed"]), ([c["id"], a["id"]], []))
+
+        self.assertEqual(self.call("GET", "/queue/done"), [])
+        self.services.finish_job(a["id"])
+        self.services.finish_job(c["id"], status="failed", error="boom")  # a failed job is listed in the queue's `failed`, not here
+        self.services.finish_job(b["id"])
+        done = self.call("GET", "/queue/done")
+        self.assertEqual([(j["id"], j["status"], j["label"]) for j in done], [(b["id"], "done", "b"), (a["id"], "done", "a")])  # newest first
         self.assertAllRoutesHit()
 
     def test_a_running_job_and_its_gate_come_through(self):
