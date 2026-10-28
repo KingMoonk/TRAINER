@@ -162,6 +162,19 @@
         "title": "AskPeer",
         "type": "object"
       },
+      "AutoJoin": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "AutoJoin",
+        "type": "object"
+      },
       "AutoRunBound": {
         "properties": {
           "max": {
@@ -6242,6 +6255,17 @@
             "title": "Device Name",
             "type": "string"
           },
+          "joined_round": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Joined Round"
+          },
           "last_delta_bytes": {
             "anyOf": [
               {
@@ -11241,6 +11265,11 @@
             "title": "Age S",
             "type": "number"
           },
+          "auto_join": {
+            "default": true,
+            "title": "Auto Join",
+            "type": "boolean"
+          },
           "best_round": {
             "anyOf": [
               {
@@ -13337,6 +13366,17 @@
               }
             ],
             "title": "All Machines"
+          },
+          "auto_join": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Join"
           },
           "coordinator": {
             "anyOf": [
@@ -21102,6 +21142,59 @@
           }
         },
         "summary": "Get Run",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
+    "/distributed/runs/{run_id}/auto-join": {
+      "post": {
+        "description": "Turn on or off inviting machines that come online while the run goes. Off: only the machines chosen, or that ask to join, are\noffered a slot; a machine already invited stays. A run another computer coordinates is changed by asking that computer. 409 when the run is over.",
+        "operationId": "set_auto_join_distributed_runs__run_id__auto_join_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoJoin"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Auto Join",
         "tags": [
           "distributed"
         ]

@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { isActive, lessonsText, stopReasonText, type Run } from "@/app/cluster/training/logic";
 import { Lessons } from "@/app/cluster/training/lessons-list";
 import { MemberAlerts } from "@/app/cluster/training/member-alerts";
-import { RunControls } from "@/app/cluster/training/run-controls";
+import { AutoJoinSwitch, RunControls } from "@/app/cluster/training/run-controls";
 import { useStopMember, useStopRun } from "@/app/cluster/training/use-training";
 import { useQueueActions } from "@/app/queue/use-queue";
 import { etaText, runEta } from "@/app/runs/logic";
@@ -57,6 +57,7 @@ export function DilocoView({ run }: { run: Run }) {
           </div>
         }
       />
+      {run.can_stop && isActive(run) && <AutoJoinSwitch run={run} />}
       {run.paused && <p className="text-sm text-warning" data-testid="run-paused">{TR.pausedNote}</p>}
       {stopReasonText(run) && <p className="text-sm text-muted-foreground" data-testid="run-stop-reason">{stopReasonText(run)}</p>}
       {lessonsText(run) && <p className="text-sm text-muted-foreground" data-testid={`run-lessons-${run.id}`}>{lessonsText(run)}</p>}

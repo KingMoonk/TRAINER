@@ -718,6 +718,7 @@ class Coordinator:
         self.blobs, self.hashes, self.blob_lock = {}, {}, threading.Lock()  # shard id -> the file its .npz body was written to (once); see shard_path
         self.parts = None  # a coordinator made from a replica serves the shards it holds one by one (from_replica)
         self._params, self._state = (None, b""), (None, b"")
+        self.joined_round = {}  # node -> the (0-based) round it first trains in, for a node that joined after the run began
         self.late, self.late_round, self.closed = {}, None, None  # a change that came in after its round closed, waiting for the next outer step; (number, generation, members, contributors) of the last closed round
         self._update, self.update_residual = None, {}  # (round, body): the outer update that turned theta of the round before into theta of that round; what its quantization lost
         self.last_train = 0.  # the training seconds of the round opened last (time-boxed runs)
@@ -1275,7 +1276,10 @@ class Coordinator:
                 self.sequence += 1
                 entry = {"term": self.term, "epoch": epoch, "seq": self.sequence, "missed": 0}
                 (self.pending if self.current is not None else self.members)[node] = entry  # a boundary is now, or at the round's end
-                self._event("joined", node, self.next_round, f"{node} joined" + (" and starts with the next round." if self.current is not None else "."))
+                start = self.next_round + (1 if self.current is not None else 0)  # the round it first trains in (0-based)
+                if start > 0:
+                    self.joined_round[node] = start  # it came after the run began
+                self._event("joined", node, self.next_round, f"{node} joined" + (f" and starts with round {start + 1}." if self.current is not None else "."))
             self._advance()
             self.cond.notify_all()
             return {**self.info(), "node": node}
@@ -1878,6 +1882,8 @@ class Coordinator:
             nodes[node] = {"state": "joining", "missed": 0, "sent": False, "note": "Joins at the start of the next round."}
         for node, (state, note) in self.gone.items():
             nodes[node] = {"state": state, "missed": 0, "sent": False, "note": note}
+        for node, found in nodes.items():
+            found["joined_round"] = self.joined_round.get(node)
         deal = current.deal if current is not None else self.deal
         for node, found in nodes.items():
             report = self.reports.get(node)
