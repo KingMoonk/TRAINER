@@ -142,14 +142,13 @@ class WordListsTest(unittest.TestCase):
         self.addCleanup(gpt2.stop)
 
     def test_fitted_on_the_stored_text_and_kept_until_it_changes(self):
-        from studio_modules.tokenizer.word import WordTokenizer
+        from studio_modules.tokenizer.bpe_fast import FastBPETokenizer
         empty = self.svc.word_lists()
-        self.assertEqual(empty["tokenizers"][1:], (None, None, None))
+        self.assertEqual(empty["tokenizers"][1:], (None, None))
         self.assertIs(self.svc.word_lists(), empty)
         self.assertTrue(self.svc.add_data("text", {"text": "A kingfisher flashed past the old mill at dawn."}))
         lists = self.svc.word_lists()
-        self.assertIsInstance(lists["tokenizers"][3], WordTokenizer)
-        self.assertIn(" kingfisher", lists["tokenizers"][3].lookup)
+        self.assertIsInstance(lists["tokenizers"][1], FastBPETokenizer)
         self.assertEqual(lists["sentence"], "A kingfisher flashed past the old mill at dawn.")
 
 

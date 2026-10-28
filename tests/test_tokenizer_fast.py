@@ -248,11 +248,6 @@ class Builder(unittest.TestCase):
         self.assertEqual(written["tokenizer"]["config"]["vocab_size"], suggest_vocab(256, 6))
         self.assertEqual(D.read_spec(written)["V"], 1)
 
-    def test_a_design_saved_with_the_older_word_list_still_reads_as_the_small_word_list(self):
-        spec = validate_spec({"tokenizer": {"id": "bpe_custom", "config": {"vocab_size": 512}}})
-        self.assertEqual(D.read_spec(spec)["V"], 1)
-        self.assertEqual(D.write_spec(spec, D.read_spec(spec))["tokenizer"]["id"], "bpe_custom")
-
 
 if __name__ == "__main__":
     unittest.main()

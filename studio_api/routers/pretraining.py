@@ -25,7 +25,7 @@ MAX_STEPS = RUN_INTS["steps"][1]  # the most steps a run may have (validate_spec
 router = APIRouter(prefix="/pretraining", tags=["pretraining"])
 Services = Annotated[Any, Depends(get_services)]
 
-LISTS = ("letters", "small", "gpt2", "words")  # the order of Services.word_lists()["tokenizers"]
+LISTS = ("letters", "small", "gpt2")  # the order of Services.word_lists()["tokenizers"]
 
 
 class PreviewModel(Model):
@@ -47,11 +47,11 @@ class PreviewRequest(BaseModel):
 
 class Chip(BaseModel):
     label: str
-    known: bool  # False: the whole-word list does not hold it, the model sees only "unknown"
+    known: bool
 
 
 class WordList(BaseModel):
-    id: str  # letters | small | gpt2 | words
+    id: str  # letters | small | gpt2
     vocab_size: int
     count: int  # pieces the example sentence is cut into
     chips: list[Chip]

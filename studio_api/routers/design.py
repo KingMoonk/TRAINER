@@ -56,7 +56,7 @@ class Choices(BaseModel):
     L: int = Field(ge=1)
     H: int = Field(ge=1)
     W: int = Field(ge=0, le=2)
-    V: int = Field(ge=0, le=3)
+    V: int = Field(ge=0, le=2)
     d: int = Field(ge=1)
     T: int = Field(ge=1)
     U: int = Field(default=263, ge=263, le=65536)
@@ -240,7 +240,7 @@ def part_options(body: OptionsBody) -> list[Option]:
 
 class SizesBody(BaseModel):
     spec: dict
-    v: int = Field(ge=0, le=3)  # the word list
+    v: int = Field(ge=0, le=2)  # the word list
 
 
 class Sizes(BaseModel):
@@ -309,7 +309,7 @@ def preset_cost(body: SpecBody) -> PresetCost:
 
 class ComputeBody(BaseModel):
     spec: dict
-    v: int = Field(ge=0, le=3)
+    v: int = Field(ge=0, le=2)
     preview: dict | None = None  # GET /pretraining/preview's answer; null while the text is still being counted
 
 
