@@ -507,7 +507,10 @@ def _pool(services, body: PlanRequest, made: PretrainPlan, peer_url: str):
         return alone(f"No other machine can join. {why}".strip(), left_out)
     pool = Pool(pooled=True, machines=[PoolMachine(node=p.hostname or p.address, address=p.address) for p in peers],
                 left_out=[LeftOut(**row) for row in left_out])
-    return pool, run.model_copy(update={"machines": [p.address for p in peers]})
+    _, all_peers = distributed._chosen_peers(distributed.StartRun(dataset_ids=["x"], all_machines=True), services, own)
+    answering, _ = distributed._split_answering(all_peers, own)
+    target_machines = list(dict.fromkeys([p.address for p in peers] + [p.address for p in answering]))
+    return pool, run.model_copy(update={"machines": target_machines})
 
 
 @router.post("/pool")
