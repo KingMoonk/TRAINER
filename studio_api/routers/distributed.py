@@ -1065,7 +1065,7 @@ def set_auto_join(run_id: str, body: AutoJoin, services: Services) -> Run:
     if remote is not None:
         return _forward(services, remote, f"distributed/runs/{run_id}/auto-join", {"enabled": body.enabled})
     run, job = _find(services, run_id)
-    if job is None or job.status not in ("waiting", "held", "running"):
+    if job is None or job.status not in ("waiting", "held", "running") or _read(run, job)[0].get("state") in runs.ENDED:  # the run view ends before the job does
         raise HTTPException(409, "The run is over, so nothing can join it.")
     runs.set_auto_join(job, body.enabled)
     runner = getattr(services, "runner", None)
