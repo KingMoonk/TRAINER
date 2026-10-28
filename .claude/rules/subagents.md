@@ -9,8 +9,7 @@
 - When you do delegate, the main session scopes the task, writes the brief and reviews the PR that comes back.
 - Pick the agent by the kind of work:
   - `implementer` (Sonnet) for moderate or difficult work: features, bug fixes that need diagnosis, refactors, anything with design choices.
-  - `grunt` (Haiku) for repetitive, mechanical or read-heavy work: sweeping searches, collecting facts across many files, migrating N similar call sites, renames, running tests and summarising failures, reading logs.
-- Never Opus for a subagent unless the user asks for it. When spawning a general-purpose agent instead of these two, still pass `model: "sonnet"` or `model: "haiku"`.
+- Never Opus for a subagent unless the user asks for it. When spawning a general-purpose agent instead of `implementer`, still pass `model: "sonnet"` or `model: "haiku"`.
 
 ## Delegated work: an issue, a branch and a PR
 
