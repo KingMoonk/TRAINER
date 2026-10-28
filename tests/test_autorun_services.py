@@ -458,6 +458,44 @@ class RlhfPhaseTests(Base):
         bad["phases"][0]["settings"] = {"card_patience": 0}
         self.assertTrue(any("card_patience" in problem for problem in ar.validate(bad)))
 
+    def test_the_plan_can_name_a_judge_and_the_loop_job_runs_with_it(self):
+        import threading
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        import studio_loop
+        from tests import test_loop as t
+        plan = plan_of(("rlhf",))
+        plan["phases"][0]["settings"] = {"judge_model": "qwen-judge", "max_rounds": 1}
+        self.go(plan)
+        job = self.services.find_job("run1-0-1")
+        self.assertEqual(job.params["judge_model"], "qwen-judge")
+        self.assertEqual(job.params["config"], {"max_rounds": 1})            # the judge is the job's, not a loop setting
+        seen = []
+
+        class Teacher:
+            def __init__(self, url, model, **kw):
+                self.model = model
+
+            def judge_teacher(self):
+                return self
+
+        def collect(spec, judge, *a, **k):
+            seen.append(judge)
+            return {"pairs": [], "skipped": {}, "errors": 0}
+        params = {**job.params, "output_dir": str(self.loop_dir / "judged"), "rows": dict(t.ROWS)}
+        context = SimpleNamespace(root=self.tmp.name, run_dir=self.tmp.name, post_rows=lambda kind: [])
+        with patch("studio_rlhf.OllamaTeacher", Teacher), patch("studio_loop.collect", collect), \
+                patch("studio_rl.measure", lambda ckpt, docs, problems: {"bpc": 2.0, "pass_k": 3, "pass_n": 10}), \
+                patch("studio_eval.noise_band", lambda ckpt, docs: None):
+            studio_loop.run_job(SimpleNamespace(params=params), context, lambda e: None, threading.Event(), threading.Event())
+        self.assertEqual([j.model for j in seen], ["qwen-judge"])           # the loop's collect phase got the named judge
+
+    def test_a_judge_that_is_not_a_model_name_is_refused(self):
+        plan = plan_of(("rlhf",))
+        plan["phases"][0]["settings"] = {"judge_model": 7}
+        self.assertTrue(any("judge_model" in problem for problem in ar.validate(plan)))
+
     def test_the_run_view_shows_the_rounds_so_far_while_the_loop_runs(self):
         self.go(plan_of(("rlhf",)))
         self.services._loops = [{"id": "run1-rlhf", "status": "running", "phase": "round 2: training", "kept": 1, "current": "x", "stop_reason": "",
