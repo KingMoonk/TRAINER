@@ -97,10 +97,7 @@ describe("Auto Run on recorded responses", () => {
     expect(await screen.findByTestId("plan-editor")).toBeVisible();
     const phases = (fixtures["auto-run-defaults"].body as { phases: { kind: string; enabled: boolean }[] }).phases;
     expect(phases.length).toBeGreaterThan(5);
-    for (const { kind, enabled } of phases) {
-      if (enabled) expect(screen.getByTestId(`plan-${kind}`)).toBeVisible();
-      else expect(screen.queryByTestId(`plan-${kind}`)).toBeNull();
-    }
+    for (const { kind } of phases) expect(screen.getByTestId(`plan-${kind}`)).toBeVisible();
   });
 });
 
