@@ -63,6 +63,11 @@ OUTCOMES = ("done", "failed", "stopped", "missing", "blocked")
 DEFAULT_HOURS = 12.0
 
 
+def _autotune():
+    import studio_autotune     # (it imports this module)
+    return studio_autotune
+
+
 class AutorunError(ValueError):
     """A plan or a transition that cannot be, with the sentence the page shows."""
 
@@ -74,6 +79,7 @@ def DEFAULT_PLAN(version):
     return {
         "id": "", "name": "Auto Run", "version": version, "budget": {"hours": DEFAULT_HOURS},
         "phases": [{"kind": kind, "enabled": kind != "midtrain", "settings": {}, "on_pass": "continue", "on_fail": "pause"} for kind in KINDS],
+        "controller": _autotune().default_controller(),
     }
 
 
@@ -129,6 +135,8 @@ def validate(plan):
             problems.append(f"{label} has the bad on_fail {phase.get('on_fail')!r}; use {', '.join(ON_FAIL[:-1])} or {ON_FAIL[-1]}.")
     if not any(isinstance(p, dict) and p.get("enabled") is True for p in phases):
         problems.append("At least one phase must be enabled.")
+    if plan.get("controller") is not None:
+        problems += _autotune().validate(plan["controller"])
     return problems
 
 

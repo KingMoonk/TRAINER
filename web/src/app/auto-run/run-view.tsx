@@ -22,13 +22,16 @@ import { PlanEditor } from "./plan-editor";
 import {
   PHASES,
   checkText,
+  choiceLabel,
   controls,
   phaseTitle,
   progressLine,
   resultChecks,
   resultVerdict,
+  runChoices,
   runLabel,
   timelinePhases,
+  valueText,
   when,
   type Progress,
   type RunView,
@@ -108,6 +111,39 @@ function Timeline({ run }: { run: RunView }) {
           );
         })}
       </ol>
+    </section>
+  );
+}
+
+/** What the parameter controller chose between phases, each with the evidence-based reason (and a bigger design as a proposal only). */
+function Choices({ run }: { run: RunView }) {
+  const choices = runChoices(run);
+  return (
+    <section className="flex flex-col gap-2" aria-label={T.controllerTitle} data-testid="auto-run-choices">
+      <h2 className="text-sm font-medium">{T.controllerTitle}</h2>
+      {run.plan.controller && !run.plan.controller.enabled ? (
+        <p className="text-sm text-muted-foreground">{T.controllerOff}</p>
+      ) : choices.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{T.noChoices}</p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {choices.map((choice) => (
+            <li key={`${choice.phase}-${choice.attempt}-${choice.key}`} className="rounded-lg border p-3 text-sm">
+              {choice.applied ? (
+                <p className="font-medium">
+                  {fill(T.chosenFrom, { label: choiceLabel(choice), phase: phaseTitle(choice.phase), n: choice.attempt, was: valueText(choice.was), value: valueText(choice.value) })}
+                  {choice.clamped ? ` (${T.heldToLimit})` : ""}
+                </p>
+              ) : (
+                <p className="font-medium">
+                  {choiceLabel(choice)}: {T.proposal}
+                </p>
+              )}
+              <p className="mt-1 text-muted-foreground">{choice.why}</p>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
@@ -209,6 +245,7 @@ export function RunPanel({ run }: { run: RunView }) {
       ) : (
         <Timeline run={run} />
       )}
+      {status !== "draft" && run.plan.controller && <Choices run={run} />}
       {status === "paused" && (
         <Disclosure title={T.changePlan} hint={T.changePlanHint}>
           <PlanEditor key={JSON.stringify(run.plan)} initial={run.plan} pending={busy} actions={[{ label: T.saveChanges, primary: true, run: (plan) => actions.savePlan.mutate(plan) }]} />
