@@ -13,6 +13,7 @@ export const plan = (over: Partial<Plan> = {}): Plan => ({
   controller: {
     enabled: true,
     bounds: { learning_rate: { min: 1e-6, max: 1e-3 }, steps: { min: 10, max: 20000 }, beta: { min: 0.02, max: 0.5 }, kl: { min: 0, max: 0.2 } },
+    max_cycles: 1,
   },
   ...over,
 });
@@ -34,6 +35,8 @@ export function run(
       status,
       current,
       reason,
+      cycle: 1,
+      decisions: [],
       choices: [],
       attempts: [],
       phases: KINDS.map((kind) => ({ kind, status: OFF.includes(kind) ? "skipped" : "pending", attempt: 1, error: "", ...phases[kind] }) as PhaseState),

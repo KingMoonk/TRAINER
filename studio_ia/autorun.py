@@ -330,7 +330,7 @@ class Orchestrator:
             if action[0] == "pause":
                 self._put(run_id, ar.settle_pause(state, self.now()))
             elif action[0] == "finish":
-                self._put(run_id, ar.finish(state, action[1], action[2], self.now()))
+                self._put(run_id, ar.finish(state, action[1], action[2], self.now(), plan))
             elif action[0] == "data":
                 self._data(run_id)
             elif action[0] == "enqueue":

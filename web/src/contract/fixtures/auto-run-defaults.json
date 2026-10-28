@@ -22,7 +22,8 @@
           "min": 10.0
         }
       },
-      "enabled": true
+      "enabled": true,
+      "max_cycles": 1
     },
     "id": "",
     "name": "Auto Run",
