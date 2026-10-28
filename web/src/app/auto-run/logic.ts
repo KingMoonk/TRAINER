@@ -18,7 +18,7 @@ export type CycleDecision = components["schemas"]["AutoRunCycleDecision"];
 export const ROUND: Record<string, number> = { sft: 1, rlvr: 2, distill: 3, dpo: 4 };
 
 /** A setting a phase accepts in its plan: the key the server reads, the range it accepts, and what an empty value means. */
-export type SettingSpec = { key: string; label: string; hint: string; min: number; max: number; integer: boolean; fallback: number | null };
+export type SettingSpec = { key: string; label: string; hint: string; min: number; max: number; integer: boolean; fallback: number | null; text?: boolean };
 
 const STEPS: SettingSpec = {
   key: "steps",
@@ -78,6 +78,7 @@ export const PHASES: Record<string, PhaseSpec> = {
       { key: "max_rounds", label: "Most rounds", hint: "It stops after this many rounds, kept or not.", min: 1, max: 1000, integer: true, fallback: 20 },
       { key: "card_patience", label: "Rounds without a better report card", hint: "It stops when the report card has not clearly improved for this many rounds in a row.", min: 1, max: 1000, integer: true, fallback: 3 },
       { key: "patience", label: "Rounds in a row not kept", hint: "It also stops after this many rounds in a row that were rolled back.", min: 1, max: 1000, integer: true, fallback: 4 },
+      { key: "judge_model", label: "Judge model", hint: "An Ollama model name that picks the better answer. Empty: the workspace teacher, or none.", min: 0, max: 0, integer: false, fallback: null, text: true },
     ],
   },
 };
@@ -119,7 +120,7 @@ export function settingTexts(plan: Plan): Record<string, string> {
   for (const phase of plan.phases) {
     for (const spec of PHASES[phase.kind]?.settings ?? []) {
       const value = phase.settings[spec.key];
-      if (typeof value === "number") out[textKey(phase.kind, spec.key)] = String(value);
+      if (typeof value === "number" || (spec.text && typeof value === "string")) out[textKey(phase.kind, spec.key)] = String(value);
     }
   }
   return out;
@@ -189,8 +190,8 @@ export function buildPlan(base: Plan, texts: Record<string, string>, budget: str
     const settings: Record<string, unknown> = { ...phase.settings };
     for (const spec of PHASES[phase.kind]?.settings ?? []) {
       const text = texts[textKey(phase.kind, spec.key)] ?? "";
-      const value = settingValue(text, spec);
-      if (text.trim() && value === null) {
+      const value = spec.text ? text.trim() || null : settingValue(text, spec);
+      if (!spec.text && text.trim() && value === null) {
         return { error: fill(T.badSetting, { label: spec.label, phase: phaseTitle(phase.kind), kind: spec.integer ? T.whole : T.number, min: spec.min, max: spec.max }) };
       }
       if (value === null) delete settings[spec.key];

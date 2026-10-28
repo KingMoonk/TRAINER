@@ -97,7 +97,7 @@ export function PlanEditor({ initial, actions, pending }: { initial: Plan; actio
                                 {setting.label}
                                 <Input
                                   aria-label={`${setting.label}, ${title}`}
-                                  inputMode="decimal"
+                                  inputMode={setting.text ? "text" : "decimal"}
                                   value={texts[textKey(phase.kind, setting.key)] ?? ""}
                                   placeholder={setting.fallback == null ? T.settingEmptyDefault : fill(T.settingEmpty, { fallback: setting.fallback })}
                                   onChange={(e) => { setProblem(null); setTexts({ ...texts, [textKey(phase.kind, setting.key)]: e.target.value }); }}
