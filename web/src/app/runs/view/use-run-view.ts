@@ -42,14 +42,15 @@ function useDilocoRun(id: string) {
   });
 }
 
-/** What the page shows for `?id=`: a DiLoCo run (resolved first) or a job in this computer's queue. */
+/** What the page shows for `?id=`: a DiLoCo run (resolved first) or a job in this computer's queue or failed list. */
 export function useRunView(id: string): RunView {
   const run = useDilocoRun(id);
   const queue = useQueue();
   const done = useDoneJobs();
   const machines = useMachines();
   const here = thisComputer(machines.data);
-  const live = queue.data ? [...(queue.data.job ? [queue.data.job] : []), ...queue.data.up_next].find((j) => j.id === id) : undefined;
+  // a job that ended failed stays in `failed` (the same list the Runs page shows under Completed), so its page opens read-only
+  const live = queue.data ? [...(queue.data.job ? [queue.data.job] : []), ...queue.data.up_next, ...(queue.data.failed ?? [])].find((j) => j.id === id) : undefined;
   const job = live ?? done.data?.find((j) => j.id === id); // a job that finished done is no longer in the queue's state
   const invites = useInvites();
   const invite = job?.kind === MEMBER ? inviteFor(invites.data, job.id) : undefined;

@@ -41,8 +41,15 @@ def load():
         _loaded = True
 
 
+LEGACY_ALIASES = {
+    ("tokenizer", "word"): "bpe_fast",
+    ("tokenizer", "bpe_custom"): "bpe_fast",
+}
+
+
 def get(slot, short):
     load()
+    short = LEGACY_ALIASES.get((slot, short), short)
     try:
         return _MODULES[slot, short]
     except KeyError:
