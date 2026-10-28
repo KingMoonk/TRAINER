@@ -391,14 +391,14 @@ class RlhfPhaseTests(Base):
         self.start.write_text("weights", encoding="utf-8")
         self.services._versions[0].best_checkpoint = str(self.start)
 
-    def run_the_job(self, job, table, rates, cards, **config):
+    def run_the_job(self, job, table, rates, cards, versus=None, **config):
         """What the worker does with the queued rlhf_loop job: run studio_loop on its params, keep its result in the job."""
         import studio_loop
         from tests import test_loop as t
         p = job.params
         summary = studio_loop.run_loop(self.loop_dir / p["loop_id"], p["checkpoint"], t.ROWS, t.FakeJudge(), {**t.CONFIG, **p["config"], **config},
                                        loop_id=p["loop_id"], version=p["version"], measure=t.scripted_measure(table), band=lambda ckpt, docs: None,
-                                       trainer=t.fake_trainer(), versus=t.win_rates(rates), card=t.scripted_card(cards) if cards else None,
+                                       trainer=t.fake_trainer(), versus=versus or t.win_rates(rates), card=t.scripted_card(cards) if cards else None,
                                        collector=lambda *a, **k: __import__("studio_loop").collect(*a, model=t.ScriptedModel(), **k))
         job.params["result"] = studio_loop.phase_result(summary)
         return summary
@@ -429,6 +429,30 @@ class RlhfPhaseTests(Base):
         self.assertIn("report card has not clearly improved", phase["result"]["stop_reason"])   # round 3 did not beat round 1: stopped
         self.assertEqual(phase["checkpoint"], phase["result"]["checkpoint"])
         self.assertEqual(phase["result"]["verdict"], "Adopted run1-rlhf.")
+
+    def test_a_round_that_lengthens_answers_is_rolled_back_inside_the_phase_however_the_judge_voted(self):
+        self.go(plan_of(("rlhf",)))
+        job = self.services.find_job("run1-0-1")
+        table = {0: {"bpc": 2.0, "pass_k": 5}, 1: {"bpc": 1.9, "pass_k": 5}}
+        longer = lambda c, cur, prompts, judge: {"win_rate": .95, "wins": 4, "ties": 0, "losses": 0, "n": 4, "examples": [{"a": "x" * 40, "b": "y" * 10}]}
+        self.run_the_job(job, table, {}, {}, versus=longer, max_rounds=1)
+        self.end(job.id)
+        rnd = self.phase("rlhf")["result"]["rounds"][0]
+        self.assertEqual(rnd["status"], "rolled_back")
+        self.assertIn("longer", rnd["reason"])
+        self.assertFalse(next(c for c in rnd["checks"] if c["name"] == "Replies did not grow longer")["ok"])
+        self.assertIsNone(self.phase("rlhf")["checkpoint"])
+
+    def test_a_round_that_worsens_bits_per_character_is_rolled_back_inside_the_phase_however_the_judge_voted(self):
+        self.go(plan_of(("rlhf",)))
+        job = self.services.find_job("run1-0-1")
+        table = {0: {"bpc": 2.0, "pass_k": 5}, 1: {"bpc": 2.4, "pass_k": 9}}   # solves more and the judge loves it, but the held-back text got worse
+        self.run_the_job(job, table, {1: .95}, {}, max_rounds=1)
+        self.end(job.id)
+        rnd = self.phase("rlhf")["result"]["rounds"][0]
+        self.assertEqual(rnd["status"], "rolled_back")
+        self.assertFalse(next(c for c in rnd["checks"] if c["name"] == "Held-back text: error did not rise")["ok"])
+        self.assertIsNone(self.phase("rlhf")["checkpoint"])
 
     def test_a_loop_whose_best_fails_the_full_check_fails_the_phase_and_keeps_no_checkpoint(self):
         self.go(plan_of(("rlhf",)))
