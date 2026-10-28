@@ -2,7 +2,7 @@
 // localStorage so a reload keeps it); every sum comes from the stateless /design routes (studio_api/routers/design.py).
 // Nothing here touches the DOM: the component (components/builder) renders what these functions return.
 
-import { api, apiFetch, ApiError, unwrap } from "@/lib/api";
+import { api, ApiError, unwrap } from "@/lib/api";
 import type { components } from "@/lib/api-schema";
 import { awaitJob } from "@/lib/job-result";
 import { BUILDER, fill } from "@/lib/copy/builder";
@@ -117,15 +117,6 @@ export const versions = {
   /** `question` is the starting question the change was set up to answer, when there was one. */
   save: (spec: Spec, change: string, question?: string) =>
     unwrap(api.POST("/versions", { body: { spec, change, ...(question ? { prediction: { question } } : {}) } })),
-  /** Start from a pretrained open model (POST /post-training/imports, a form as the Post-training page sends it): its
-   * design is saved as a new version now; its weights come when the queue finishes the download and conversion. */
-  importPretrained: async (name: string): Promise<Version> => {
-    const form = new FormData();
-    form.set("name", name);
-    const res = await apiFetch("/post-training/imports", { method: "POST", body: form });
-    if (!res.ok) throw new ApiError(res.status, "/post-training/imports", await res.text());
-    return (await res.json()) as Version;
-  },
 };
 
 /** The sentence a failed call carries: the server's `detail` for a 422, else the error's own message. */

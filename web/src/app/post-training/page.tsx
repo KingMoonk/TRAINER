@@ -13,7 +13,8 @@ import { BaseWarning, KeptCard } from "./kept-card";
 import { baseWarning, isKept, type KeptGate } from "./kept-logic";
 import { LoopCard } from "./loop-card";
 import { RoundCard, type Choices, type Live } from "./round-card";
-import { ImportCard, RowsCard, VersionsCard } from "./side-cards";
+import { RowsCard, VersionsCard } from "./side-cards";
+import { ImportModelCard } from "@/components/import-model-card";
 import { useEventStream, useJob } from "./use-events";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
 import { Disclosure } from "@/components/disclosure";
@@ -235,7 +236,7 @@ export default function PostTrainingPage() {
       )}
 
       <Disclosure title={T.importTitle} defaultOpen={versionsQuery.isSuccess && !versions?.some((v) => v.best_checkpoint)} testId="import-disclosure">
-        <ImportCard ranks={options?.lora_ranks ?? []} onImported={() => setPicked(null)} />
+        <ImportModelCard onImported={() => setPicked(null)} />
       </Disclosure>
 
       <Disclosure title={T.advancedTitle} hint={T.advancedHint} testId="advanced-disclosure">
