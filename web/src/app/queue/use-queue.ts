@@ -135,6 +135,7 @@ export function useQueueActions() {
       const body: AllMachinesAsk["body"] = {
         replaces: waiting.id, all_machines: true, machines: [], version, dataset_ids: datasets, rounds: defaults.rounds, inner_steps: defaults.inner_steps,
         outer_lr: defaults.outer_lr, outer_momentum: defaults.outer_momentum, overlap: null, time_box: null, delta_dtype: deltaDtypeOf(defaults.delta_dtype), delta_sparsity: 0, reviewed_only: false,
+        rows: 16, hold: 0.05, chat_share: 0, chat_datasets: [],
       };
       const sizing = await unwrap(api.POST("/distributed/sizing", { body }));
       // This computer is in every run, so a start cannot go on without it: let the start say so instead of asking.

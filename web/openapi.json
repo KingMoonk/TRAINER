@@ -13378,6 +13378,21 @@
             ],
             "title": "Auto Join"
           },
+          "chat_datasets": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Chat Datasets",
+            "type": "array"
+          },
+          "chat_share": {
+            "default": 0.0,
+            "maximum": 0.1,
+            "minimum": 0.0,
+            "title": "Chat Share",
+            "type": "number"
+          },
           "coordinator": {
             "anyOf": [
               {
@@ -13412,6 +13427,24 @@
             "maximum": 0.2,
             "minimum": 0.0,
             "title": "Delta Sparsity",
+            "type": "number"
+          },
+          "from_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Version"
+          },
+          "hold": {
+            "default": 0.05,
+            "exclusiveMaximum": 0.5,
+            "minimum": 0.0,
+            "title": "Hold",
             "type": "number"
           },
           "inner_steps": {
@@ -13583,6 +13616,13 @@
             "maximum": 100000.0,
             "minimum": 1.0,
             "title": "Rounds",
+            "type": "integer"
+          },
+          "rows": {
+            "default": 16,
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Rows",
             "type": "integer"
           },
           "stages": {

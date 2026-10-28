@@ -2610,6 +2610,8 @@ def _prepare(job, services, directory, port, client_for, p, say):
     if p.get("stages"):  # next_dataset goes to the workspace's unseen text sets, worst first, with replay (studio_stages)
         import studio_stages
         policy, examples = studio_stages.Policy.for_job(p, services)
+    elif p.get("chat_share") and "examples" not in p and hasattr(services, "example_stream"):  # the text with the chosen conversations mixed in, as a solo pretrain run reads it
+        examples = list(services.example_stream(p))
     else:
         if p.get("datasets") and not p.get("examples"):
             getter = getattr(services, "get_prepared_shards", None)

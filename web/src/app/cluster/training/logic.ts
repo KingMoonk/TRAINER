@@ -180,6 +180,10 @@ export function startBody(form: Form): StartRun | null {
     delta_dtype: form.deltaDtype,
     delta_sparsity: sparsityOf(form) ?? 0, // 0: send every entry
     reviewed_only: form.reviewedOnly,
+    rows: 16, // the Pretraining page's catch-up answers; this form keeps the server defaults
+    hold: 0.05,
+    chat_share: 0,
+    chat_datasets: [],
     ...teacher,
     ...rulesParams(form.rules),
   };
