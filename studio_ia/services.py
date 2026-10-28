@@ -284,9 +284,9 @@ class Services:
     def enqueue(self, job):
         raise NotImplementedError
 
-    def fill_job(self, job_id, label, params):
-        """Give a job enqueued before the size of its text was known (params["sizing"]) its label and params, so it may run; False when
-        it has left the queue meanwhile."""
+    def fill_job(self, job_id, label, params, note=""):
+        """Give a job enqueued before the size of its text was known (params["sizing"]) its label and params, so it may run, and a `note`
+        (why it trains where it does) when given; False when it has left the queue meanwhile."""
         raise NotImplementedError
 
     def fail_job(self, job_id, error):
@@ -947,11 +947,13 @@ class FakeServices(Services):
         q.up_next.append(job)
         self.emit("queue", q)
 
-    def fill_job(self, job_id, label, params):
+    def fill_job(self, job_id, label, params, note=""):
         job = next((j for j in self._queue.up_next if j.id == job_id and j.params.get("sizing")), None)
         if job is None:
             return False
         job.label, job.params = label, {k: v for k, v in params.items() if k != "sizing"}
+        if note:
+            job.note = note
         self.emit("queue", self._queue)
         return True
 
@@ -2186,8 +2188,8 @@ class WorkspaceServices(Services):
             self._to(job.params["version"], "queued")
         return self.runner.enqueue(job)
 
-    def fill_job(self, job_id, label, params):
-        filled = self.runner.fill(job_id, label, params)
+    def fill_job(self, job_id, label, params, note=""):
+        filled = self.runner.fill(job_id, label, params, note)
         if filled and params.get("version"):
             self._to(params["version"], "queued")
         return filled
