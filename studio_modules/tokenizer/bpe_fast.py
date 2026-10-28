@@ -1,11 +1,11 @@
 """Fast byte-level subword tokenizer learned from a stream of the whole corpus (Hugging Face `tokenizers` does the counting and encoding).
 
-Why a dependency: the pure Python `bpe_custom` is capped at 16,384 entries and fits on examples held in memory; this one learns
-1k to 64k pieces from a sample drawn evenly across the corpus in bounded memory, and encodes in native code, so a tokenizer is not
+Learns 1k to 64k pieces from a sample drawn evenly across the corpus in bounded memory, and encodes in native Rust code, so a tokenizer is not
 the bottleneck of the sharded path. `tokenizers` ships wheels for Windows, macOS and Linux (abi3), so CI installs it from requirements.
 
 The vocabulary is the 256 bytes plus one piece per merge, so every byte of any input has a token (no unknown token): text that
-is valid UTF-8 splits by GPT-2's pattern, and bytes that are not valid UTF-8 become single byte pieces (`encode_bytes`).
+is valid UTF-8 splits by the modern GPT-4 / Llama 3 (`cl100k_base`) regex pattern (contractions, letter runs, 1-3 digit numbers, punctuation
+and newlines) before byte-level mapping, and bytes that are not valid UTF-8 become single byte pieces (`encode_bytes`).
 
 What a checkpoint stores is the merge list (`serialize`), a few hundred kilobytes, with a SHA-256 of it that `restore` checks.
 The same list is a shareable artifact (`save_artifact` / `load_artifact`): DiLoCo peers receive it from the coordinator and
@@ -26,6 +26,16 @@ from studio_slots import OFFSET
 FORMAT = "groundwork-tokenizer/1"
 MIN_VOCAB, MAX_VOCAB = 1024, 65536
 REPLACEMENT = chr(0xFFFD)
+# Modern GPT-4 (cl100k_base) / Llama 3 regex split: case-insensitive English contractions, words with optional leading non-letter/digit,
+# 1-3 digit numbers, punctuation runs with optional trailing newlines, newline runs, and whitespace runs.
+SPLIT_PATTERN = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
+
+
+def _pre_tokenizer(tk):
+    return tk.pre_tokenizers.Sequence([
+        tk.pre_tokenizers.Split(pattern=tk.Regex(SPLIT_PATTERN), behavior="isolated"),
+        tk.pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=False),
+    ])
 
 
 @dataclass
@@ -143,7 +153,7 @@ class FastBPETokenizer:
             vocab = {symbol: index for index, symbol in enumerate(self.symbols)}
             merges = [(self.symbols[a], self.symbols[b]) for a, b in self.merges]
             tok = tk.Tokenizer(tk.models.BPE(vocab=vocab, merges=merges))
-            tok.pre_tokenizer = tk.pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=True)
+            tok.pre_tokenizer = _pre_tokenizer(tk)
             tok.decoder = tk.decoders.ByteLevel()
             self._tok = tok
         return self._tok
@@ -155,7 +165,7 @@ class FastBPETokenizer:
         sample, vocabulary size and library version; memory follows the number of distinct words in the sample, not the corpus."""
         tk = _tokenizers()
         tok = tk.Tokenizer(tk.models.BPE())
-        tok.pre_tokenizer = tk.pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=True)
+        tok.pre_tokenizer = _pre_tokenizer(tk)
         trainer = tk.trainers.BpeTrainer(vocab_size=max(256, vocab_size - OFFSET), min_frequency=min_frequency, show_progress=False,
                                          initial_alphabet=tk.pre_tokenizers.ByteLevel.alphabet(), special_tokens=[])
         tok.train_from_iterator(sample_texts(examples, fit_chars, progress), trainer)
@@ -253,7 +263,7 @@ class FastBPE(ModuleSpec):
     slot = "tokenizer"
     name = "Learned word pieces (fast)"
     blurb = "Byte-level subword pieces learned from a sample of all your text, encoded in native code. About 4 times more text per context window than bytes."
-    ref = "Sennrich et al. 2016; Radford et al. 2019 (byte-level BPE)"
+    ref = "Sennrich et al. 2016; Radford et al. 2019; OpenAI cl100k / Llama 3 byte-level BPE"
     config = FastBPEConfig
     backward = "No backward pass"
 

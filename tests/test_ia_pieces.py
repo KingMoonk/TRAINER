@@ -6,7 +6,6 @@ from studio_ia import pieces as cut
 from studio_ia.services import FakeServices
 from studio_modules.tokenizer.bpe_fast import FastBPETokenizer
 from studio_modules.tokenizer.bpe_gpt2 import GPT2Tokenizer, bytes_to_unicode
-from studio_modules.tokenizer.word import WordTokenizer
 
 TEXT = ["The heron waited by the river. The heron waited by the river. A kingfisher flashed past the old mill. Version 3.12 is out."]
 
@@ -25,34 +24,32 @@ def joined(chips):
 class Pieces(unittest.TestCase):
     def test_no_text_keeps_letters_and_says_nothing_else(self):
         lists = cut.word_lists([])
-        letters, small, large, words = lists["tokenizers"]
-        self.assertEqual((small, large, words), (None, None, None))
+        letters, small, large = lists["tokenizers"]
+        self.assertEqual((small, large), (None, None))
         self.assertEqual(lists["sentence"], cut.EXAMPLE)
-        self.assertEqual(cut.counts(lists), [len(cut.EXAMPLE), None, None, None])
+        self.assertEqual(cut.counts(lists), [len(cut.EXAMPLE), None, None])
 
     def test_lists_are_the_real_tokenizers_and_cut_the_sentence_back_whole(self):
         lists = cut.word_lists(TEXT)
-        letters, small, _, words = lists["tokenizers"]
+        letters, small, _ = lists["tokenizers"]
         self.assertIsInstance(small, FastBPETokenizer)
-        self.assertIsInstance(words, WordTokenizer)
         sentence = lists["sentence"]
-        for tok in (letters, small, words):
+        for tok in (letters, small):
             chips = cut.chips(tok, sentence)
             self.assertEqual(joined(chips), sentence)
             self.assertEqual(len(chips), len(tok.encode(sentence)))
         self.assertGreater(len(cut.chips(letters, sentence)), len(cut.chips(small, sentence)))
 
     def test_sample_is_capped(self):
-        with mock.patch.object(cut, "SAMPLE_CHARS", 40), mock.patch.object(cut.WordTokenizer, "fit", wraps=WordTokenizer.fit) as fit:
+        with mock.patch.object(cut, "SAMPLE_CHARS", 40), mock.patch.object(cut.FastBPETokenizer, "fit", wraps=FastBPETokenizer.fit) as fit:
             cut.word_lists(["a" * 30, "b" * 30, "c" * 30])
         self.assertEqual([e["text"] for e in fit.call_args.args[0]], ["a" * 30, "b" * 10])
 
-    def test_example_prefers_a_lost_word_and_a_split_word(self):
+    def test_example_prefers_a_split_word(self):
         texts = ["".join([" The cat sat on the mat."] * 5 + [" The cat met an ocelot today."])]
-        words = WordTokenizer.fit([{"text": texts[0]}], 7 + 8)  # 8 entries: "ocelot" does not make the list
-        self.assertNotIn(" ocelot", words.lookup)
-        self.assertEqual(cut.example_sentence(texts, None, words), " The cat met an ocelot today.")
-        self.assertEqual(cut.example_sentence(texts), " The cat sat on the mat.")  # nothing to prefer: the first
+        small = FastBPETokenizer.fit([{"text": texts[0]}], 7 + 256 + 10)
+        self.assertEqual(cut.example_sentence(texts, small), " The cat sat on the mat.")
+        self.assertEqual(cut.example_sentence(texts), " The cat sat on the mat.")
 
     def test_example_is_plain_prose_from_the_text(self):
         self.assertEqual(cut.example_sentence(["Version 3.12 is here. The heron waited by the river."]), " The heron waited by the river.")
@@ -65,10 +62,6 @@ class Pieces(unittest.TestCase):
     def test_part_of_a_character_shows_as_hex(self):
         letters = cut.word_lists([])["tokenizers"][0]
         self.assertEqual(cut.chips(letters, "é"), [("c3", True), ("a9", True)])
-
-    def test_unknown_words_are_marked(self):
-        words = WordTokenizer.fit([{"text": "the cat"}], 7 + 2)
-        self.assertEqual(cut.chips(words, "the dog"), [("the", True), ("␣dog", False)])
 
     def test_fake_services_fit_on_their_rows_and_download_nothing(self):
         lists = FakeServices().word_lists()

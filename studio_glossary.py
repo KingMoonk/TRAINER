@@ -109,7 +109,6 @@ GLOSSARY = {
     "bytes": ("Letters (bytes)", "Each byte of text is one piece: 256 entries, any language or emoji works, nothing is ever unknown. Texts become long, so each step covers less text."),
     "bpe": ("BPE (byte-pair encoding)", "Builds a word list by repeatedly merging the most common neighbouring pieces, so frequent words become one piece and rare ones split into parts. Shorter texts than letters, still nothing unknown."),
     "gpt2_bpe": ("GPT-2's word list", "The 50,257-piece BPE list GPT-2 was trained with. Short texts, but a huge word table that dominates a small model's size."),
-    "whole_words": ("Whole words", "One entry per frequent word or punctuation mark in your data. Very short texts, but any word that is not in the list is lost."),
     # ---- align
     "rlhf": ("Feedback training (RLHF)", "Improving a model by telling it which of its answers are better. It polishes a model that already writes sensible text; it cannot teach language from scratch."),
     "dpo": ("DPO", "Direct Preference Optimization: a training method that makes the preferred reply more likely and the rejected reply less likely, using pairs of answers you ranked."),
