@@ -738,6 +738,11 @@ class Services:
         loop to carry on, from its last kept round. Raises ValueError with a sentence when it cannot start."""
         raise NotImplementedError
 
+    def loop_job(self, version, checkpoint, config, loop_id) -> Job:
+        """The `rlhf_loop` job (not queued) that runs loop `loop_id` of `version` from `checkpoint`: the Auto Run's rlhf phase asks for it,
+        then queues it under an id of its own. Carries on from the loop's folder when it has one. Raises ValueError with a sentence."""
+        raise NotImplementedError
+
     def adopt_loop(self, loop_id) -> dict:
         """Check a loop's best on all the held-back data and, if the gate passes, make it the version's checkpoint: the gate result."""
         raise NotImplementedError
@@ -1497,6 +1502,10 @@ class FakeServices(Services):
                           "judge_model": judge_model})
         self.enqueue(job)
         return {"job": job.id, "loop_id": loop_id, "label": job.label}
+
+    def loop_job(self, version, checkpoint, config, loop_id):
+        return Job(uuid.uuid4().hex[:8], "rlhf_loop", f"RLHF loop · version {version}", "automated preference rounds",
+                   params={"version": version, "checkpoint": checkpoint, "config": dict(config or {}), "loop_id": loop_id, "judge_model": None})
 
     def adopt_loop(self, loop_id):
         return {"round": 5, "ok": False, "checks": [], "verdict": "Nothing to adopt: the fake services run no loops.", "checkpoint": ""}
@@ -3266,6 +3275,19 @@ class WorkspaceServices(Services):
         job = Job(uuid.uuid4().hex[:8], "rlhf_loop", f"RLHF loop · version {v.number}", "automated preference rounds", params=params)
         self.enqueue(job)
         return {"job": job.id, "loop_id": loop_id, "label": job.label}
+
+    def loop_job(self, version, checkpoint, config, loop_id):
+        import studio_loop
+        v = self._as_version(version)
+        if v is None:
+            raise ValueError(f"There is no version {version}.")
+        if not checkpoint:
+            raise NoCheckpoint(v.number)
+        studio_loop.clean_config(config)   # a refused setting is told now, not when the job starts
+        folder = Path(self.workspace.run_dir) / f"rlhf_loop_{loop_id}"
+        return Job(uuid.uuid4().hex[:8], "rlhf_loop", f"RLHF loop · version {v.number}", "automated preference rounds",
+                   params={"version": v.number, "checkpoint": str(checkpoint), "config": dict(config or {}), "loop_id": loop_id,
+                           "output_dir": str(folder), "budget_token": None, "judge_model": None})
 
     def adopt_loop(self, loop_id):
         import studio_loop

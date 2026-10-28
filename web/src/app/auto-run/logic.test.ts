@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { PHASES, boundTexts, buildPlan, budgetText, checkText, controls, defaultVersion, errorText, keptRound, pickRun, progressLine, resultChecks, settingTexts, timelinePhases, valueText, when } from "./logic";
+import { PHASES, boundTexts, buildPlan, budgetText, checkText, controls, defaultVersion, errorText, keptRound, loopRounds, pickRun, progressLine, resultChecks, roundText, settingTexts, timelinePhases, valueText, when } from "./logic";
 import { plan, run, summary } from "./test-data";
 
 describe("buildPlan", () => {
@@ -104,6 +104,30 @@ describe("the timeline", () => {
     expect(resultChecks(null)).toEqual([]);
     expect(resultChecks({ checks: "none" })).toEqual([]);
     expect([true, false, null].map(checkText)).toEqual(["passed", "failed", "not measured"]);
+  });
+});
+
+describe("the RLHF loop's rounds", () => {
+  test("reads the rounds a phase result lists, and nothing else", () => {
+    expect(loopRounds(null)).toEqual([]);
+    expect(loopRounds({ rounds: "none" })).toEqual([]);
+    expect(loopRounds({ rounds: [{ round: 1, status: "kept", reason: "", judge_win_rate: null, card_better: [] }] })).toHaveLength(1);
+  });
+
+  test("says how a round ended, then the judge and the report card", () => {
+    expect(roundText({ round: 3, status: "rolled_back", reason: "", judge_win_rate: 0.9, card_better: [] })).toBe("Round 3: rolled back · the judge preferred it in 90% of comparisons");
+    expect(roundText({ round: 1, status: "kept", reason: "", judge_win_rate: null, card_better: ["multiple-choice accuracy", "chat win rate"] })).toBe(
+      "Round 1: kept · report card better: multiple-choice accuracy, chat win rate",
+    );
+  });
+
+  test("the phase takes the loop's own settings, and the editor keeps them", () => {
+    expect(PHASES.rlhf.settings.map((s) => s.key)).toEqual(["max_rounds", "card_patience", "patience"]);
+    const base = plan();
+    base.phases.find((p) => p.kind === "rlhf")!.enabled = true;
+    const built = buildPlan(base, { "rlhf.card_patience": "2" }, "");
+    expect("plan" in built && built.plan.phases.find((p) => p.kind === "rlhf")!.settings).toEqual({ card_patience: 2 });
+    expect(buildPlan(base, { "rlhf.card_patience": "0" }, "")).toMatchObject({ error: expect.stringContaining("Rounds without a better report card") });
   });
 });
 

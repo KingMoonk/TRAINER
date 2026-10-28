@@ -340,7 +340,8 @@ def restore_answers(job, context, emit, stop, pause):
 def rlhf_loop(job, context, emit, stop, pause):
     """The automated RLHF loop (studio_loop): rounds until a stop rule, resumable from its folder (params["output_dir"])."""
     import studio_loop
-    studio_loop.run_job(job, context, emit, stop, pause)
+    summary = studio_loop.run_job(job, context, emit, stop, pause)
+    job.params["result"] = studio_loop.phase_result(summary)   # (what an Auto Run's rlhf phase reads)
 
 
 def training_stage(job, context, emit, stop, pause):

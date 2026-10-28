@@ -399,6 +399,92 @@ class RealPipeline(unittest.TestCase):
             self.assertIn("bpc", entry["after"])
 
 
+def entry(value, low, high, items=40):
+    return {"value": value, "band": [low, high], "items": items, "method": "scripted"}
+
+
+def card_of(**entries):
+    return {"suite": "suite-1", "entries": entries}
+
+
+def scripted_card(table):
+    """card(path) from {round number: card}; the starting model is round 0."""
+    def card(path):
+        return table[int(path.split("round_")[1][:4]) if "round_" in path else 0]
+    return card
+
+
+class ReportCard(LoopCase):
+    GOOD = {0: {"bpc": 2.0, "pass_k": 5}, **{n: {"bpc": 2.0 - .05 * n, "pass_k": 5 + n} for n in range(1, 10)}}
+
+    def test_a_round_the_judge_likes_is_rolled_back_when_a_report_card_entry_falls_past_its_noise_band(self):
+        cards = {0: card_of(checked_accuracy=entry(.7, .6, .8), choice_accuracy=entry(.5, .4, .6)),
+                 1: card_of(checked_accuracy=entry(.7, .6, .8), choice_accuracy=entry(.2, .1, .3))}   # multiple choice fell, clearly
+        self.run_loop(scripted_measure(self.GOOD), win_rates({1: .9}), config={"max_rounds": 1}, card=scripted_card(cards))
+        round_one = self.journal()[0]
+        self.assertEqual(round_one["status"], "rolled_back")
+        self.assertGreaterEqual(round_one["judge"]["win_rate"], round_one["judge"]["needed"])   # the judge said yes
+        failed = [c["name"] for c in round_one["checks"] if c["ok"] is False]
+        self.assertEqual(failed, ["Report card: multiple-choice accuracy did not clearly fall"])
+        self.assertIn("report card", round_one["reason"])
+
+    def test_a_fall_inside_the_noise_band_does_not_roll_a_round_back(self):
+        cards = {0: card_of(checked_accuracy=entry(.7, .5, .9)), 1: card_of(checked_accuracy=entry(.6, .4, .8))}
+        self.run_loop(scripted_measure(self.GOOD), win_rates({1: .9}), config={"max_rounds": 1}, card=scripted_card(cards))
+        self.assertEqual(self.journal()[0]["status"], "kept")
+
+    def test_without_a_card_the_gate_is_as_before(self):
+        self.run_loop(scripted_measure(self.GOOD), win_rates({1: .9}), config={"max_rounds": 1}, card=lambda path: None)
+        entry_one = self.journal()[0]
+        self.assertEqual(entry_one["status"], "kept")
+        self.assertFalse(any(c["name"].startswith("Report card") for c in entry_one["checks"]))
+
+    def test_the_loop_stops_when_the_card_stops_improving_for_n_rounds(self):
+        better = card_of(checked_accuracy=entry(.9, .8, 1.))
+        cards = {0: card_of(checked_accuracy=entry(.5, .4, .6)), 1: better, 2: better, 3: better, 4: better}   # it flattens after round 1
+        result = self.run_loop(scripted_measure(self.GOOD), win_rates({n: .9 for n in range(1, 10)}),
+                               config={"max_rounds": 9, "patience": 9, "card_patience": 2}, card=scripted_card(cards))
+        journal = self.journal()
+        self.assertEqual([j["status"] for j in journal], ["kept", "kept", "kept"])   # the gate kept them: nothing got worse
+        self.assertEqual([j["card_streak"] for j in journal], [0, 1, 2])
+        self.assertEqual(journal[0]["card"]["improved"], ["checked-answer pass rate"])
+        self.assertEqual(result["status"], "finished")
+        self.assertIn("report card has not clearly improved for 2 rounds", result["stop_reason"])
+
+    def test_a_rolled_back_round_counts_toward_the_cards_patience(self):
+        cards = {0: card_of(checked_accuracy=entry(.7, .6, .8)), **{n: card_of(checked_accuracy=entry(.1, 0., .2)) for n in range(1, 10)}}
+        result = self.run_loop(scripted_measure(self.GOOD), win_rates({n: .9 for n in range(1, 10)}),
+                               config={"max_rounds": 9, "patience": 9, "card_patience": 2}, card=scripted_card(cards))
+        self.assertEqual([j["status"] for j in self.journal()], ["rolled_back", "rolled_back"])
+        self.assertIn("report card", result["stop_reason"])
+
+    def test_the_card_is_measured_for_the_starting_model_once_and_survives_a_restart(self):
+        asked = []
+        cards = {0: card_of(checked_accuracy=entry(.5, .4, .6)), 1: card_of(checked_accuracy=entry(.9, .8, 1.))}
+
+        def card(path):
+            asked.append(path)
+            return scripted_card(cards)(path)
+        self.run_loop(scripted_measure(self.GOOD), win_rates({1: .9}), config={"max_rounds": 1}, card=card)
+        self.run_loop(scripted_measure(self.GOOD), win_rates({1: .9}), config={"max_rounds": 1}, card=card)
+        self.assertEqual(len(asked), 2)   # the start once, round 1 once; the second call found the loop finished
+        self.assertEqual(studio_loop.load_state(self.dir)["current_card"], studio_loop.card_entries(cards[1]))
+
+    def test_the_phase_result_an_auto_run_reads(self):
+        cards = {0: card_of(checked_accuracy=entry(.5, .4, .6)), 1: card_of(checked_accuracy=entry(.9, .8, 1.))}
+        summary = self.run_loop(scripted_measure(self.GOOD), win_rates({1: .9}), config={"max_rounds": 1}, card=scripted_card(cards))
+        result = studio_loop.phase_result(summary)
+        self.assertTrue(result["ok"])
+        self.assertEqual((result["kept"], result["checkpoint"]), (1, summary["current"]))
+        self.assertEqual(result["rounds"][0]["card_better"], ["checked-answer pass rate"])
+        self.assertTrue(json.dumps(result))
+        nothing = studio_loop.phase_result({"status": "finished", "kept": 0, "current": "x", "stop_reason": "Done.", "rounds": []})
+        self.assertTrue(nothing["ok"])
+        self.assertNotIn("checkpoint", nothing)
+        exploited = studio_loop.phase_result({"status": "finished", "kept": 0, "stop_reason": "Suspected judge exploitation: ...", "rounds": []})
+        self.assertFalse(exploited["ok"])
+
+
 class Job(unittest.TestCase):
     def test_the_job_kind_is_registered_and_runs_the_loop(self):
         self.assertIn("rlhf_loop", studio_jobs.HANDLERS)

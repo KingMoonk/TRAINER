@@ -4275,7 +4275,7 @@ export interface components {
         };
         /**
          * AutoRunPhasePlan
-         * @description One phase of a plan. kind: data | pretrain | midtrain | sft | rlvr | distill | dpo, each at most once, in that order.
+         * @description One phase of a plan. kind: data | pretrain | midtrain | sft | rlvr | distill | dpo | rlhf, each at most once, in that order.
          *     on_pass: continue | pause. on_fail: pause | stop | skip. `settings` are the phase's own (the pretraining or round settings).
          */
         AutoRunPhasePlan: {

@@ -360,5 +360,92 @@ class ControllerTests(Base):
         self.assertEqual(self.state().get("choices", []), [])
 
 
+class RlhfPhaseTests(Base):
+    """The last phase: the RLHF loop run inside a tiny Auto Run with a scripted judge, measure and report card (no model, no network)."""
+
+    def setUp(self):
+        super().setUp()
+        self.loop_dir = Path(self.tmp.name) / "loops"
+        self.start = Path(self.tmp.name) / "start.npz"
+        self.start.write_text("weights", encoding="utf-8")
+        self.services._versions[0].best_checkpoint = str(self.start)
+
+    def run_the_job(self, job, table, rates, cards, **config):
+        """What the worker does with the queued rlhf_loop job: run studio_loop on its params, keep its result in the job."""
+        import studio_loop
+        from tests import test_loop as t
+        p = job.params
+        summary = studio_loop.run_loop(self.loop_dir / p["loop_id"], p["checkpoint"], t.ROWS, t.FakeJudge(), {**t.CONFIG, **p["config"], **config},
+                                       loop_id=p["loop_id"], version=p["version"], measure=t.scripted_measure(table), band=lambda ckpt, docs: None,
+                                       trainer=t.fake_trainer(), versus=t.win_rates(rates), card=t.scripted_card(cards) if cards else None,
+                                       collector=lambda *a, **k: __import__("studio_loop").collect(*a, model=t.ScriptedModel(), **k))
+        job.params["result"] = studio_loop.phase_result(summary)
+        return summary
+
+    def test_the_loop_starts_from_the_sft_phases_best_and_keeps_and_rolls_back_as_the_gate_says(self):
+        from tests import test_loop as t
+        start_ck = str(self.start)
+        self.go(plan_of(("sft", "rlhf")))
+        self.end("run1-0-1", result={"ok": True, "checkpoint": start_ck})
+        job = self.services.find_job("run1-1-1")
+        self.assertEqual((job.kind, job.params["checkpoint"], job.params["loop_id"], job.params["auto_run"]), ("rlhf_loop", start_ck, "run1-rlhf", "run1"))
+        table = {0: {"bpc": 2.0, "pass_k": 5}, 1: {"bpc": 1.9, "pass_k": 7},   # round 1 is better
+                 2: {"bpc": 1.85, "pass_k": 8},                                 # round 2 is better on the held-back data and the judge, but ...
+                 3: {"bpc": 1.8, "pass_k": 9}}
+        flat, good = t.card_of(checked_accuracy=t.entry(.5, .4, .6)), t.card_of(checked_accuracy=t.entry(.9, .8, 1.))
+        worse = t.card_of(checked_accuracy=t.entry(.1, 0., .2))
+        cards = {0: flat, 1: good, 2: worse, 3: good}          # ... the report card fell clearly in round 2 and was flat in round 3
+        self.services.adopt_loop = lambda loop_id: {"round": 5, "ok": True, "verdict": f"Adopted {loop_id}.", "checkpoint": ""}
+        self.run_the_job(job, table, {1: .9, 2: .9, 3: .9}, cards, max_rounds=9, patience=9, card_patience=2)
+        self.end(job.id)
+        phase = self.phase("rlhf")
+        self.assertEqual((phase["status"], self.state()["status"]), ("passed", "done"))
+        rounds = phase["result"]["rounds"]
+        self.assertEqual([r["status"] for r in rounds], ["kept", "rolled_back", "kept"])
+        self.assertEqual(rounds[0]["status"], "kept")
+        self.assertEqual(rounds[1]["status"], "rolled_back")
+        self.assertIn("report card", rounds[1]["reason"])       # the judge liked it; the card said no
+        self.assertIn("report card has not clearly improved", phase["result"]["stop_reason"])   # round 3 did not beat round 1: stopped
+        self.assertEqual(phase["checkpoint"], phase["result"]["checkpoint"])
+        self.assertEqual(phase["result"]["verdict"], "Adopted run1-rlhf.")
+
+    def test_a_loop_whose_best_fails_the_full_check_fails_the_phase_and_keeps_no_checkpoint(self):
+        self.go(plan_of(("rlhf",)))
+        job = self.services.find_job("run1-0-1")
+        self.assertEqual(job.params["checkpoint"], str(self.start))        # no sft phase: the version's best
+        self.run_the_job(job, {0: {"bpc": 2.0, "pass_k": 5}, 1: {"bpc": 1.9, "pass_k": 7}}, {1: .9}, {}, max_rounds=1)
+        self.services.adopt_loop = lambda loop_id: {"round": 5, "ok": False, "verdict": "Worse on all the held-back data.", "checkpoint": ""}
+        self.end(job.id)
+        self.assertEqual((self.phase("rlhf")["status"], self.state()["status"]), ("failed", "paused"))
+        self.assertIn("Worse on all the held-back data.", self.phase("rlhf")["error"])
+        self.assertIsNone(self.phase("rlhf")["checkpoint"])
+
+    def test_a_loop_that_kept_nothing_passes_without_a_checkpoint(self):
+        self.go(plan_of(("rlhf",)))
+        job = self.services.find_job("run1-0-1")
+        self.run_the_job(job, {0: {"bpc": 2.0, "pass_k": 5}, 1: {"bpc": 2.0, "pass_k": 5}}, {1: .5}, {}, max_rounds=1)
+        self.end(job.id)
+        self.assertEqual((self.phase("rlhf")["status"], self.state()["status"]), ("passed", "done"))
+        self.assertIsNone(self.phase("rlhf")["checkpoint"])
+
+    def test_the_plan_gives_the_loop_its_config_and_refuses_a_bad_one(self):
+        plan = plan_of(("rlhf",))
+        plan["phases"][0]["settings"] = {"max_rounds": 6, "card_patience": 2, "prompts_per_round": 12}
+        self.go(plan)
+        self.assertEqual(self.services.find_job("run1-0-1").params["config"], {"max_rounds": 6, "card_patience": 2, "prompts_per_round": 12})
+        bad = plan_of(("rlhf",), run="run2")
+        bad["phases"][0]["settings"] = {"card_patience": 0}
+        self.assertTrue(any("card_patience" in problem for problem in ar.validate(bad)))
+
+    def test_the_run_view_shows_the_rounds_so_far_while_the_loop_runs(self):
+        self.go(plan_of(("rlhf",)))
+        self.services._loops = [{"id": "run1-rlhf", "status": "running", "phase": "round 2: training", "kept": 1, "current": "x", "stop_reason": "",
+                                 "rounds": [{"round": 1, "status": "kept", "reason": "Kept.", "judge": {"win_rate": .8}, "checks": [], "card": {"improved": ["multiple-choice accuracy"]}}]}]
+        result = self.state()["phases"][-1]["result"]
+        self.assertEqual((result["rounds"][0]["status"], result["rounds"][0]["card_better"], result["verdict"], result["live"]),
+                         ("kept", ["multiple-choice accuracy"], "round 2: training", True))
+        self.assertIsNone(self.auto.runs["run1"]["state"]["phases"][-1]["result"])   # (never written to the run's state)
+
+
 if __name__ == "__main__":
     unittest.main()

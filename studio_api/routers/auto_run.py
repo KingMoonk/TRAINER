@@ -22,7 +22,7 @@ PhaseStatus = Literal["pending", "queued", "running", "passed", "failed", "skipp
 
 
 class AutoRunPhasePlan(BaseModel):
-    """One phase of a plan. kind: data | pretrain | midtrain | sft | rlvr | distill | dpo, each at most once, in that order.
+    """One phase of a plan. kind: data | pretrain | midtrain | sft | rlvr | distill | dpo | rlhf, each at most once, in that order.
     on_pass: continue | pause. on_fail: pause | stop | skip. `settings` are the phase's own (the pretraining or round settings)."""
     kind: str
     enabled: bool

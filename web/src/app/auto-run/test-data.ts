@@ -1,14 +1,15 @@
 // Builders for the Auto Run tests: a plan, a run in a given state, and its summary row.
 import type { PhaseState, Plan, RunSummary, RunView } from "./logic";
 
-const KINDS = ["data", "pretrain", "midtrain", "sft", "rlvr", "distill", "dpo"];
+const KINDS = ["data", "pretrain", "midtrain", "sft", "rlvr", "distill", "dpo", "rlhf"];
+const OFF = ["midtrain", "rlhf"];
 
 export const plan = (over: Partial<Plan> = {}): Plan => ({
   id: "",
   name: "Auto Run",
   version: 1,
   budget: { hours: 12 },
-  phases: KINDS.map((kind) => ({ kind, enabled: kind !== "midtrain", settings: {}, on_pass: "continue", on_fail: "pause" })),
+  phases: KINDS.map((kind) => ({ kind, enabled: !OFF.includes(kind), settings: {}, on_pass: "continue", on_fail: "pause" })),
   controller: {
     enabled: true,
     bounds: { learning_rate: { min: 1e-6, max: 1e-3 }, steps: { min: 10, max: 20000 }, beta: { min: 0.02, max: 0.5 }, kl: { min: 0, max: 0.2 } },
@@ -35,7 +36,7 @@ export function run(
       reason,
       choices: [],
       attempts: [],
-      phases: KINDS.map((kind) => ({ kind, status: kind === "midtrain" ? "skipped" : "pending", attempt: 1, error: "", ...phases[kind] }) as PhaseState),
+      phases: KINDS.map((kind) => ({ kind, status: OFF.includes(kind) ? "skipped" : "pending", attempt: 1, error: "", ...phases[kind] }) as PhaseState),
     },
     journal: [],
     progress: null,
