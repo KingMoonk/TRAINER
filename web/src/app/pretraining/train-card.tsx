@@ -1,16 +1,20 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
+import { runViewHref } from "@/app/runs/view/logic";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { api, unwrap } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Choice } from "./cards";
 import { T, fill } from "./copy";
-import { LENGTHS, STOP_WHEN_FLAT, errorText, lrLine, modeTexts, queueNote, stepsLine, type Length, type Plan, type PlanBody, type StopWhenFlat } from "./logic";
+import { LENGTHS, STOP_WHEN_FLAT, errorText, lrLine, modeTexts, poolLines, queueNote, stepsLine, type Length, type Plan, type PlanBody, type StopWhenFlat } from "./logic";
 import { optionBox } from "@/components/option-box";
 
 /** Continue or start over, how long, and Add to the queue: the job is the one the server's plan built. While the size of the text is
@@ -38,20 +42,33 @@ export function TrainCard({
 }) {
   const queryClient = useQueryClient();
   const [jobId, setJobId] = useState<string | null>(null);
+  const [runId, setRunId] = useState<string | null>(null);
+  const [solo, setSolo] = useState(false);
+  // The machines a start would train on, asked of the server (it surveys the Machines list): shown before Start is pressed.
+  const pool = useQuery({
+    queryKey: ["pretraining", "pool", body, plan?.version, solo],
+    queryFn: () => unwrap(api.POST("/pretraining/pool", { body: { ...body, version: plan!.version, solo } })),
+    enabled: !!plan && plan.version !== null && body.dataset_ids.length > 0,
+    placeholderData: keepPreviousData,
+    staleTime: 15_000,
+  });
   const add = useMutation({
     mutationFn: () => unwrap(api.POST("/queue/jobs", { body: { ...plan!.job!, note: "" } })),
     onSuccess: (job) => {
       setJobId(job.id);
+      setRunId(null);
       toast.success(fill(T.added, { label: job.label }));
       queryClient.invalidateQueries({ queryKey: ["queue"] });
     },
     onError: (error) => toast.error(errorText(error)),
   });
   const start = useMutation({
-    mutationFn: () => unwrap(api.POST("/pretraining/start", { body: { ...body, version: plan!.version } })),
+    mutationFn: () => unwrap(api.POST("/pretraining/start", { body: { ...body, version: plan!.version, solo } })),
     onSuccess: (job) => {
       setJobId(job.id);
-      toast.success(fill(T.added, { label: job.label }));
+      setRunId(job.run_id ?? null);
+      toast.success(fill(job.run_id ? T.startedPooled : T.added, { label: job.label }));
+      if (job.note) toast.info(job.note);
       queryClient.invalidateQueries({ queryKey: ["queue"] });
     },
     onError: (error) => toast.error(errorText(error)),
@@ -59,6 +76,8 @@ export function TrainCard({
   // The only thing missing is the size of the text: the run may be added now, and waits in the queue until that is known.
   const sizeFirst = !!plan && !plan.can_add && plan.estimating && plan.version !== null;
   const busy = add.isPending || start.isPending;
+  const pooled = plan?.can_add && pool.data?.pooled === true;
+  const lines = pool.data ? poolLines(pool.data) : null;
   // When the job this page added starts; before one is added (or once it has left the queue), what adding one now would do.
   const outlook = useQuery({
     queryKey: ["queue", "outlook", jobId],
@@ -122,10 +141,34 @@ export function TrainCard({
           {T.scheduleLabel} {T.scheduleValue} {T.scheduleNote}
         </p>
         <div className="flex flex-col gap-2">
-          <div>
-            <Button disabled={!(plan?.can_add || sizeFirst) || busy} onClick={() => (plan?.can_add ? add.mutate() : start.mutate())}>
+          <div className="flex items-center gap-2" title={T.soloHint}>
+            <Switch id="pretrain-solo" checked={solo} onCheckedChange={setSolo} />
+            <Label htmlFor="pretrain-solo">{T.soloSwitch}</Label>
+          </div>
+          {lines && (
+            <div className="flex flex-col gap-0.5 text-sm" data-testid="pool">
+              <p data-testid="pool-line">{lines.lead}</p>
+              {lines.why && (
+                <p className="text-muted-foreground" data-testid="pool-why">
+                  {lines.why}
+                </p>
+              )}
+              {lines.leftOut.map((text) => (
+                <p key={text} className="text-muted-foreground" data-testid="pool-left-out">
+                  {text}
+                </p>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center gap-3">
+            <Button disabled={!(plan?.can_add || sizeFirst) || busy || (pool.isLoading && !sizeFirst)} onClick={() => (plan?.can_add && !pooled ? add.mutate() : start.mutate())}>
               {T.addQueue}
             </Button>
+            {runId && (
+              <Link href={runViewHref(runId)} className="text-sm text-highlight hover:underline" data-testid="open-run">
+                {T.openRun} ›
+              </Link>
+            )}
           </div>
           {sizeFirst ? (
             <p className="text-sm text-muted-foreground" data-testid="size-first">

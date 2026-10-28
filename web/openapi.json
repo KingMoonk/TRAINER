@@ -5153,6 +5153,29 @@
         "title": "LeaveRequest",
         "type": "object"
       },
+      "LeftOut": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node",
+          "address",
+          "reason"
+        ],
+        "title": "LeftOut",
+        "type": "object"
+      },
       "Leftover": {
         "properties": {
           "belongs_to": {
@@ -7561,6 +7584,11 @@
             "title": "Rows",
             "type": "integer"
           },
+          "solo": {
+            "default": false,
+            "title": "Solo",
+            "type": "boolean"
+          },
           "steps": {
             "anyOf": [
               {
@@ -7635,6 +7663,59 @@
           "min_gain"
         ],
         "title": "PlateauRule",
+        "type": "object"
+      },
+      "Pool": {
+        "description": "Which machines a start would train on. `pooled`: the run goes out as a distributed run on this computer plus `machines`;\notherwise it is a job on this computer alone and `reason` says why. `left_out` lists every listed machine that is not used.",
+        "properties": {
+          "left_out": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/LeftOut"
+            },
+            "title": "Left Out",
+            "type": "array"
+          },
+          "machines": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PoolMachine"
+            },
+            "title": "Machines",
+            "type": "array"
+          },
+          "pooled": {
+            "title": "Pooled",
+            "type": "boolean"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pooled"
+        ],
+        "title": "Pool",
+        "type": "object"
+      },
+      "PoolMachine": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node",
+          "address"
+        ],
+        "title": "PoolMachine",
         "type": "object"
       },
       "PostTrainingJobOut": {
@@ -15209,6 +15290,30 @@
           "label": {
             "title": "Label",
             "type": "string"
+          },
+          "machines": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Machines",
+            "type": "array"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
           }
         },
         "required": [
@@ -22373,6 +22478,48 @@
           }
         },
         "summary": "Pretrain Plan",
+        "tags": [
+          "pretraining"
+        ]
+      }
+    },
+    "/pretraining/pool": {
+      "post": {
+        "description": "The machines a start with these answers would train on, before it is pressed: the Pretraining page lists them beside Start.\nAsks every listed machine (a few seconds when one is slow); nothing is queued.",
+        "operationId": "pretrain_pool_pretraining_pool_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pool"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pretrain Pool",
         "tags": [
           "pretraining"
         ]
