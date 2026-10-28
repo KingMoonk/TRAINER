@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect } from "react";
 import { toast } from "sonner";
 import { isCluster, useCluster } from "@/lib/cluster";
+import { Button } from "@/components/ui/button";
+import { T as RUNS_T } from "@/app/runs/copy";
 import { T } from "./copy";
 import { FailedCard } from "./failed-card";
 import { OtherMachinesCard, isElsewhere } from "./nodes";
@@ -20,13 +22,22 @@ export default function QueuePage() {
   const cluster = isCluster(merged) ? merged : undefined; // a cluster of one shows nothing about machines
   // A job still running on a machine that was removed from the list keeps its row (and its note), so the card stays for it.
   const others = cluster ?? (merged && merged.jobs.some(isElsewhere) ? merged : undefined);
+
   useEffect(() => {
     if (queue.isError) toast.error(T.couldNotLoad, { id: "queue-load" });
   }, [queue.isError]);
 
   return (
     <main className={PAGE_MAIN}>
-      <PageHeader title={T.title} lead={T.lead}>
+      <PageHeader
+        title={T.title}
+        lead={T.lead}
+        actions={
+          <Button asChild>
+            <Link href="/runs/new/">{RUNS_T.newRun}</Link>
+          </Button>
+        }
+      >
         {cluster && (
           <p className="text-sm text-muted-foreground">
             {T.trainingTip} <Link href="/cluster/training" className="underline underline-offset-2" data-testid="queue-training-link">{T.trainingLink}</Link>

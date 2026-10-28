@@ -56,6 +56,13 @@ class PoolTests(ApiCase):
         self.assertEqual(job.params["datasets"], ["Your files"])
         self.assertEqual(self.client.get(f"/distributed/runs/{job.id}").json()["id"], job.id)
 
+    def test_start_with_ready_and_busy_peer_includes_both_for_auto_join(self):
+        self.nodes("box", "busy")
+        self.call("POST", "/pretraining/start", 202, json=BODY)
+        job = self.services.queue().up_next[-1]
+        self.assertEqual(job.kind, "pretrain_distributed")
+        self.assertEqual([m["address"] for m in job.params["machines"]], ["local", "box", "busy"])
+
     def test_with_no_eligible_peer_start_queues_the_solo_job_and_says_why(self):
         self.nodes("old", "new")
         pool = self.call("POST", "/pretraining/pool", json=BODY)
