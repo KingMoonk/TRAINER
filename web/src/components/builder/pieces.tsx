@@ -33,7 +33,7 @@ export function Pieces({ v }: { v: number }) {
       ) : view.note ? (
         <p className="text-xs text-muted-foreground">{view.note}</p>
       ) : (
-        <ul className="flex flex-wrap gap-1" aria-label="The example sentence in pieces">
+        <ul className="flex flex-wrap gap-1" aria-label="The example sentence tokens">
           {view.chips.map((chip, i) => (
             <li
               key={i}

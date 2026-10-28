@@ -106,9 +106,9 @@ GLOSSARY = {
     "output_head": ("Output head (word scores)", "Turns the last block's numbers into a score for every entry in the word list; the highest scores are the likeliest next pieces."),
     "tied_head": ("Tied head", "Reuses the token table (embedding) backwards to score words, so it adds no parameters. The usual choice for small models."),
     "untied_head": ("Untied head", "A separate table for scoring words. More parameters, and the reading and writing tables can specialise; bigger models sometimes prefer it."),
-    "bytes": ("Bytes", "Each byte of text is one piece: 256 entries, any language or emoji works, nothing is ever unknown. Texts become long, so each step covers less text."),
-    "bpe": ("BPE (byte-pair encoding)", "Builds a vocabulary by repeatedly merging the most common neighbouring pieces, so frequent words become one piece and rare ones split into parts. Shorter texts than bytes, still nothing unknown."),
-    "gpt2_bpe": ("GPT-2 BPE", "The 50,257-piece byte-level BPE vocabulary GPT-2 was trained with. Short texts, but a larger word table."),
+    "bytes": ("Bytes", "Each byte of text is one token: 256 entries, any language or emoji works, nothing is ever unknown. Sequences become longer, so each step covers less text."),
+    "bpe": ("Byte-Level BPE", "Learned Byte-Pair Encoding with frontier GPT-4 / Llama 3 regex pre-tokenization. Compact, custom vocabulary fitted directly on your text with zero unknown tokens."),
+    "gpt2_bpe": ("GPT-2 BPE", "OpenAI's pretrained 50,257-token Byte-Level BPE vocabulary with standard regex pre-tokenization."),
     # ---- align
     "rlhf": ("Feedback training (RLHF)", "Improving a model by telling it which of its answers are better. It polishes a model that already writes sensible text; it cannot teach language from scratch."),
     "dpo": ("DPO", "Direct Preference Optimization: a training method that makes the preferred reply more likely and the rejected reply less likely, using pairs of answers you ranked."),

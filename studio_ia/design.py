@@ -65,7 +65,7 @@ T = {
     "preset_speed_measured_one": "Measured on this computer: only the {device} could be timed ({speed:,.0f} tokens/s); one step takes {step}.",
     "preset_slow": "Very slow: the {steps:,} steps of a catch-up take {total}.",
     "recipe_change": "training recipe: {recipe}",
-    "compute_supports": "Your text supports about {supported} parameters at {rule} word pieces each; this design has {params}",
+    "compute_supports": "Your text supports about {supported} parameters at {rule} tokens each; this design has {params}",
     "compute_under": ", far more than your text can train: a smaller design or more text would do better.",
     "compute_repeats": ", so your text would be repeated to train it fully.",
     "compute_reread": ", so training it fully reads your text about {times} times. Up to about {most} times works nearly as well as fresh text.",
@@ -73,7 +73,7 @@ T = {
     "compute_roomy": ", so your text could train a bigger one.",
     "compute_steps": "Suggested length: about {steps:,} steps of {rows} rows ({passes} over your text).",
     "compute_time": " At this computer's speed that is {time}.",
-    "compute_repeat": "Reaching {rule} word pieces per parameter would mean reading your text {times} times. Past about {most} times, repeating it adds little.",
+    "compute_repeat": "Reaching {rule} tokens per parameter would mean reading your text {times} times. Past about {most} times, repeating it adds little.",
     "compute_counting": "Counting your text…",
     "compute_none": "Add some text in Your data to see how much this design needs.",
     "lr_result": "Suggested learning rate: {rate}. The error fell fastest near {steepest}, and the suggestion is a tenth of that. This design uses {current}.",
@@ -153,7 +153,7 @@ T = {
     # where the parameters go (#83)
     # guided experiments (#83)
     "exp_heads": "Do more look-back heads help?",
-    "exp_words": "Letters vs words",
+    "exp_words": "Bytes vs BPE",
     "exp_depth": "Is depth or width better?",
     "exp_try_heads": "Try it",
     "exp_try_words": "Try it",

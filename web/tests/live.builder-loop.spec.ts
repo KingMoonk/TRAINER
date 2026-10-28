@@ -31,7 +31,7 @@ test("the example sentence is cut into pieces and every word list is counted", a
   await seed(page, request);
   await page.goto("/builder/");
   const card = page.getByTestId("pieces");
-  await expect(card.getByTestId("pieces-count")).toContainText("pieces");
+  await expect(card.getByTestId("pieces-count")).toContainText("tokens");
   await expect(card.getByRole("list").getByRole("listitem").first()).toBeVisible();
 });
 
