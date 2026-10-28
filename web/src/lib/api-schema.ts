@@ -7347,6 +7347,11 @@ export interface components {
              * @default []
              */
             machines: components["schemas"]["PoolMachine"][];
+            /**
+             * Pending
+             * @default false
+             */
+            pending: boolean;
             /** Pooled */
             pooled: boolean;
             /**

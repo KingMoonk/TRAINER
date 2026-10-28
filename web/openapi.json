@@ -7708,6 +7708,11 @@
             "title": "Machines",
             "type": "array"
           },
+          "pending": {
+            "default": false,
+            "title": "Pending",
+            "type": "boolean"
+          },
           "pooled": {
             "title": "Pooled",
             "type": "boolean"

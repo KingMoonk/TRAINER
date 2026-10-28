@@ -90,6 +90,7 @@ export const T = {
   soloHint: "Off: the machines on your Machines list that are ready train this run together with this computer.",
   poolWith: "Trains on this computer and {machines}.",
   poolAlone: "Trains on this computer only.",
+  poolPending: "Waiting to see which machines can join.",
   poolLeftOut: "Left out: {reason}",
   openRun: "Open the run",
   startedPooled: "Started across machines: {label}",

@@ -485,6 +485,7 @@ class Pool(BaseModel):
     machines: list[PoolMachine] = []
     left_out: list[LeftOut] = []
     reason: str = ""
+    pending: bool = False  # the size of the text is still being worked out: the run pools or stays on this computer once it is known
 
 
 SOLO_REASON = "You chose to train on this computer only."
@@ -503,8 +504,13 @@ def _pool(services, body: PlanRequest, made: PretrainPlan, peer_url: str):
         return Pool(pooled=False, left_out=[LeftOut(**row) for row in left_out], reason=reason), None
     if body.solo:
         return alone(SOLO_REASON)
+    if not services.setting("nodes", []):
+        return alone("No other machine is on the Machines list.")
+    if not peer_url:
+        return alone("The other machines cannot reach this computer: set TRAINER_NODE_ADDRESS or serve it with Tailscale.")
     if made.estimating:
-        return alone("The size of the text is still being worked out, so this run starts on this computer alone.")
+        return (Pool(pooled=False, pending=True, reason="Once it is, this run joins the machines that are ready, "
+                                                      "or trains on this computer alone if none can."), None)
     if not made.can_add or made.version is None:
         return alone(made.reason)
     start = None
@@ -513,10 +519,6 @@ def _pool(services, body: PlanRequest, made: PretrainPlan, peer_url: str):
         if start is None or not start.same_design:
             return alone(f"Version {made.continue_from} has another design than this version, so only some of its weights carry over. "
                          "That catch-up trains on this computer; a run across machines copies every weight or starts over.")
-    if not services.setting("nodes", []):
-        return alone("No other machine is on the Machines list.")
-    if not peer_url:
-        return alone("The other machines cannot reach this computer: set TRAINER_NODE_ADDRESS or serve it with Tailscale.")
     inner = min(studio_diloco.default_inner_steps(True), made.steps)
     rounds = max(1, made.steps // inner)
     rule = made.plateau
@@ -684,6 +686,31 @@ def pretrain_prepare(body: PrepareRequest, request: Request, services: Services)
     return submit(request, "pretrain_prepare", work, PrepareJob)
 
 
+def _pooled_in_place(services, body: PlanRequest, ready: PretrainPlan, waiting_id: str, peer_url: str, port: int):
+    """The pooled run that took the place of the waiting size-placeholder `waiting_id` once its size is known (same spot in Up next), or
+    None when the run stays solo: this computer only, no eligible machine, a machine that changed since the survey, or the placeholder
+    having left the queue meanwhile."""
+    from studio_api.routers import distributed
+
+    waiting = list(services.queue().up_next)
+    index = next((i for i, job in enumerate(waiting) if job.id == waiting_id and job.params.get("sizing")), None)
+    if index is None:
+        return None
+    _, run = _pool(services, body, ready, peer_url)
+    if run is None:
+        return None
+    try:
+        pooled = distributed.build_run(run, services, peer_url, port)
+    except HTTPException:
+        return None
+    distributed.runs.open_run(pooled)
+    services.remove(waiting_id)
+    services.enqueue(pooled)
+    services.move(pooled.id, index)
+    services.start_queue()
+    return pooled
+
+
 @router.post("/start", status_code=202)
 def pretrain_start(body: PlanRequest, request: Request, services: Services) -> Started:
     """Add the run the plan builds for these answers to the queue now, even while the size of the chosen text is still being worked
@@ -722,6 +749,7 @@ def pretrain_start(body: PlanRequest, request: Request, services: Services) -> S
     job = Job(id=uuid.uuid4().hex[:8], kind="pretrain", label=f"Version {made.version}, once the size of its text is known",
               created_at=time.time(), params={"sizing": True})
     added = services.enqueue(job) or job
+    peer_url, port = distributed._address_for_peers(request), request.url.port or studio_cluster.DEFAULT_PORT
 
     def work(stop):
         try:
@@ -737,6 +765,9 @@ def pretrain_start(body: PlanRequest, request: Request, services: Services) -> S
         except Exception as exc:
             services.fail_job(added.id, str(exc) or type(exc).__name__)
             raise
+        pooled = _pooled_in_place(services, body, ready, added.id, peer_url, port)
+        if pooled is not None:
+            return {"id": pooled.id, "label": pooled.label}
         services.fill_job(added.id, ready.job.label, ready.job.params)
         return {"id": added.id, "label": ready.job.label}
     submit(request, "pretrain_start", work, StartJob, own_thread=True)  # not behind a slow read: the run waits in the queue for this

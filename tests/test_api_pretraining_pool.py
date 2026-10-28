@@ -1,6 +1,8 @@
 """The Pretraining page pools the machines that are ready by default: POST /pretraining/pool lists them, /start queues a distributed
 run with them, "this computer only" and the lack of any eligible machine keep a solo job, and Auto Run's pretrain phase does the same."""
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -11,7 +13,7 @@ import studio_cluster
 import studio_distributed as runs
 import studio_diloco
 from studio_api.routers.pretraining import auto_run_pretrain
-from studio_ia.services import FakeServices
+from studio_ia.services import FakeServices, Job
 from studio_spec import default_spec
 
 from tests.sse_harness import ApiCase
@@ -80,6 +82,58 @@ class PoolTests(ApiCase):
         self.assertEqual((pool["pooled"], pool["reason"]), (False, "No other machine is on the Machines list."))
         self.call("POST", "/pretraining/start", 202, json=BODY)
         self.assertEqual(self.services.queue().up_next[-1].kind, "pretrain")
+
+    def while_sizing(self):
+        """Start with the size of the text unknown: the placeholder job waits (in second place) until `release` is set."""
+        known, preview, release = {}, self.services.pretrain_preview, threading.Event()
+
+        def slow(ids, rows=16, progress=None):
+            self.assertTrue(release.wait(10))
+            return known.setdefault(tuple(ids), preview(ids, rows))
+        self.services.cached_preview = lambda ids, rows=16: known.get(tuple(ids))
+        self.services.pretrain_preview = slow
+        return release
+
+    def until(self, check, what):
+        end = time.monotonic() + 10
+        while not check():
+            self.assertLess(time.monotonic(), end, f"waited for {what}")
+            time.sleep(0.02)
+
+    def test_a_run_added_while_the_size_is_worked_out_is_pooled_in_the_placeholders_place(self):
+        self.nodes("box")
+        release = self.while_sizing()
+        pool = self.call("POST", "/pretraining/pool", json=BODY)
+        self.assertEqual((pool["pooled"], pool["pending"]), (False, True))
+        self.assertIn("Once it is, this run joins the machines that are ready", pool["reason"])
+        self.services.enqueue(Job(id="first", kind="other", label="first", created_at=0))
+        started = self.call("POST", "/pretraining/start", 202, json=BODY)
+        placeholder = next(j for j in self.services.queue().up_next if j.id == started["id"])
+        self.assertEqual(placeholder.params, {"sizing": True})
+        release.set()
+        self.until(lambda: all(j.id != started["id"] for j in self.services.queue().up_next), "the placeholder to be replaced")
+        up_next = self.services.queue().up_next
+        self.assertEqual([j.kind for j in up_next], ["other", "pretrain_distributed"])
+        self.assertEqual([m["address"] for m in up_next[1].params["machines"]], ["local", "box"])
+        self.assertEqual(self.client.get(f"/distributed/runs/{up_next[1].id}").json()["id"], up_next[1].id)
+
+    def test_a_run_added_while_the_size_is_worked_out_stays_solo_without_an_eligible_machine(self):
+        self.nodes("old")
+        release = self.while_sizing()
+        started = self.call("POST", "/pretraining/start", 202, json=BODY)
+        release.set()
+        queued = next(j for j in self.services.queue().up_next if j.id == started["id"])
+        self.until(lambda: "config" in queued.params, "the run's steps")
+        self.assertEqual(queued.kind, "pretrain")
+
+    def test_this_computer_only_keeps_the_placeholder_solo(self):
+        self.nodes("box")
+        release = self.while_sizing()
+        started = self.call("POST", "/pretraining/start", 202, json={**BODY, "solo": True})
+        release.set()
+        queued = next(j for j in self.services.queue().up_next if j.id == started["id"])
+        self.until(lambda: "config" in queued.params, "the run's steps")
+        self.assertEqual(queued.kind, "pretrain")
 
     def test_this_computer_only_forces_a_solo_job(self):
         self.nodes("box")
