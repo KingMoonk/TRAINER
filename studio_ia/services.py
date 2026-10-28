@@ -3936,11 +3936,14 @@ class WorkspaceServices(Services):
 
         def make():
             run = Path(v.best_checkpoint).parent
-            tok = self._tokenizer(run)
-            train = _run_docs(run)
-            scores = self._held_scores(best.best_checkpoint) if best and best.best_checkpoint else None
-            return {"uniform_bpc": studio_eval.uniform_bpc(tok, docs), "unigram_bpc": studio_eval.unigram_bpc(tok, train or docs, eval_docs=docs),
-                    "best_so_far_bpc": None if scores is None else studio_eval.corpus_bpc(scores)}
+            try:
+                tok = self._tokenizer(run)
+                train = _run_docs(run)
+                scores = self._held_scores(best.best_checkpoint) if best and best.best_checkpoint else None
+                return {"uniform_bpc": studio_eval.uniform_bpc(tok, docs), "unigram_bpc": studio_eval.unigram_bpc(tok, train or docs, eval_docs=docs),
+                        "best_so_far_bpc": None if scores is None else studio_eval.corpus_bpc(scores)}
+            except (ValueError, KeyError):
+                return out
         key = ("refs", v.best_checkpoint, best.best_checkpoint if best else None, (best.scorecard or {}).get("bpc") if best else None,
                self._heldout_stamp())
         return self._cached(key, make)
@@ -3956,8 +3959,11 @@ class WorkspaceServices(Services):
         if any((run / n).exists() for n in ("best.npz", "last.npz")):
             def chars_per_piece():  # once per run: the held-back text (or a bounded slice of the run's own text) is read only here
                 docs = self._heldout() or _run_docs(run)
-                tok = self._cached(("tok", str(run)), lambda: self._tokenizer(run))
-                return sum(map(len, docs)) / max(1, sum(len(tok.encode(d)) for d in docs)) if docs else 1.0
+                try:
+                    tok = self._cached(("tok", str(run)), lambda: self._tokenizer(run))
+                    return sum(map(len, docs)) / max(1, sum(len(tok.encode(d)) for d in docs)) if docs else 1.0
+                except (ValueError, KeyError):
+                    return 1.0
             cpp = self._cached(("cpp", str(run), self._heldout_stamp()), chars_per_piece)
         bits = lambda nats: nats / LN2 / cpp  # noqa: E731
         steps = [(r["step"], bits(r["loss"])) for r in rows]
