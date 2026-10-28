@@ -323,12 +323,56 @@
             "default": true,
             "title": "Enabled",
             "type": "boolean"
+          },
+          "max_cycles": {
+            "default": 1,
+            "title": "Max Cycles",
+            "type": "integer"
           }
         },
         "required": [
           "bounds"
         ],
         "title": "AutoRunController",
+        "type": "object"
+      },
+      "AutoRunCycleDecision": {
+        "description": "What the controller decided after a cycle's last phase (the rlhf loop): start another cycle, or finish. Evidence: stop_reason, kept,\nrounds, card_better, cycle, max_cycles, bigger_design_proposed.",
+        "properties": {
+          "cycle": {
+            "title": "Cycle",
+            "type": "integer"
+          },
+          "decision": {
+            "title": "Decision",
+            "type": "string"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Evidence",
+            "type": "object"
+          },
+          "phases": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Phases",
+            "type": "array"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cycle",
+          "decision",
+          "why"
+        ],
+        "title": "AutoRunCycleDecision",
         "type": "object"
       },
       "AutoRunJobProgress": {
@@ -679,6 +723,11 @@
             ],
             "title": "Current"
           },
+          "cycle": {
+            "default": 1,
+            "title": "Cycle",
+            "type": "integer"
+          },
           "deadline": {
             "anyOf": [
               {
@@ -689,6 +738,14 @@
               }
             ],
             "title": "Deadline"
+          },
+          "decisions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AutoRunCycleDecision"
+            },
+            "title": "Decisions",
+            "type": "array"
           },
           "id": {
             "title": "Id",

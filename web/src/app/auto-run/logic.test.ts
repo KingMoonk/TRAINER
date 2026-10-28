@@ -1,6 +1,22 @@
 import { describe, expect, test } from "vitest";
-import { PHASES, boundTexts, buildPlan, budgetText, checkText, controls, defaultVersion, errorText, keptRound, loopRounds, pickRun, progressLine, resultChecks, roundText, settingTexts, timelinePhases, valueText, when } from "./logic";
+import { PHASES, boundTexts, buildPlan, budgetText, checkText, controls, cyclesText, parseCycles, defaultVersion, errorText, keptRound, loopRounds, pickRun, progressLine, resultChecks, roundText, settingTexts, timelinePhases, valueText, when } from "./logic";
 import { plan, run, summary } from "./test-data";
+
+describe("the cycle limit", () => {
+  test("is read from the plan, defaults to one and is written back into the controller", () => {
+    expect(cyclesText(plan())).toBe("1");
+    const built = buildPlan(plan(), {}, "", boundTexts(plan()), "3");
+    expect(built).toMatchObject({ plan: { controller: { max_cycles: 3 } } });
+  });
+
+  test("must be a whole number from 1 to 5", () => {
+    for (const bad of ["0", "6", "1.5", "", "x"]) {
+      expect(parseCycles(bad)).toBeNull();
+      expect(buildPlan(plan(), {}, "", boundTexts(plan()), bad)).toEqual({ error: "The most cycles must be a whole number from 1 to 5." });
+    }
+    expect(parseCycles("5")).toBe(5);
+  });
+});
 
 describe("buildPlan", () => {
   test("keeps the plan as it is when nothing was typed, and takes the budget from its text", () => {

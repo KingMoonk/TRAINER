@@ -12,6 +12,7 @@ export type Progress = components["schemas"]["AutoRunJobProgress"];
 export type RunStatus = RunView["state"]["status"];
 export type Controller = components["schemas"]["AutoRunController"];
 export type Choice = components["schemas"]["AutoRunChoiceRecord"];
+export type CycleDecision = components["schemas"]["AutoRunCycleDecision"];
 
 /** The post-training round each phase runs (studio_ia/autorun.py ROUND). */
 export const ROUND: Record<string, number> = { sft: 1, rlvr: 2, distill: 3, dpo: 4 };
@@ -155,6 +156,18 @@ export function buildController(base: Controller, texts: BoundTexts): { controll
   return { controller: { ...base, bounds } };
 }
 
+/** The cycle limit the plan allows (studio_autotune.MAX_CYCLES) as the text the editor shows. */
+export const MAX_CYCLES = 5;
+export function cyclesText(plan: Plan): string {
+  return String(plan.controller?.max_cycles ?? 1);
+}
+
+/** The cycle limit read from text: a whole number from 1 to MAX_CYCLES, or null. */
+export function parseCycles(text: string): number | null {
+  const value = Number(text);
+  return text.trim() && Number.isInteger(value) && value >= 1 && value <= MAX_CYCLES ? value : null;
+}
+
 export function budgetText(plan: Plan): string {
   return plan.budget.hours == null ? "" : String(plan.budget.hours);
 }
@@ -163,7 +176,7 @@ export function budgetText(plan: Plan): string {
  * The plan the editor's choices make, or the sentence that says what to fix. A setting left empty is dropped so the server uses its default;
  * one outside what the server accepts is refused here rather than silently ignored.
  */
-export function buildPlan(base: Plan, texts: Record<string, string>, budget: string, bounds?: BoundTexts | null): { plan: Plan } | { error: string } {
+export function buildPlan(base: Plan, texts: Record<string, string>, budget: string, bounds?: BoundTexts | null, cycles?: string): { plan: Plan } | { error: string } {
   if (!base.name.trim()) return { error: T.needName };
   if (!base.phases.some((p) => p.enabled)) return { error: T.atLeastOne };
   let hours: number | null = null;
@@ -190,6 +203,11 @@ export function buildPlan(base: Plan, texts: Record<string, string>, budget: str
     const built = buildController(controller, bounds);
     if ("error" in built) return built;
     controller = built.controller;
+  }
+  if (controller && cycles !== undefined) {
+    const max = parseCycles(cycles);
+    if (max === null) return { error: fill(T.badCycles, { max: MAX_CYCLES }) };
+    controller = { ...controller, max_cycles: max };
   }
   return { plan: { ...base, name: base.name.trim(), budget: { hours }, phases, ...(controller ? { controller } : {}) } };
 }
@@ -218,6 +236,11 @@ export function valueText(value: number | null | undefined): string {
 /** The label of what a choice set, e.g. "Learning rate"; a design proposal is "Bigger design". */
 export function choiceLabel(choice: Choice): string {
   return choice.key === "design" ? T.biggerDesign : (BOUND_KEYS.find((b) => b.key === choice.key)?.label ?? choice.key);
+}
+
+/** What the controller decided after each cycle (another cycle or finish), oldest first, for the run page. */
+export function runDecisions(run: RunView): CycleDecision[] {
+  return run.state.decisions ?? [];
 }
 
 /** The choices the controller made, oldest first, for the run page. */

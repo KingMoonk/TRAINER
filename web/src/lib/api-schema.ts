@@ -4217,6 +4217,38 @@ export interface components {
              * @default true
              */
             enabled: boolean;
+            /**
+             * Max Cycles
+             * @default 1
+             */
+            max_cycles: number;
+        };
+        /**
+         * AutoRunCycleDecision
+         * @description What the controller decided after a cycle's last phase (the rlhf loop): start another cycle, or finish. Evidence: stop_reason, kept,
+         *     rounds, card_better, cycle, max_cycles, bigger_design_proposed.
+         */
+        AutoRunCycleDecision: {
+            /** Cycle */
+            cycle: number;
+            /** Decision */
+            decision: string;
+            /**
+             * Evidence
+             * @default {}
+             */
+            evidence: {
+                [key: string]: unknown;
+            };
+            /**
+             * Phases
+             * @default []
+             */
+            phases: {
+                [key: string]: unknown;
+            }[];
+            /** Why */
+            why: string;
         };
         /**
          * AutoRunJobProgress
@@ -4371,8 +4403,18 @@ export interface components {
             choices: components["schemas"]["AutoRunChoiceRecord"][];
             /** Current */
             current?: string | null;
+            /**
+             * Cycle
+             * @default 1
+             */
+            cycle: number;
             /** Deadline */
             deadline?: string | null;
+            /**
+             * Decisions
+             * @default []
+             */
+            decisions: components["schemas"]["AutoRunCycleDecision"][];
             /** Id */
             id: string;
             /** Phases */

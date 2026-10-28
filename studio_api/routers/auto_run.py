@@ -53,6 +53,7 @@ class AutoRunController(BaseModel):
     coefficient from what the last phases showed, inside `bounds`. enabled false: every phase runs with the plan's settings."""
     enabled: bool = True
     bounds: AutoRunBounds
+    max_cycles: int = 1  # the most cycles of the plan the run may start (1 to 5): after the last phase it may begin another, never past this
 
 
 class AutoRunPlanModel(BaseModel):
@@ -103,6 +104,16 @@ class AutoRunChoiceRecord(BaseModel):
     clamped: bool = False  # the value was held to a bound
 
 
+class AutoRunCycleDecision(BaseModel):
+    """What the controller decided after a cycle's last phase (the rlhf loop): start another cycle, or finish. Evidence: stop_reason, kept,
+    rounds, card_better, cycle, max_cycles, bigger_design_proposed."""
+    cycle: int
+    decision: str  # another | finish
+    why: str
+    evidence: dict = {}
+    phases: list[dict] = []  # for another: how the cycle's phases ended, before they were reset
+
+
 class AutoRunRunState(BaseModel):
     model_config = ConfigDict(extra="allow")
     id: str
@@ -114,6 +125,8 @@ class AutoRunRunState(BaseModel):
     updated: str | None = None
     phases: list[AutoRunPhaseState]
     choices: list[AutoRunChoiceRecord] = []  # what the parameter controller chose, oldest first, with the evidence
+    cycle: int = 1  # the cycle of the plan the run is in
+    decisions: list[AutoRunCycleDecision] = []  # another cycle or finish, one per ended cycle, oldest first
     attempts: list[dict] = []  # what each ended attempt showed (the controller's evidence)
 
 

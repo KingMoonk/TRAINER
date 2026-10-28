@@ -31,6 +31,7 @@ import {
   resultVerdict,
   roundText,
   runChoices,
+  runDecisions,
   runLabel,
   timelinePhases,
   valueText,
@@ -161,6 +162,30 @@ function Choices({ run }: { run: RunView }) {
   );
 }
 
+/** The controller's decision after each cycle: start another or finish, with the evidence it read (the RLHF loop's stop reason and kept rounds). */
+function Decisions({ run }: { run: RunView }) {
+  const decisions = runDecisions(run);
+  const max = run.plan.controller?.max_cycles ?? 1;
+  return (
+    <section className="flex flex-col gap-2" aria-label={T.cycleTitle} data-testid="auto-run-cycles">
+      <h2 className="text-sm font-medium">{T.cycleTitle}</h2>
+      <p className="text-sm text-muted-foreground">{fill(T.cycleNow, { n: run.state.cycle ?? 1, max })}</p>
+      <ul className="flex flex-col gap-2">
+        {decisions.map((d) => {
+          const evidence = d.evidence as { kept?: number; rounds?: number; stop_reason?: string };
+          return (
+            <li key={d.cycle} className="rounded-lg border p-3 text-sm">
+              <p className="font-medium">{fill(d.decision === "another" ? T.cycleAnother : T.cycleFinish, { n: d.cycle })}</p>
+              <p className="mt-1 text-muted-foreground">{d.why}</p>
+              {evidence.stop_reason ? <p className="mt-1 text-muted-foreground">{evidence.stop_reason} {fill(T.cycleKept, { kept: evidence.kept ?? 0, rounds: evidence.rounds ?? 0 })}</p> : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 /** One run: where it is, what it needs from the person, its phases, and (while it is a draft or paused) its plan. */
 export function RunPanel({ run }: { run: RunView }) {
   const actions = useRunActions(run.id);
@@ -259,6 +284,7 @@ export function RunPanel({ run }: { run: RunView }) {
         <Timeline run={run} />
       )}
       {status !== "draft" && run.plan.controller && <Choices run={run} />}
+      {status !== "draft" && run.plan.controller?.enabled && run.plan.phases.some((p) => p.kind === "rlhf" && p.enabled) && <Decisions run={run} />}
       {status === "paused" && (
         <Disclosure title={T.changePlan} hint={T.changePlanHint}>
           <PlanEditor key={JSON.stringify(run.plan)} initial={run.plan} pending={busy} actions={[{ label: T.saveChanges, primary: true, run: (plan) => actions.savePlan.mutate(plan) }]} />

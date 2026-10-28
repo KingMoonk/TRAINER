@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { T, fill } from "./copy";
-import { BOUND_KEYS, PHASES, boundTexts, buildPlan, budgetText, phaseTitle, settingTexts, textKey, type BoundTexts, type PhasePlan, type Plan } from "./logic";
+import { BOUND_KEYS, PHASES, boundTexts, buildPlan, budgetText, cyclesText, phaseTitle, settingTexts, textKey, type BoundTexts, type PhasePlan, type Plan } from "./logic";
 
 const FIELD = "h-9 w-fit max-w-full rounded-md border border-input bg-background px-2 text-sm text-foreground";
 
@@ -22,6 +22,7 @@ export function PlanEditor({ initial, actions, pending }: { initial: Plan; actio
   const [texts, setTexts] = useState<Record<string, string>>(() => settingTexts(initial));
   const [budget, setBudget] = useState(() => budgetText(initial));
   const [bounds, setBounds] = useState<BoundTexts | null>(() => boundTexts(initial));
+  const [cycles, setCycles] = useState(() => cyclesText(initial));
   const [problem, setProblem] = useState<string | null>(null);
 
   const change = (kind: string, patch: Partial<PhasePlan>) => {
@@ -30,7 +31,7 @@ export function PlanEditor({ initial, actions, pending }: { initial: Plan; actio
   };
 
   function submit(action: EditorAction) {
-    const built = buildPlan(plan, texts, budget, bounds);
+    const built = buildPlan(plan, texts, budget, bounds, cycles);
     if ("error" in built) setProblem(built.error);
     else {
       setProblem(null);
@@ -131,6 +132,11 @@ export function PlanEditor({ initial, actions, pending }: { initial: Plan; actio
           <CardContent className="flex flex-col gap-3">
             {plan.controller.enabled ? (
               <>
+                <label className="flex flex-col gap-1 text-sm">
+                  {T.cyclesLabel}
+                  <Input aria-label={T.cyclesLabel} inputMode="numeric" className="w-24" value={cycles} onChange={(e) => { setProblem(null); setCycles(e.target.value); }} />
+                  <span className="text-xs text-muted-foreground">{T.cyclesHint}</span>
+                </label>
                 <p className="text-xs text-muted-foreground">{T.boundsTitle}: {T.boundsHint}</p>
                 <div className="grid gap-3 sm:grid-cols-2">
                   {BOUND_KEYS.map(({ key, label }) => (
