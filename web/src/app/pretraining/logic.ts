@@ -8,6 +8,7 @@ export type Preview = components["schemas"]["PreviewModel"];
 export type RangeResult = components["schemas"]["RangeResult"];
 export type StepRate = components["schemas"]["StepRate"];
 export type Pool = components["schemas"]["Pool"];
+export type PreparedStatus = components["schemas"]["PreparedStatus"];
 
 export const ROWS = ["8", "16", "32"] as const;
 export const DEFAULT_ROWS = "16";

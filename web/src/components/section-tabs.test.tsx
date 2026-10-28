@@ -6,33 +6,33 @@ import { SectionTabs } from "./section-tabs";
 
 describe("SectionTabs", () => {
   test("lists the Train pages in order and leaves the hidden ones out", () => {
-    renderPage(<SectionTabs />, { route: "/runs" });
+    renderPage(<SectionTabs />, { route: "/queue" });
     const nav = screen.getByRole("navigation", { name: "Train pages" });
     const links = within(nav).getAllByRole("link");
-    expect(links.map((a) => a.textContent)).toEqual(["Auto Run", "Pretraining", "Post-training", "All runs"]);
-    expect(within(nav).getByRole("link", { name: "All runs" })).toHaveAttribute("aria-current", "page");
-    for (const hidden of ["New run", "Queue", "Training run", "Run"]) expect(within(nav).queryByRole("link", { name: hidden })).toBeNull();
+    expect(links.map((a) => a.textContent)).toEqual(["Auto Run", "Pretraining", "Post-training", "Queue"]);
+    expect(within(nav).getByRole("link", { name: "Queue" })).toHaveAttribute("aria-current", "page");
+    for (const hidden of ["New run", "Runs", "Training run", "Run"]) expect(within(nav).queryByRole("link", { name: hidden })).toBeNull();
   });
 
   test("marks the current tab with aria-current='page'", () => {
     renderPage(<SectionTabs />, { route: "/post-training" });
     const nav = screen.getByRole("navigation", { name: "Train pages" });
     expect(within(nav).getByRole("link", { name: "Post-training" })).toHaveAttribute("aria-current", "page");
-    expect(within(nav).getByRole("link", { name: "All runs" })).not.toHaveAttribute("aria-current");
+    expect(within(nav).getByRole("link", { name: "Queue" })).not.toHaveAttribute("aria-current");
   });
 
-  test.each(["/runs/new", "/queue", "/training-run", "/runs/view"])("on the hidden page %s, marks the parent Runs tab", (route) => {
+  test.each(["/runs/new", "/runs", "/training-run", "/runs/view"])("on the hidden page %s, marks the parent Queue tab", (route) => {
     renderPage(<SectionTabs />, { route });
     const nav = screen.getByRole("navigation", { name: "Train pages" });
-    expect(within(nav).getByRole("link", { name: "All runs" })).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getByRole("link", { name: "Queue" })).toHaveAttribute("aria-current", "page");
     expect(within(nav).getAllByRole("link")).toHaveLength(4);
   });
 
-  test("lists the Machines tabs on /cluster/machines and /cluster/training", () => {
-    renderPage(<SectionTabs />, { route: "/cluster/training" });
+  test("lists the Machines tabs on /cluster/machines", () => {
+    renderPage(<SectionTabs />, { route: "/cluster/machines" });
     const nav = screen.getByRole("navigation", { name: "Machines pages" });
     expect(within(nav).getAllByRole("link").map((a) => a.textContent)).toEqual(["Machines", "Cluster training"]);
-    expect(within(nav).getByRole("link", { name: "Cluster training" })).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getByRole("link", { name: "Machines" })).toHaveAttribute("aria-current", "page");
   });
 
   test("lists the Chat tabs on /chat", () => {

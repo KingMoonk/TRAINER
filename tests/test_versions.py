@@ -29,7 +29,7 @@ class Diff(unittest.TestCase):
         self.assertEqual(change_text(make_spec(), make_spec()), "no change")
 
     def test_word_list_wording(self):
-        self.assertEqual(spec_diff(make_spec(tokenizer="byte"), make_spec(tokenizer="bpe_gpt2")), ["large word list"])
+        self.assertEqual(spec_diff(make_spec(tokenizer="byte"), make_spec(tokenizer="bpe_gpt2")), ["GPT-2 BPE"])
 
 
 class Store(unittest.TestCase):

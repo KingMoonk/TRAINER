@@ -88,6 +88,26 @@ class PreviewJob(JobRecordModel):
     result: PreviewModel | None = None
 
 
+class PreparedStatus(Model):
+    prepared: bool
+    tokens: int | None = None
+    windows: int | None = None
+    val_tokens: int | None = None
+    val_windows: int | None = None
+    folder: str | None = None
+
+
+class PrepareRequest(BaseModel):
+    dataset_ids: list[str] = []
+    version: int | None = None
+    hold: float = 0.05
+    rows: int = Field(16, ge=1, le=256)
+
+
+class PrepareJob(JobRecordModel):
+    result: PreparedStatus | None = None
+
+
 class Started(BaseModel):
     """The queue job POST /pretraining/start added: its label is a provisional one while the size of its text is worked out."""
 
@@ -517,7 +537,10 @@ def _pool(services, body: PlanRequest, made: PretrainPlan, peer_url: str):
         return alone(f"No other machine can join. {why}".strip(), left_out)
     pool = Pool(pooled=True, machines=[PoolMachine(node=p.hostname or p.address, address=p.address) for p in peers],
                 left_out=[LeftOut(**row) for row in left_out])
-    return pool, run.model_copy(update={"machines": [p.address for p in peers]})
+    _, all_peers = distributed._chosen_peers(distributed.StartRun(dataset_ids=["x"], all_machines=True), services, own)
+    answering, _ = distributed._split_answering(all_peers, own)
+    target_machines = list(dict.fromkeys([p.address for p in peers] + [p.address for p in answering]))
+    return pool, run.model_copy(update={"machines": target_machines})
 
 
 @router.post("/pool")
@@ -639,6 +662,26 @@ def cached_preview(services: Services, dataset_ids: Annotated[list[str], Query()
 def pretrain_preview(body: PreviewRequest, request: Request, services: Services) -> PreviewJob:
     """Services.pretrain_preview as a job."""
     return submit(request, "pretrain_preview", lambda stop: services.pretrain_preview(body.dataset_ids, body.rows), PreviewJob)
+
+
+@router.get("/prepared")
+def pretrain_prepared(services: Services,
+                      dataset_ids: Annotated[list[str], Query()] = [],
+                      version: Annotated[int | None, Query()] = None,
+                      hold: Annotated[float, Query()] = 0.05,
+                      rows: Annotated[int, Query(ge=1, le=256)] = 16) -> PreparedStatus:
+    """Check whether binary shards exist on disk for the chosen datasets and model version."""
+    found = services.prepared_status(list(dataset_ids), version_number=version, hold=hold, rows=rows)
+    return PreparedStatus.model_validate(found)
+
+
+@router.post("/prepare", status_code=202)
+def pretrain_prepare(body: PrepareRequest, request: Request, services: Services) -> PrepareJob:
+    """Prepare tokenized binary shards on disk upfront before starting a training run."""
+    def work(stop):
+        return services.pretrain_prepare(body.dataset_ids, version_number=body.version, hold=body.hold, rows=body.rows, stop=stop)
+
+    return submit(request, "pretrain_prepare", work, PrepareJob)
 
 
 @router.post("/start", status_code=202)

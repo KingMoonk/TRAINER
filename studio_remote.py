@@ -854,9 +854,16 @@ class Cluster:
         except ValueError:
             return []
         chosen = {m.get("address") for m in job.params.get("machines") or []}
-        nodes = [n for n in self.nodes() if n.address == studio_cluster.LOCAL or n.address in chosen]
+        all_machines = job.params.get("all_machines", True)
+        nodes = [n for n in self.nodes() if n.address == studio_cluster.LOCAL or n.address in chosen or all_machines]
         added = self.gangs.fill(job.id, nodes, self.health, settings.max_members)
         if added:
+            run = studio_distributed.run_of(job)
+            with studio_distributed._LOCK:
+                for addr in added:
+                    if not any(m.address == addr for m in run.machines):
+                        node_name = next((n.hostname or n.address for n in nodes if n.address == addr), addr)
+                        run.machines.append(studio_distributed.Machine(node=node_name, address=addr, state="unplaced", reason=studio_distributed.UNPLACED))
             studio_distributed.invite(job, self.client_for, only=added)
             self.runner._emit("cluster", {"job": job.id, "state": "member_added", "node": ",".join(added), "detail": ""})
         return added

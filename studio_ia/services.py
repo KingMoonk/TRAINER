@@ -439,6 +439,18 @@ class Services:
         """pretrain_preview's answer if already known without work, else None. The default always knows it."""
         return self.pretrain_preview(dataset_ids, rows)
 
+    def prepared_status(self, dataset_ids, version_number=None, hold=0.05, rows=16):
+        """The status of pre-sharded training data for the given datasets and model spec."""
+        return {"prepared": False, "tokens": None, "windows": None, "val_tokens": None, "val_windows": None, "folder": None}
+
+    def get_prepared_shards(self, dataset_ids, config, shard_dir=None):
+        """Find verified prepared shard metadata matching the given dataset ids and config, or None."""
+        return None
+
+    def pretrain_prepare(self, dataset_ids, version_number=None, hold=0.05, rows=16, progress=None, stop=None):
+        """Prepare binary token shards upfront on disk before training."""
+        raise NotImplementedError
+
     def text_size(self, dataset_ids, spec):
         """{characters, params, chars_per_piece}: a fast readout of the chosen text for design `spec`, from stored character counts and the
         design's own parameter count. Never tokenizes. chars_per_piece is the tokenizer's measured figure for this design, else None;
@@ -1206,6 +1218,46 @@ class FakeServices(Services):
             progress(percent)
         row = [(i // 7) % 4 if i % 7 else -1 for i in range(32)]
         return {"pieces": 2_000_000, "params": 1_000_000, "context": 256, "first_rows": [row[r:] + row[:r] for r in range(rows)]}
+
+    def prepared_status(self, dataset_ids, version_number=None, hold=0.05, rows=16):
+        is_prepared = bool(getattr(self, "_fake_prepared", False))
+        return {
+            "prepared": is_prepared,
+            "tokens": 12345 if is_prepared else None,
+            "windows": 100 if is_prepared else None,
+            "val_tokens": 1200 if is_prepared else None,
+            "val_windows": 10 if is_prepared else None,
+            "folder": "tok-fake" if is_prepared else None,
+        }
+
+    def get_prepared_shards(self, dataset_ids, config, shard_dir=None):
+        if not getattr(self, "_fake_prepared", False):
+            return None
+        return {
+            "split_hash": "fake_split",
+            "digest": "fake_digest",
+            "split": {"strategy": "lineage-v1"},
+            "folder": "tok-fake",
+            "shard_key": "fake_key",
+            "vocab_size": 256,
+            "train_windows": 100,
+            "train_tokens": 12345,
+            "val_windows": 10,
+            "val_tokens": 1200,
+        }
+
+    def pretrain_prepare(self, dataset_ids, version_number=None, hold=0.05, rows=16, progress=None, stop=None):
+        for percent in (20, 60, 100) if progress else ():
+            progress(percent)
+        self._fake_prepared = True
+        return {
+            "prepared": True,
+            "tokens": 12345,
+            "windows": 100,
+            "val_tokens": 1200,
+            "val_windows": 10,
+            "folder": "tok-fake",
+        }
 
     def cached_step_rate(self, spec, rows):
         return self.measure_step_rate(spec, rows, 256)
@@ -2579,6 +2631,157 @@ class WorkspaceServices(Services):
             return None
         return self._compose_preview(spec, ids, rows)
 
+    def prepared_status(self, dataset_ids, version_number=None, hold=0.05, rows=16):
+        """The status of pre-sharded training data for the given datasets and model spec."""
+        import studio_model as sm
+        import studio_shards
+        import studio_spec
+        from studio_spec import config_from_spec
+
+        v = self.current_version() if version_number is None else next((ver for ver in self.versions() if ver.number == version_number), None)
+        if v is None or not v.spec:
+            return {"prepared": False, "tokens": None, "windows": None, "val_tokens": None, "val_windows": None, "folder": None}
+        spec = studio_spec.validate_spec(v.spec)
+        cfg = sm.validate_config({**config_from_spec(spec), "validation": hold, "steps": 1000, "batch_size": rows, "objective": "all"})
+        tok_spec = sm.effective_spec(cfg)["tokenizer"]
+        ids = self._preview_ids(dataset_ids)
+        revisions = {i: self._set_rev(i) for i in ids}
+        key = studio_shards.manifest_key(ids, revisions, hold, cfg["seed"], cfg["context"], cfg["windowing"], cfg["objective"], tok_spec)
+        entry = studio_shards.get_prepared(self.root / "data" / "shards", key)
+        if entry is None:
+            return {"prepared": False, "tokens": None, "windows": None, "val_tokens": None, "val_windows": None, "folder": None}
+        return {
+            "prepared": True,
+            "tokens": entry["train_tokens"],
+            "windows": entry["train_windows"],
+            "val_tokens": entry.get("val_tokens"),
+            "val_windows": entry.get("val_windows"),
+            "folder": entry.get("folder"),
+        }
+
+    def get_prepared_shards(self, dataset_ids, config, shard_dir=None):
+        """Find verified prepared shard metadata matching the given dataset ids and config, or None."""
+        import studio_model as sm
+        import studio_shards
+
+        shard_dir = Path(shard_dir or self.root / "data" / "shards")
+        ids = self._preview_ids(dataset_ids)
+        revisions = {i: self._set_rev(i) for i in ids}
+        cfg = sm.validate_config(config)
+        tok_spec = sm.effective_spec(cfg)["tokenizer"]
+        key = studio_shards.manifest_key(ids, revisions, cfg["validation"], cfg["seed"], cfg["context"], cfg["windowing"], cfg["objective"], tok_spec)
+        return studio_shards.get_prepared(shard_dir, key)
+
+    def pretrain_prepare(self, dataset_ids, version_number=None, hold=0.05, rows=16, progress=None, stop=None):
+        """Prepare binary token shards upfront on disk before training. Fits tokenizer and cuts shards without starting a run."""
+        import hashlib
+        import random
+        from studio_core import fingerprint
+        from studio_planning import merge_duplicate_lineage
+        import studio_model as sm
+        import studio_shards
+        import studio_spec
+        from studio_spec import config_from_spec, module_of
+
+        v = self.current_version() if version_number is None else next((ver for ver in self.versions() if ver.number == version_number), None)
+        if v is None or not v.spec:
+            raise ValueError("Save a design in Build your model first.")
+        spec = studio_spec.validate_spec(v.spec)
+        cfg = sm.validate_config({**config_from_spec(spec), "validation": hold, "steps": 1000, "batch_size": rows, "objective": "all"})
+        tok_spec = sm.effective_spec(cfg)["tokenizer"]
+        ids = self._preview_ids(dataset_ids)
+        if not ids:
+            raise ValueError("Choose some text first.")
+        revisions = {i: self._set_rev(i) for i in ids}
+        shard_dir = self.root / "data" / "shards"
+        key = studio_shards.manifest_key(ids, revisions, hold, cfg["seed"], cfg["context"], cfg["windowing"], cfg["objective"], tok_spec)
+        existing = studio_shards.get_prepared(shard_dir, key)
+        if existing is not None:
+            if progress:
+                progress(100)
+            return {
+                "prepared": True,
+                "tokens": existing["train_tokens"],
+                "windows": existing["train_windows"],
+                "val_tokens": existing.get("val_tokens"),
+                "val_windows": existing.get("val_windows"),
+                "folder": existing.get("folder"),
+            }
+
+        self.loading = ("Reading datasets...", 0.0)
+        examples = self.examples({"datasets": ids})
+        if stop and stop.is_set():
+            raise InterruptedError("Cancelled")
+        if not examples:
+            raise ValueError("The chosen text is empty.")
+
+        unique = {}
+        for example in examples:
+            if stop and stop.is_set():
+                raise InterruptedError("Cancelled")
+            fp = fingerprint(example)
+            if fp in unique:
+                merge_duplicate_lineage(unique[fp], example)
+            else:
+                unique[fp] = dict(example)
+        examples = list(unique.values())
+        digest = hashlib.sha256("".join(fingerprint(e) for e in examples).encode()).hexdigest()
+        training, validation, split = sm.partition_examples(examples, cfg["validation"], random.Random(cfg["seed"]), True)
+        split_hash = hashlib.sha256(("".join(fingerprint(e) for e in training) + "|" + "".join(fingerprint(e) for e in validation)).encode()).hexdigest()
+
+        folder = studio_shards.tokenizer_folder(shard_dir, split_hash, tok_spec)
+        tokenizer = None
+        saved = studio_shards.load_tokenizer(folder)
+        if saved is not None:
+            try:
+                tokenizer = sm.Tokenizer.restore(saved)
+            except (ValueError, KeyError, TypeError):
+                tokenizer = None
+        if tokenizer is None:
+            self.loading = ("Fitting tokenizer...", 0.2)
+            module, module_cfg = module_of("tokenizer", tok_spec)
+            tokenizer = module.fit(module_cfg, training)
+            studio_shards.save_tokenizer(folder, tokenizer.serialize())
+
+        self.loading = ("Tokenizing and cutting shards...", 0.4)
+
+        def advance(done, total):
+            fraction = 0.4 + 0.6 * (done / max(1, total))
+            self.loading = ("Tokenizing and cutting shards...", fraction)
+            if progress:
+                progress(int(fraction * 100))
+
+        train, val, reused = sm.shard_windows(training, validation, tokenizer, cfg, split_hash, folder, progress=advance)
+        shard_key = sm.shard_key(tokenizer, cfg, split_hash)
+        entry = {
+            "key": key,
+            "dataset_ids": ids,
+            "split_hash": split_hash,
+            "digest": digest,
+            "split": split,
+            "folder": folder.name,
+            "shard_key": shard_key,
+            "vocab_size": tokenizer.vocab_size,
+            "train_windows": len(train),
+            "train_tokens": train.entry["tokens"],
+            "val_windows": len(val),
+            "val_tokens": val.entry["tokens"],
+            "created_at": time.time(),
+        }
+        studio_shards.record_prepared(shard_dir, key, entry)
+        self.loading = ("Data prepared", 1.0)
+        if progress:
+            progress(100)
+        self.emit("prepared", {"dataset_ids": ids, "key": key})
+        return {
+            "prepared": True,
+            "tokens": entry["train_tokens"],
+            "windows": entry["train_windows"],
+            "val_tokens": entry["val_tokens"],
+            "val_windows": entry["val_windows"],
+            "folder": entry["folder"],
+        }
+
     def no_usable_text(self, dataset_ids):
         import studio_spec
         v = self.current_version()
@@ -3740,7 +3943,12 @@ class WorkspaceServices(Services):
                 self.emit("download", {"id": cid, **info})
             result = cat.download_dataset(cid, self.root, emit=progress)
             if install:
-                cat.register_download(self.workspace, result, emit=progress)
+                did = cat.register_download(self.workspace, result, emit=progress)
+                if kind == "text" and self.current_version() and getattr(self.current_version(), "spec", None):
+                    try:
+                        self.pretrain_prepare([did])
+                    except Exception:
+                        pass
         return self._background(list(ids or self.collection_ids(kind)), work, "download_done", "Downloading")
 
     def import_source(self, source_id):
@@ -3753,7 +3961,12 @@ class WorkspaceServices(Services):
             def progress(info):
                 task.set(info["completed"], total=info["total"] or None)
                 self.emit("download", {"id": cid, **info})
-            cat.register_download(self.workspace, result, emit=progress)
+            did = cat.register_download(self.workspace, result, emit=progress)
+            if self.current_version() and getattr(self.current_version(), "spec", None):
+                try:
+                    self.pretrain_prepare([did])
+                except Exception:
+                    pass
         return self._background([source_id], work, "import_done", "Adding")
 
     def generate_problems(self, rule, n, store=True, rng=None):
@@ -3947,11 +4160,14 @@ class WorkspaceServices(Services):
 
         def make():
             run = Path(v.best_checkpoint).parent
-            tok = self._tokenizer(run)
-            train = _run_docs(run)
-            scores = self._held_scores(best.best_checkpoint) if best and best.best_checkpoint else None
-            return {"uniform_bpc": studio_eval.uniform_bpc(tok, docs), "unigram_bpc": studio_eval.unigram_bpc(tok, train or docs, eval_docs=docs),
-                    "best_so_far_bpc": None if scores is None else studio_eval.corpus_bpc(scores)}
+            try:
+                tok = self._tokenizer(run)
+                train = _run_docs(run)
+                scores = self._held_scores(best.best_checkpoint) if best and best.best_checkpoint else None
+                return {"uniform_bpc": studio_eval.uniform_bpc(tok, docs), "unigram_bpc": studio_eval.unigram_bpc(tok, train or docs, eval_docs=docs),
+                        "best_so_far_bpc": None if scores is None else studio_eval.corpus_bpc(scores)}
+            except (ValueError, KeyError):
+                return out
         key = ("refs", v.best_checkpoint, best.best_checkpoint if best else None, (best.scorecard or {}).get("bpc") if best else None,
                self._heldout_stamp())
         return self._cached(key, make)
@@ -3967,8 +4183,11 @@ class WorkspaceServices(Services):
         if any((run / n).exists() for n in ("best.npz", "last.npz")):
             def chars_per_piece():  # once per run: the held-back text (or a bounded slice of the run's own text) is read only here
                 docs = self._heldout() or _run_docs(run)
-                tok = self._cached(("tok", str(run)), lambda: self._tokenizer(run))
-                return sum(map(len, docs)) / max(1, sum(len(tok.encode(d)) for d in docs)) if docs else 1.0
+                try:
+                    tok = self._cached(("tok", str(run)), lambda: self._tokenizer(run))
+                    return sum(map(len, docs)) / max(1, sum(len(tok.encode(d)) for d in docs)) if docs else 1.0
+                except (ValueError, KeyError):
+                    return 1.0
             cpp = self._cached(("cpp", str(run), self._heldout_stamp()), chars_per_piece)
         bits = lambda nats: nats / LN2 / cpp  # noqa: E731
         steps = [(r["step"], bits(r["loss"])) for r in rows]

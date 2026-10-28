@@ -54,7 +54,7 @@ describe("the five sidebar areas", () => {
   test("group the routes as the design does", () => {
     expect(pagesIn("models")).toEqual(["builder", "quicktest", "compare"]);
     expect(pagesIn("data")).toEqual(["your_data", "collect", "storage"]);
-    expect(pagesIn("train")).toEqual(["auto_run", "pretraining", "post_training", "runs", "new_run", "queue", "training_run", "run_view"]);
+    expect(pagesIn("train")).toEqual(["auto_run", "pretraining", "post_training", "queue", "runs", "new_run", "training_run", "run_view"]);
     expect(pagesIn("eval")).toEqual(["chat", "benchmark", "export"]);
     expect(pagesIn("machines")).toEqual(["machines", "cluster_training"]);
   });
@@ -62,14 +62,14 @@ describe("the five sidebar areas", () => {
   test("the section tabs are the visible pages, eleven in all", () => {
     expect(tabsIn("models")).toEqual(["builder"]);
     expect(tabsIn("data")).toEqual(["your_data"]);
-    expect(tabsIn("train")).toEqual(["auto_run", "pretraining", "post_training", "runs"]);
+    expect(tabsIn("train")).toEqual(["auto_run", "pretraining", "post_training", "queue"]);
     expect(tabsIn("eval")).toEqual(["chat", "benchmark", "export"]);
     expect(tabsIn("machines")).toEqual(["machines", "cluster_training"]);
     expect(ROUTES.filter((r) => !r.hidden)).toHaveLength(11);
   });
 
   test("the hidden pages are the ones reached from elsewhere, each with a visible parent in its own area", () => {
-    expect(ROUTES.filter((r) => r.hidden).map((r) => r.route)).toEqual(["quicktest", "compare", "collect", "storage", "new_run", "queue", "training_run", "run_view"]);
+    expect(ROUTES.filter((r) => r.hidden).map((r) => r.route)).toEqual(["quicktest", "compare", "collect", "storage", "runs", "new_run", "training_run", "run_view"]);
     for (const r of ROUTES.filter((x) => x.hidden)) {
       const parent = routeFor(r.parent!);
       expect(parent, r.route).toBeDefined();
@@ -81,8 +81,8 @@ describe("the five sidebar areas", () => {
   test("the run pages keep their titles and hrefs", () => {
     expect(routeFor("runs")).toMatchObject({ href: "/runs", area: "train", title: "Runs", tabTitle: "All runs" });
     expect(routeFor("cluster_training")).toMatchObject({ href: "/cluster/training", area: "machines", title: "Training", tabTitle: "Cluster training" });
-    expect(routeFor("new_run")).toMatchObject({ href: "/runs/new", area: "train", hidden: true, parent: "runs" });
-    expect(routeFor("run_view")).toMatchObject({ href: "/runs/view", area: "train", hidden: true, parent: "runs" });
+    expect(routeFor("new_run")).toMatchObject({ href: "/runs/new", area: "train", hidden: true, parent: "queue" });
+    expect(routeFor("run_view")).toMatchObject({ href: "/runs/view", area: "train", hidden: true, parent: "queue" });
   });
 
   test("keep the route names and hrefs", () => {

@@ -159,7 +159,7 @@ export function Tower({ registry, cur, draft, curTower, draftTower, writeBase, w
         <Button variant="outline" aria-pressed={advanced} onClick={() => setAdvanced(!advanced)}>Advanced modules</Button>
       </div>
       <p className="text-xs text-muted-foreground">{advanced ? "Module menus are shown. Check the editing scope before changing a layer." : "Select a part to learn what it does. Turn on Advanced modules to change its implementation."}</p>
-      <p className="text-xs font-medium text-muted-foreground">Output · next word</p>
+      <p className="text-xs font-medium text-muted-foreground">Output · next token</p>
       <Row label={BUILDER.next_word} tip={BUILDER.next_word_desc} part="head" explain={explain}>
         {picker("head", null, draft.M.head, cur.M.head)}
       </Row>
@@ -184,7 +184,7 @@ export function Tower({ registry, cur, draft, curTower, draftTower, writeBase, w
         </Button>
         {draft.L !== cur.L && <span className="text-xs text-muted-foreground">{fill(BUILDER.was, { name: String(cur.L) })}</span>}
       </Row>
-      <p className="text-xs font-medium text-muted-foreground">Input · your text</p>
+      <p className="text-xs font-medium text-muted-foreground">Input · tokenizer</p>
       <Row label={partName("position")} tip={registry.slots.find((s) => s.slot === "position")?.tip} part="position" explain={explain}>
         {picker("position", null, draft.M.position, cur.M.position)}
       </Row>

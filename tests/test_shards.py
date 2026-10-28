@@ -142,6 +142,28 @@ class Shards(unittest.TestCase):
         self.assertEqual(list(self.root.iterdir()), [])
         self.assertIsNone(studio_shards.load(self.root, "k", 263))
 
+    def test_a_folder_rename_refused_for_a_moment_is_retried(self):
+        source, target = self.root / "a.part", self.root / "a"
+        source.mkdir()
+        real, calls = Path.rename, []
+
+        def flaky(path, destination):
+            calls.append(path)
+            if len(calls) < 3:
+                raise PermissionError(13, "Access is denied")  # WinError 5: a scanner holds a file inside
+            return real(path, destination)
+        with mock.patch.object(Path, "rename", flaky), mock.patch("studio_shards.time.sleep"):
+            studio_shards._move(source, target)
+        self.assertTrue(target.is_dir())
+        self.assertEqual(len(calls), 3)
+
+    def test_a_folder_rename_that_stays_refused_raises(self):
+        source = self.root / "b.part"
+        source.mkdir()
+        with mock.patch.object(Path, "rename", side_effect=PermissionError(13, "Access is denied")), mock.patch("studio_shards.time.sleep"):
+            with self.assertRaises(PermissionError):
+                studio_shards._move(source, self.root / "b", tries=3)
+
     def test_storage_counts_and_cleans_the_shards(self):
         shard_windows(TRAINING, VALIDATION, self.tokenizer, config(), "x", self.root / "data" / "shards")
         paths = studio_cleanup.plan(self.root)
@@ -333,6 +355,69 @@ class PreflightCachedTokens(unittest.TestCase):
                 refit = WorkspaceServices.cached_tokens(stub, ["x"], dict(TINY, refit_tokenizer=True), str(first / "last.npz"))
         self.assertGreater(warm, 0)
         self.assertEqual((fresh, refit), (0, 0))
+
+
+class PreparedShardsTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.tokenizer = Tokenizer("byte")
+        self.cfg = config()
+
+    def test_prepared_manifest_records_and_retrieves(self):
+        folder = studio_shards.tokenizer_folder(self.root, "split123", {"id": "character", "config": {}})
+        studio_shards.save_tokenizer(folder, self.tokenizer.serialize())
+        train_windows, val_windows, _ = shard_windows(TRAINING, VALIDATION, self.tokenizer, self.cfg, "split123", folder)
+        shard_key = studio_model.shard_key(self.tokenizer, self.cfg, "split123")
+        mkey = studio_shards.manifest_key(["d1"], {"d1": 1}, 0.05, 42, 48, "sequential", "assistant", {"id": "character", "config": {}})
+        entry = {
+            "key": mkey,
+            "dataset_ids": ["d1"],
+            "split_hash": "split123",
+            "digest": "dig123",
+            "folder": folder.name,
+            "shard_key": shard_key,
+            "vocab_size": self.tokenizer.vocab_size,
+            "train_windows": len(train_windows),
+            "train_tokens": train_windows.entry["tokens"],
+            "val_windows": len(val_windows),
+            "val_tokens": val_windows.entry["tokens"],
+        }
+        self.assertIsNone(studio_shards.get_prepared(self.root, mkey))
+        studio_shards.record_prepared(self.root, mkey, entry)
+        got = studio_shards.get_prepared(self.root, mkey)
+        self.assertIsNotNone(got)
+        self.assertEqual(got["train_windows"], len(train_windows))
+        self.assertEqual(got["train_tokens"], train_windows.entry["tokens"])
+
+    def test_coordinator_build_with_prepared_shards_skips_reading_examples(self):
+        import studio_diloco
+        from tests import diloco_support
+        folder = studio_shards.tokenizer_folder(self.root, "split123", {"id": "character", "config": {}})
+        studio_shards.save_tokenizer(folder, self.tokenizer.serialize())
+        train_windows, val_windows, _ = shard_windows(TRAINING, VALIDATION, self.tokenizer, self.cfg, "split123", folder)
+        shard_key = studio_model.shard_key(self.tokenizer, self.cfg, "split123")
+        mkey = studio_shards.manifest_key(["d1"], {"d1": 1}, 0.05, 42, 48, "sequential", "assistant", {"id": "character", "config": {}})
+        entry = {
+            "key": mkey,
+            "dataset_ids": ["d1"],
+            "split_hash": "split123",
+            "digest": "dig123",
+            "folder": folder.name,
+            "shard_key": shard_key,
+            "vocab_size": self.tokenizer.vocab_size,
+            "train_windows": len(train_windows),
+            "train_tokens": train_windows.entry["tokens"],
+            "val_windows": len(val_windows),
+            "val_tokens": val_windows.entry["tokens"],
+        }
+        coord = studio_diloco.Coordinator.build(
+            "run_prepared", self.root / "run", diloco_support.CONFIG, None, diloco_support.settings(),
+            shard_dir=self.root, prepared=entry
+        )
+        self.assertEqual(coord.split_hash, "split123")
+        self.assertEqual(len(coord.train), len(train_windows))
 
 
 if __name__ == "__main__":

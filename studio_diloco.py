@@ -741,7 +741,7 @@ class Coordinator:
 
     # -- building and resuming
     @classmethod
-    def build(cls, run, directory, config, examples, settings, clock=time.monotonic, shard_dir=None, later=(), start_from=None, conversations=None, progress=None):
+    def build(cls, run, directory, config, examples, settings, clock=time.monotonic, shard_dir=None, later=(), start_from=None, conversations=None, progress=None, prepared=None):
         """Tokenize `examples` once the way studio_model.train does, cut the windows, start theta from the config's seeded
         initialization, and continue from diloco.json if the folder has one. `later` are the example lists of the data sources
         the next_dataset pivot moves on to, in order: cut with the first source's tokenizer, never part of the validation. `start_from`, the
@@ -749,7 +749,8 @@ class Coordinator:
         `conversations`, when given (a list, possibly empty), are the teacher's: the polish and the head-to-head take their prompts from them, split
         by the run's seed into polish prompts and held-out ones, and they are never trained on, tokenized or part of the digest or the split. When
         None the prompts come from the conversations among `examples` (the training split, the validation split). `progress(phase, done, total)`, when
-        given, hears the build as it goes: "tokenizer" while the tokenizer is fitted, then "tokenizing" with the documents cut so far of all of them."""
+        given, hears the build as it goes: "tokenizer" while the tokenizer is fitted, then "tokenizing" with the documents cut so far of all of them.
+        When `prepared` is given (a dict from services.get_prepared_shards), token shards and tokenizer are read directly from disk without reading examples."""
         import studio_model as sm
         from studio_core import fingerprint
         from studio_planning import merge_duplicate_lineage
@@ -759,40 +760,59 @@ class Coordinator:
             raise ValueError("Distributed pretraining trains every weight; LoRA is not supported.")
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
-        unique = {}
-        for example in examples:
-            key = fingerprint(example)
-            if key in unique:
-                merge_duplicate_lineage(unique[key], example)
-            else:
-                unique[key] = dict(example)
-        examples = list(unique.values())
-        if not examples:
-            raise ValueError("The dataset is empty.")
-        digest = hashlib.sha256("".join(fingerprint(e) for e in examples).encode()).hexdigest()
-        training, validation, split = sm.partition_examples(examples, cfg["validation"], random.Random(cfg["seed"]), True)
-        split_hash = hashlib.sha256(("".join(fingerprint(e) for e in training) + "|" + "".join(fingerprint(e) for e in validation)).encode()).hexdigest()
         say = progress or (lambda *_: None)
-        spec = sm.effective_spec(cfg)["tokenizer"]
-        folder = studio_shards.tokenizer_folder(shard_dir or tokenized_root(directory), split_hash, spec)  # shared by runs: this data under this tokenizer
-        tokenizer = None
-        saved = studio_shards.load_tokenizer(folder)
-        if saved is not None:
-            try:
-                tokenizer = sm.Tokenizer.restore(saved)
-            except (ValueError, KeyError, TypeError):
-                tokenizer = None  # unreadable: fitted again below
-        if tokenizer is None:
-            say("tokenizer", 0, 0)
-            module, module_cfg = module_of("tokenizer", spec)
-            tokenizer = module.fit(module_cfg, training)
-            studio_shards.save_tokenizer(folder, tokenizer.serialize())
-        tally = [0, len(training) + len(validation)]  # documents cut so far, of all
-        cached = studio_shards.load(folder, sm.shard_key(tokenizer, cfg, split_hash), tokenizer.vocab_size) is not None
-        say("cached" if cached else "tokenizing", tally[1] if cached else 0, tally[1])  # cached: the windows are on disk from an earlier run
-        train, val, _ = sm.shard_windows(_counted(training, tally, say), _counted(validation, tally, say), tokenizer, cfg, split_hash, folder)
-        if not cached:
-            say("tokenizing", tally[1], tally[1])
+
+        if prepared is not None:
+            split_hash = prepared["split_hash"]
+            digest = prepared.get("digest") or split_hash
+            split = prepared.get("split") or {"strategy": "lineage-v1"}
+            folder = Path(prepared["folder"])
+            if not folder.is_absolute():
+                folder = (shard_dir or tokenized_root(directory)) / folder
+            saved = studio_shards.load_tokenizer(folder)
+            if saved is None:
+                raise ValueError(f"Prepared tokenizer at {folder} is missing or unreadable.")
+            tokenizer = sm.Tokenizer.restore(saved)
+            found = studio_shards.load(folder, prepared["shard_key"], tokenizer.vocab_size)
+            if found is None:
+                raise ValueError(f"Prepared shards in {folder}/{prepared['shard_key']} are missing or unreadable.")
+            train = sm.MappedWindows(*found["train"])
+            val = sm.MappedWindows(*found["val"])
+            say("cached", len(train) + len(val), len(train) + len(val))
+        else:
+            unique = {}
+            for example in examples:
+                key = fingerprint(example)
+                if key in unique:
+                    merge_duplicate_lineage(unique[key], example)
+                else:
+                    unique[key] = dict(example)
+            examples = list(unique.values())
+            if not examples:
+                raise ValueError("The dataset is empty.")
+            digest = hashlib.sha256("".join(fingerprint(e) for e in examples).encode()).hexdigest()
+            training, validation, split = sm.partition_examples(examples, cfg["validation"], random.Random(cfg["seed"]), True)
+            split_hash = hashlib.sha256(("".join(fingerprint(e) for e in training) + "|" + "".join(fingerprint(e) for e in validation)).encode()).hexdigest()
+            spec = sm.effective_spec(cfg)["tokenizer"]
+            folder = studio_shards.tokenizer_folder(shard_dir or tokenized_root(directory), split_hash, spec)  # shared by runs: this data under this tokenizer
+            tokenizer = None
+            saved = studio_shards.load_tokenizer(folder)
+            if saved is not None:
+                try:
+                    tokenizer = sm.Tokenizer.restore(saved)
+                except (ValueError, KeyError, TypeError):
+                    tokenizer = None  # unreadable: fitted again below
+            if tokenizer is None:
+                say("tokenizer", 0, 0)
+                module, module_cfg = module_of("tokenizer", spec)
+                tokenizer = module.fit(module_cfg, training)
+                studio_shards.save_tokenizer(folder, tokenizer.serialize())
+            tally = [0, len(training) + len(validation)]  # documents cut so far, of all
+            cached = studio_shards.load(folder, sm.shard_key(tokenizer, cfg, split_hash), tokenizer.vocab_size) is not None
+            say("cached" if cached else "tokenizing", tally[1] if cached else 0, tally[1])  # cached: the windows are on disk from an earlier run
+            train, val, _ = sm.shard_windows(_counted(training, tally, say), _counted(validation, tally, say), tokenizer, cfg, split_hash, folder)
+            if not cached:
+                say("tokenizing", tally[1], tally[1])
         if not train:
             raise ValueError("No trainable target tokens were found.")
         if settings.target_win_rate is not None and not val:
@@ -2580,17 +2600,20 @@ def _prepare(job, services, directory, port, client_for, p, say):
     settings = Settings.from_params(p, steps=config.get("steps"))
     teacher = None
     policy = None
+    prepared = None
     if p.get("stages"):  # next_dataset goes to the workspace's unseen text sets, worst first, with replay (studio_stages)
         import studio_stages
         policy, examples = studio_stages.Policy.for_job(p, services)
-    elif "examples" in p:
-        examples = p["examples"]
     elif p.get("chat_share") and hasattr(services, "example_stream"):  # the text with the chosen conversations mixed in, as a solo pretrain run reads it
         examples = list(services.example_stream(p))
     else:
-        examples = services.examples(p)
+        if p.get("datasets") and not p.get("examples"):
+            getter = getattr(services, "get_prepared_shards", None)
+            if getter is not None:
+                prepared = getter(p.get("datasets"), config, shard_dir=tokenized_root(directory))
+        examples = None if prepared is not None else (p["examples"] if "examples" in p else services.examples(p))
     conversations = services.conversations(p) if p.get("conversations") else None  # the teacher's prompts: kept apart from what the members train on
-    if not examples and p.get("reviewed_only"):
+    if examples is not None and not examples and p.get("reviewed_only"):
         raise ValueError("Reviewed examples only is on, but no example in the chosen text is marked Good and free to train on.")
     try:
         if settings.polish_every or settings.target_win_rate is not None:
@@ -2602,7 +2625,7 @@ def _prepare(job, services, directory, port, client_for, p, say):
                 except RuntimeError as exc:
                     raise ValueError(f"The run {'polishes' if settings.polish_every else 'judges'} with the teacher {settings.teacher}, but it cannot be used: {exc}") from None
         coordinator = Coordinator.build(job.id, directory, config, examples, settings, later=p.get("later_examples") or (),
-                                       start_from=p.get("restart_from"), conversations=conversations, progress=say)
+                                       start_from=p.get("restart_from"), conversations=conversations, progress=say, prepared=prepared)
     except ValueError as exc:
         if p.get("resuming"):
             raise ValueError(f"Ended: this machine restarted at round {p['resuming']['round']}, and the run could not be resumed: {exc}") from None

@@ -129,6 +129,13 @@ export const T = {
   scalingKept: "Keeping your settings.",
   scalingScale: "Scale it to fit",
   scalingRefused: "This run cannot start here:",
+  readyToTrain: "Ready to train",
+  shardedOnDisk: "{windows} windows ({tokens} tokens) sharded on disk",
+  shardsNotPrepared: "Shards not prepared",
+  shardsNotPreparedDesc: "Prepare tokenized binary shards ahead of time so your run launches instantly without reading delays.",
+  prepareData: "Prepare data",
+  preparingData: "Preparing data…",
+  dataPreparedToast: "Data prepared and ready to train.",
 } as const;
 
 export function fill(text: string, values: Record<string, string | number>): string {
