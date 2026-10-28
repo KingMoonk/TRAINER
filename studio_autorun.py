@@ -37,6 +37,9 @@ was deleted by the person: applies on_fail) or "blocked" (the phase needs the pe
 `verdict` for the error, and `stopped` True makes the phase stopped.
 A stopped job (the person stopped it) leaves the phase stopped and the run paused; `resume` runs it again as the next attempt.
 
+Another cycle (#901): when every phase has ended, `studio_autotune.cycle_decision` may start the enabled phases again (state["cycle"],
+state["decisions"]); see that module. `finish` takes the plan for it.
+
 `reconcile(state, queue_lookup, history_lookup)`, after a restart: returns the actions to take for the phases that were queued or
 running. A job still waiting/held/running -> ("wait", phase); finished (in the queue or the history) -> ("outcome", phase,
 job_status, result), to give to `apply_outcome`; missing from both -> ("enqueue", phase, same job_id). Only this path re-enqueues.
@@ -327,11 +330,35 @@ def stop(state, reason, now):
     return state
 
 
-def finish(state, status, reason, now):
-    """Apply the ("finish", status, reason) action."""
+def _complete(plan, state, now, reason):
+    """Every phase has ended: the controller's decision (studio_autotune.cycle_decision) on another cycle or finishing. Another resets
+    the enabled phases to pending as new attempts (new job ids, so earlier choices and results stay apart) and the run goes on; finish
+    makes the run done. The decision and its evidence are kept in state["decisions"] and the journal."""
+    decision = _autotune().cycle_decision(plan, state) if plan is not None else None
+    if decision is None:
+        _set(state, "done", reason, now, "done")
+        return state
+    state = _autotune().add_decision(state, decision, now)
+    if decision["decision"] == "another":
+        decision["phases"] = [{"kind": p["kind"], "status": p["status"], "checkpoint": p["checkpoint"]} for p in state["phases"]]
+        for entry, policy in zip(state["phases"], plan["phases"]):
+            if policy["enabled"]:
+                entry.update(status="pending", attempt=entry["attempt"] + 1, job_id=None, started=None, ended=None, error="", result=None)
+        state["cycle"] = decision["cycle"] + 1
+        _current(state)
+        _set(state, "running", "", now, "cycle_started")
+    else:
+        _set(state, "done", f"{reason} {decision['why']}", now, "done")
+    return state
+
+
+def finish(state, status, reason, now, plan=None):
+    """Apply the ("finish", status, reason) action. With the `plan`, a run that is done may start another cycle instead (_complete)."""
     if status not in ("done", "stopped", "failed"):
         raise AutorunError(f"A run cannot finish as {status}.")
     state = _copy(state)
+    if status == "done" and state["status"] in ("running", "pausing", "paused"):
+        return _complete(plan, state, now, reason)
     _set(state, status, reason, now, "finish")
     return state
 
@@ -465,7 +492,7 @@ def apply_outcome(plan, state, phase, job_status, result, now):
             _set(state, "paused", f"The {phase} phase failed: {error}", now, "failed_pause")
     if state["status"] in ("running", "pausing") and _first_open(state) is None:
         _current(state)
-        _set(state, "done", "Every phase has finished.", now, "done")
+        state = _complete(plan, state, now, "Every phase has finished.")
     return state
 
 

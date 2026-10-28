@@ -71,16 +71,6 @@ def _entry(slot, raw, where=""):
         raw = {"id": raw}
     if not isinstance(raw, dict):
         raise ValueError(f"{where}{slot} must be an object with an id.")
-    raw_id = raw.get("id", DEFAULTS[slot])
-    if slot == "tokenizer" and raw_id in ("word", "bpe_custom"):
-        raw = dict(raw)
-        raw["id"] = "bpe_fast"
-        config = raw.get("config")
-        if isinstance(config, dict) and "vocab_size" in config:
-            v = config["vocab_size"]
-            raw["config"] = {"vocab_size": max(1024, min(65536, int(v)))} if isinstance(v, (int, float)) else {}
-        else:
-            raw["config"] = {}
     module = registry.get(slot, raw.get("id", DEFAULTS[slot]))
     config = raw.get("config")
     if config is not None and not isinstance(config, dict):

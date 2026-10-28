@@ -13,7 +13,12 @@ Rules (each needs real evidence, and does nothing without it):
 * gate history: a round 4 attempt whose gate said no is tried again with a larger DPO beta, and a round 2 attempt whose gate said no with
   a larger KL coefficient, both pulling the model closer to the weights it started from (`PULL`).
 
-Limits: `plan["controller"] = {"enabled": bool, "bounds": {key: {"min", "max"}}}` for the keys in `KEYS`. No choice leaves its bounds (a value
+* next cycle (#901): when the last phase, the rlhf loop, stopped because the report card stopped improving (`cycle_decision`), the run
+  starts another cycle of its enabled phases if the loop kept at least one round and fewer than `max_cycles` have run, and finishes
+  otherwise. Either way the decision and its evidence are kept in `state["decisions"]` and journalled ("cycle"). A bigger design is
+  still only proposed (rule bigger_design), never applied.
+
+Limits: `plan["controller"] = {"enabled": bool, "bounds": {key: {"min", "max"}}, "max_cycles": 1..MAX_CYCLES (default 1)}` for the keys in `KEYS`. No choice leaves its bounds (a value
 is clamped, and the choice says so); the person sees and edits them in the plan. Without a `controller` in the plan nothing is tuned.
 
 State: `state["attempts"]` keeps what each ended attempt showed (the evidence that survives a retry, which clears the phase's own result),
@@ -40,13 +45,15 @@ LENGTHEN = 1.5       # a phase whose curve is still falling gets this many times
 PULL = 1.5           # a failed gate's next beta (or KL coefficient) is this many times its last
 TOO_SMALL_SHARE = .6  # the curve is flat before this share of the run (studio_ia.sizing uses the same figure)
 MAX_ATTEMPTS = 50
+MAX_CYCLES = 5        # the most a plan may allow
+DEFAULT_CYCLES = 1    # one cycle: the run finishes after the first, unless the person allows more
 MAX_POINTS = 200      # validation points a phase result keeps
 SETTING = {"learning_rate": "learning_rate", "steps": "steps", "beta": "beta", "kl": "kl"}   # the plan setting each key writes
 APPLIES = {"learning_rate": ("sft", "rlvr", "distill"), "steps": ("midtrain",), "beta": ("dpo",), "kl": ("rlvr",)}
 
 
 def default_controller():
-    return {"enabled": True, "bounds": copy.deepcopy(DEFAULT_BOUNDS)}
+    return {"enabled": True, "bounds": copy.deepcopy(DEFAULT_BOUNDS), "max_cycles": DEFAULT_CYCLES}
 
 
 def validate(controller):
@@ -56,6 +63,9 @@ def validate(controller):
     problems = []
     if not isinstance(controller.get("enabled"), bool):
         problems.append("The controller needs enabled set to true or false.")
+    cycles = controller.get("max_cycles", DEFAULT_CYCLES)
+    if isinstance(cycles, bool) or not isinstance(cycles, int) or not 1 <= cycles <= MAX_CYCLES:
+        problems.append(f"The most cycles must be a whole number from 1 to {MAX_CYCLES}.")
     bounds = controller.get("bounds")
     if not isinstance(bounds, dict):
         return problems + ["The controller needs its bounds as an object."]
@@ -234,4 +244,55 @@ def add_choices(state, choices, now):
     for choice in fresh:
         ar._event(state, "tuned", now, phase=choice["phase"], attempt=choice["attempt"], key=choice["key"], was=choice["was"], value=choice["value"],
                   rule=choice["rule"], applied=choice["applied"], why=choice["why"], evidence=choice["evidence"])
+    return state
+
+
+# --------------------------------------------------------------------------- another cycle, or finish
+
+def max_cycles(plan):
+    return int((plan.get("controller") or {}).get("max_cycles", DEFAULT_CYCLES))
+
+
+def cycle_decision(plan, state):
+    """After the last phase: {cycle, decision: "another" | "finish", why, evidence}, or None when there is nothing to decide (the controller
+    is off, the rlhf phase did not pass, or this cycle was decided already). From the rlhf phase's result: why the loop stopped, how many
+    rounds it kept and what the report card said got better in them.
+    * the loop did not stop on a flat report card (it ran out of rounds or time): finish, since nothing says another cycle would help;
+    * it stopped flat and kept no round: finish, another cycle would repeat what found nothing;
+    * it stopped flat after keeping rounds, and the plan's cycle limit is reached: finish;
+    * otherwise: another cycle (the enabled phases run again, on whatever data the workspace holds by then)."""
+    if not enabled(plan) or not any(p["kind"] == "rlhf" for p in plan["phases"]):
+        return None
+    entry = state["phases"][ar._index(plan, "rlhf")]
+    result = entry.get("result")
+    cycle = state.get("cycle", 1)
+    if entry["status"] != "passed" or not isinstance(result, dict) or any(d["cycle"] == cycle for d in state.get("decisions", [])):
+        return None
+    reason = str(result.get("stop_reason") or "")
+    kept = int(result.get("kept") or 0)
+    rounds = result.get("rounds") if isinstance(result.get("rounds"), list) else []
+    better = sorted({name for r in rounds if r.get("status") == "kept" for name in r.get("card_better") or []})
+    limit = max_cycles(plan)
+    evidence = {"stop_reason": reason, "kept": kept, "rounds": len(rounds), "card_better": better, "cycle": cycle, "max_cycles": limit,
+                "bigger_design_proposed": any(c["rule"] == "bigger_design" for c in state.get("choices", []))}
+    if "stopped improving" not in reason.lower():
+        decision, why = "finish", "The RLHF loop did not stop on a flat report card, so nothing says another cycle would help."
+    elif not kept:
+        decision, why = "finish", "The report card stopped improving and the loop kept no round, so another cycle would repeat what found nothing."
+    elif cycle >= limit:
+        decision, why = "finish", f"The report card stopped improving, and you allowed {limit} cycle{'s' if limit != 1 else ''}; this was cycle {cycle}."
+    else:
+        decision = "another"
+        why = (f"The report card stopped improving after the loop kept {kept} round{'s' if kept != 1 else ''}"
+               f"{' (better: ' + ', '.join(better) + ')' if better else ''}, and cycle {cycle} of {limit} is done, so cycle {cycle + 1} starts.")
+        if evidence["bigger_design_proposed"]:
+            why += " The bigger design proposed earlier is still yours to apply."
+    return {"cycle": cycle, "decision": decision, "why": why, "evidence": evidence}
+
+
+def add_decision(state, decision, now):
+    """State with `decision` kept in `state["decisions"]` and one "cycle" journal event with its evidence."""
+    state = copy.deepcopy(state)
+    state["decisions"] = state.get("decisions", []) + [decision]
+    ar._event(state, "cycle", now, cycle=decision["cycle"], decision=decision["decision"], why=decision["why"], evidence=decision["evidence"])
     return state

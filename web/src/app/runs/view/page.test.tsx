@@ -216,6 +216,18 @@ describe("Run view: a DiLoCo run", () => {
 });
 
 describe("Run view: a single job on this computer", () => {
+  test("a job that finished done, no longer in the queue, opens read-only with its curve", async () => {
+    const all = mockApi({
+      "GET /queue": { body: queue({ job: null }) },
+      "GET /queue/done": { body: [job("j1", { status: "done" })] },
+      "GET /cluster/nodes": { body: NODES },
+      "GET /pretraining/jobs/j1/curve": { body: CURVE },
+    });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=j1" });
+    expect(await screen.findByTestId("run-title")).toHaveTextContent("v3 from scratch");
+    await waitFor(() => expect(calls(all, "GET", "/pretraining/jobs/j1/curve")).toHaveLength(1));
+  });
+
   test("shows the shape line, the step and ETA, one node and no round, timeline or transfer panels", async () => {
     soloServer();
     renderPage(<RunViewPage />, { route: "/runs/view?id=j1" });

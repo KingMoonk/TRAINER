@@ -372,6 +372,48 @@ describe("Auto Run page: the parameter controller", () => {
     expect(within(list).getByText(/barely fell/)).toBeVisible();
   });
 
+  test("the run page shows the cycle decision with the evidence it read", async () => {
+    const view = run("running", "data", { rlhf: { status: "passed" } });
+    view.plan.phases.find((p) => p.kind === "rlhf")!.enabled = true;
+    view.plan.controller!.max_cycles = 3;
+    view.state.cycle = 2;
+    view.state.decisions = [
+      {
+        cycle: 1,
+        decision: "another",
+        why: "The report card stopped improving after the loop kept 2 rounds, and cycle 1 of 3 is done, so cycle 2 starts.",
+        evidence: { stop_reason: "The report card has not clearly improved for 3 rounds in a row.", kept: 2, rounds: 5 },
+        phases: [],
+      },
+    ];
+    server(view);
+    renderPage(<AutoRunPage />);
+    const section = await screen.findByTestId("auto-run-cycles");
+    expect(within(section).getByText("Cycle 2 of 3")).toBeVisible();
+    expect(within(section).getByText("Cycle 1: start another cycle")).toBeVisible();
+    expect(within(section).getByText(/so cycle 2 starts/)).toBeVisible();
+    expect(within(section).getByText(/has not clearly improved for 3 rounds in a row\. 2 rounds kept of 5/)).toBeVisible();
+  });
+
+  test("a finish decision says why the run ended", async () => {
+    const view = run("done", null, { rlhf: { status: "passed" } });
+    view.plan.phases.find((p) => p.kind === "rlhf")!.enabled = true;
+    view.state.decisions = [{ cycle: 1, decision: "finish", why: "The report card stopped improving, and you allowed 1 cycle; this was cycle 1.", evidence: { kept: 1, rounds: 4 }, phases: [] }];
+    mockApi({
+      "GET /versions": { body: VERSIONS },
+      "GET /auto-runs": { body: [summary(view)] },
+      "GET /auto-runs/defaults": { body: plan() },
+      "GET /auto-runs/run1": { body: view },
+    });
+    const user = userEvent.setup();
+    renderPage(<AutoRunPage />);
+    const list = await screen.findByRole("region", { name: "Earlier Auto Runs" });
+    await user.click(within(list).getByRole("button", { name: "Open" }));
+    const section = await screen.findByTestId("auto-run-cycles");
+    expect(within(section).getByText("Cycle 1: finish")).toBeVisible();
+    expect(within(section).getByText(/you allowed 1 cycle/)).toBeVisible();
+  });
+
   test("a run with nothing chosen yet says when the controller acts, and a run with the controller off says it is off", async () => {
     server(run("running", "pretrain", { data: { status: "passed" } }));
     const { unmount } = renderPage(<AutoRunPage />);

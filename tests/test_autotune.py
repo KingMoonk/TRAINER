@@ -160,7 +160,7 @@ class ControllerPlanTests(unittest.TestCase):
     def test_the_default_plan_carries_the_default_bounds_and_is_valid(self):
         plan = ar.DEFAULT_PLAN(1)
         plan["id"] = "x"
-        self.assertEqual(plan["controller"], {"enabled": True, "bounds": tune.DEFAULT_BOUNDS})
+        self.assertEqual(plan["controller"], {"enabled": True, "bounds": tune.DEFAULT_BOUNDS, "max_cycles": 1})
         self.assertEqual(ar.validate(plan), [])
 
     def test_bad_bounds_are_plain_sentences(self):
@@ -177,6 +177,89 @@ class ControllerPlanTests(unittest.TestCase):
     def test_a_plan_from_before_the_controller_is_still_valid(self):
         plan = plan_of()
         del plan["controller"]
+        self.assertEqual(ar.validate(plan), [])
+
+
+FLAT_CARD = "The report card has not clearly improved for 3 rounds in a row: the version has stopped improving here."
+
+
+def ending_cycle(max_cycles, stop_reason=FLAT_CARD, kept=2, cycle=1):
+    """A run whose every phase has passed, the rlhf loop stopped as given; (plan, state) ready for the last outcome."""
+    plan = plan_of(("data", "sft", "rlhf"))
+    plan["controller"]["max_cycles"] = max_cycles
+    state = ar.start(plan, ar.new_state(plan), T0)
+    state["cycle"] = cycle
+    for entry in state["phases"][:2]:
+        entry["status"] = "passed"
+    state["phases"][2].update(status="running", job_id="run1-2-1")
+    rounds = [{"round": 1, "status": "kept", "card_better": ["chat win rate"]}, {"round": 2, "status": "rolled_back", "card_better": []}]
+    result = {"ok": True, "kept": kept, "stop_reason": stop_reason, "rounds": rounds[:kept] or rounds[1:]}
+    return plan, ar.apply_outcome(plan, state, "rlhf", "done", result, T0)
+
+
+class NextCycleTests(unittest.TestCase):
+    def test_a_flat_report_card_after_kept_rounds_starts_another_cycle_inside_the_limit(self):
+        plan, state = ending_cycle(3)
+        self.assertEqual(state["status"], "running")
+        self.assertEqual(state["cycle"], 2)
+        [decision] = state["decisions"]
+        self.assertEqual((decision["cycle"], decision["decision"]), (1, "another"))
+        self.assertEqual(decision["evidence"]["card_better"], ["chat win rate"])
+        self.assertIn("cycle 2 starts", decision["why"])
+        self.assertEqual([p["status"] for p in state["phases"]], ["pending"] * 3)
+        self.assertEqual([p["attempt"] for p in state["phases"]], [2, 2, 2])
+        self.assertEqual([e["event"] for e in state["events"] if e["event"] in ("cycle", "cycle_started", "done")], ["cycle", "cycle_started"])
+        self.assertEqual(ar.next_action(plan, state, T0), ("data", "data"))
+
+    def test_the_cycle_limit_finishes_the_run_and_says_so(self):
+        plan, state = ending_cycle(2, cycle=2)
+        self.assertEqual(state["status"], "done")
+        [decision] = state["decisions"]
+        self.assertEqual(decision["decision"], "finish")
+        self.assertIn("you allowed 2 cycles", decision["why"])
+        self.assertIn("you allowed 2 cycles", state["reason"])
+        cycle = next(e for e in state["events"] if e["event"] == "cycle")
+        self.assertEqual((cycle["decision"], cycle["evidence"]["max_cycles"]), ("finish", 2))
+
+    def test_the_default_limit_is_one_cycle(self):
+        plan = plan_of(("sft", "rlhf"))
+        self.assertEqual(tune.max_cycles(plan), 1)
+        plan, state = ending_cycle(1)
+        self.assertEqual((state["status"], state["decisions"][0]["decision"]), ("done", "finish"))
+
+    def test_nothing_kept_or_another_stop_reason_finishes(self):
+        for reason, kept in ((FLAT_CARD, 0), ("Reached the 20 rounds it was asked to try.", 3)):
+            plan, state = ending_cycle(3, stop_reason=reason, kept=kept)
+            self.assertEqual((state["status"], state["decisions"][0]["decision"]), ("done", "finish"), reason)
+
+    def test_a_proposed_bigger_design_is_mentioned_not_applied(self):
+        plan = plan_of(("data", "sft", "rlhf"))
+        plan["controller"]["max_cycles"] = 2
+        state = ar.start(plan, ar.new_state(plan), T0)
+        state["choices"] = [{"phase": "sft", "attempt": 1, "key": "design", "rule": "bigger_design", "applied": False}]
+        decision = tune.cycle_decision(plan, {**state, "phases": [{**p, "status": "passed", "result": {"kept": 1, "stop_reason": FLAT_CARD, "rounds": []}} for p in state["phases"]]})
+        self.assertTrue(decision["evidence"]["bigger_design_proposed"])
+        self.assertIn("still yours to apply", decision["why"])
+
+    def test_a_run_without_the_controller_or_a_failed_loop_decides_nothing(self):
+        plan, state = ending_cycle(3)
+        plan["controller"]["enabled"] = False
+        self.assertIsNone(tune.cycle_decision(plan, state))
+        plan, state = ending_cycle(3, kept=0)
+        state["phases"][2]["status"] = "failed"
+        self.assertIsNone(tune.cycle_decision(plan, state))
+
+    def test_each_cycle_is_decided_once(self):
+        plan, state = ending_cycle(3)
+        again = ar.finish(state, "done", "Every phase has finished.", T0, plan)
+        self.assertEqual(len(again["decisions"]), 1)
+
+    def test_the_limit_is_validated(self):
+        plan = plan_of()
+        for bad in (0, 6, True, 1.5, "2"):
+            plan["controller"]["max_cycles"] = bad
+            self.assertIn("The most cycles must be a whole number from 1 to 5.", ar.validate(plan), bad)
+        plan["controller"]["max_cycles"] = 5
         self.assertEqual(ar.validate(plan), [])
 
 
