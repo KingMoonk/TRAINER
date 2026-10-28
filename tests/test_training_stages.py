@@ -19,6 +19,19 @@ from studio_spec import default_spec
 TEXT = [{"text": f"The short answer is yes. Lesson {i}."} for i in range(16)]
 CHAT = [{"user": f"Question {i}: say yes", "assistant": "yes"} for i in range(16)]
 HELD_CHAT = [{"user": "Question 99: say yes", "assistant": "yes"}]
+class StageEvidenceTests(unittest.TestCase):
+    def test_a_stage_folder_gives_its_validation_points_and_whether_it_ended_too_small(self):
+        import studio_stages
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            self.assertEqual(stages.run_evidence(folder), {})
+            rows = [{"step": 10, "val_loss": 3.0}, {"step": 20}, {"step": 30, "val_loss": 2.5}]
+            (folder / "metrics.jsonl").write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+            self.assertEqual(stages.run_evidence(folder), {"curve": [[10.0, 3.0], [30.0, 2.5]]})
+            studio_stages.write_journal(folder, {"sources": [], "switches": [], "exhausted": False, "too_small": True})
+            self.assertEqual(stages.run_evidence(folder), {"curve": [[10.0, 3.0], [30.0, 2.5]], "too_small": True})
+
+
 BASE = {"device": "cpu", "width": 32, "layers": 1, "heads": 2, "context": 64, "expansion": 2,
         "dropout": 0, "batch_size": 4, "steps": 8, "learning_rate": .003, "warmup": 0,
         "validation": 0, "eval_every": 4, "objective": "all"}

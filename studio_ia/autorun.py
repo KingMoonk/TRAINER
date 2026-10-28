@@ -383,9 +383,23 @@ class Orchestrator:
         elif kind == "pretrain" and job.status == "done":
             found = self._version(self.runs[run_id]["plan"]["version"])
             result = {"checkpoint": str(found.best_checkpoint)} if found is not None and found.best_checkpoint else {}
+            result.update(self._curve(found))
         if getattr(job, "error", ""):
             result.setdefault("error", job.error)
         return result
+
+    def _curve(self, version):
+        """{"curve": [[tokens read, validation loss]...], "curve_report": {...}} from the pretrain run's own validation points
+        (Services.loss_evidence), so the controller and the journal read the same evidence; {} when the run left none to fit."""
+        try:
+            found = self.services.loss_evidence(version) if version is not None else None
+        except (NotImplementedError, OSError, ValueError):
+            return {}
+        points = [[float(x), float(y)] for x, y in (found or {}).get("points", [])][-tune.MAX_POINTS:]
+        if not points:
+            return {}
+        report = tune.curve_report(points)
+        return {"curve": points, **({"curve_report": report} if report else {})}
 
     def _finish_phase(self, run_id, kind, status, result):
         run = self.runs[run_id]

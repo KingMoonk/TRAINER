@@ -349,6 +349,27 @@ class ControllerTests(Base):
         [choice] = self.state()["choices"]
         self.assertEqual((choice["rule"], choice["applied"]), ("still_falling", True))
 
+    def test_a_finished_pretrain_phase_keeps_its_curve_and_journals_the_gain_per_doubling(self):
+        points = [(float(x), .1 + 5 * x ** -.2) for x in numpy.geomspace(1e3, 1e6, 14)]
+        self.services.loss_evidence = lambda version: {"points": points, "run": "r"}
+        self.go(plan_of(("pretrain", "midtrain")))
+        self.end("run1-0-1", "done")
+        result = self.phase("pretrain")["result"]
+        self.assertEqual(len(result["curve"]), 14)
+        gain = result["curve_report"]["gain_per_doubling"]
+        self.assertGreater(gain, 0)
+        [passed] = [e for e in self.auto.view("run1")["journal"] if e["event"] == "passed" and e["phase"] == "pretrain"]
+        self.assertEqual(passed["gain_per_doubling"], gain)
+
+    def test_a_midtrain_stage_that_stopped_as_too_small_proposes_a_bigger_design_for_the_next_phase(self):
+        self.go(plan_of(("midtrain", "sft")))
+        self.end("run1-0-1", "done", {"stage": "midtrain", "ok": True, "checkpoint": "ck1", "too_small": True, "curve": [[10.0, 3.0], [20.0, 2.99]]})
+        [choice] = self.state()["choices"]
+        self.assertEqual((choice["phase"], choice["rule"], choice["applied"]), ("sft", "bigger_design", False))
+        self.assertEqual(choice["evidence"], {"phase": "midtrain", "too_small": True})
+        tuned = [e for e in self.auto.view("run1")["journal"] if e["event"] == "tuned"]
+        self.assertEqual([e["rule"] for e in tuned], ["bigger_design"])
+
     def test_a_controller_that_is_off_leaves_the_settings_alone(self):
         plan = plan_of(("sft",))
         plan["phases"][0]["settings"]["learning_rate"] = 1e-4

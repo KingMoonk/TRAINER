@@ -201,6 +201,13 @@ def _event(state, event, now, **extra):
                                            "reason": state["reason"], **extra})
 
 
+def _evidence(result):
+    """The few figures of a phase result worth a journal line: where its loss curve stands and whether the design was too small."""
+    report = result.get("curve_report") if isinstance(result.get("curve_report"), dict) else {}
+    out = {key: report[key] for key in ("gain_per_doubling", "flat_share") if key in report}
+    return {**out, **({"too_small": True} if result.get("too_small") else {})}
+
+
 def _iso(now):
     if isinstance(now, str):
         return now
@@ -427,7 +434,7 @@ def apply_outcome(plan, state, phase, job_status, result, now):
     if job_status == "done":
         entry.update(status="passed", error="")
         _current(state)
-        _event(state, "passed", now, phase=phase)
+        _event(state, "passed", now, phase=phase, **_evidence(result))
         if policy["on_pass"] == "pause":
             _set(state, "paused", f"The {phase} phase passed; paused as planned.", now, "paused")
         elif pausing:
