@@ -23,6 +23,8 @@
       "uniform_bpc": null,
       "unigram_bpc": null
     },
+    "report_card": null,
+    "report_card_trend": [],
     "running": false,
     "status": null,
     "step": 0,

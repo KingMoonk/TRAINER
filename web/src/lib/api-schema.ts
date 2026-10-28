@@ -8634,6 +8634,14 @@ export interface components {
              */
             phase: string;
             references: components["schemas"]["ReferencesModel"];
+            /** Report Card */
+            report_card?: {
+                [key: string]: unknown;
+            } | null;
+            /** Report Card Trend */
+            report_card_trend?: {
+                [key: string]: unknown;
+            }[];
             /**
              * Running
              * @default false

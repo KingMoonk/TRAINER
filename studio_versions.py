@@ -185,7 +185,12 @@ class VersionStore:
         return self._update(number, runs=[*self.get(number)["runs"], str(run_dir)])
 
     def set_best_checkpoint(self, number, path):
-        return self._update(number, best_checkpoint=str(path))
+        with self._lock:
+            row = self.get(number)
+            card = dict(row.get("scorecard") or {})
+            if row.get("best_checkpoint") != str(path):
+                card.pop("assistant_card", None)  # its measurements belong to the old weights
+            return self._update(number, best_checkpoint=str(path), scorecard=card)
 
     def set_source(self, number, source):
         """Say where version `number`'s weights came from: a dict kept on the row as `source`."""
