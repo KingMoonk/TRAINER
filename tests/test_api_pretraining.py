@@ -29,7 +29,7 @@ class PretrainingRouterTests(ApiCase):
         self.assertEqual(lists["status"], "done", lists)
         result = lists["result"]
         self.assertTrue(result["sentence"])
-        self.assertEqual(len(result["lists"]), 4)
+        self.assertEqual(len(result["lists"]), 3)
         letters = result["lists"][0]
         self.assertEqual((letters["id"], letters["count"] == len(letters["chips"])), ("letters", True))
         self.assertIsNone(result["lists"][2])  # GPT-2's list is not fetched by the fake

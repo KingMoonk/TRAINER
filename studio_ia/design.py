@@ -175,14 +175,14 @@ def say(x, y, more, less):
     return T["about_multiplier"].format(mult=f"{r if r > 1 else 1 / r:.1f}") + " " + (more if r > 1 else less)
 
 FF = (2, 4, 8)  # thinking-room width as a multiple of d_model: narrow / normal / wide
-TOKENIZERS = ("byte", "bpe_fast", "bpe_gpt2", "word")  # the small word list is the fast learned one; bpe_custom stays for designs saved with it
-VS = (256, 8192, 50257, 8192)  # word-list sizes behind letters / small / large / whole words (the cap; less on little data)
-WORDS = ("Letters", "Small word list", "Large word list", "Whole words")
+TOKENIZERS = ("byte", "bpe_fast", "bpe_gpt2")  # the small word list is the fast learned one
+VS = (256, 8192, 50257)  # word-list sizes behind letters / small / large (the cap; less on little data)
+WORDS = ("Letters", "Small word list", "Large word list")
 WIDTHS = ("Narrow", "Normal", "Wide")
 HEADS = (1, 4, 8, 12)  # 12 rarely divides the width, so picking it can round the width (width_for)
 PART_SLOTS = ("embedding", "position", "head")  # the model-wide parts the tower shows; every block has BLOCK_SLOTS
 PART_TERMS = dict(embedding="embedding", position="position", norm="norm", mixer="token_mixer", channel="mlp", head="output_head")
-WORD_TERMS = ("bytes", "bpe", "gpt2_bpe", "whole_words")  # GLOSSARY entries behind WORDS
+WORD_TERMS = ("bytes", "bpe", "gpt2_bpe")  # GLOSSARY entries behind WORDS
 STEPS, ROWS = 1000, 16  # a catch-up job here; the Pretraining page is where length, rows and data are chosen
 EXPECT = dict(
     more="More blocks: each word gets more rounds of processing, and every training step takes longer. With little data it may memorize rather than learn; watch the test line.",
@@ -194,7 +194,6 @@ EXPECT = dict(
     letters="Letters: the word table becomes tiny, but the model has to learn spelling, and your text turns into about 5 times as many pieces, so each step covers less text.",
     small="Small word list: built from your own data. A much smaller table; text splits into somewhat more pieces.",
     large="Large word list: GPT-2’s list. A big table, short sequences.",
-    words="Whole words: one entry per frequent word in your own data. Short sequences, but a word that is not in the list is lost.",
 )
 WARM = dict(  # kind -> (chip, colour); the sentence itself is studio_warmstart.NOTES[kind]
     same=("weights carry over exactly", "live"), heads=("weights carry over, not exactly", "attention"),
@@ -336,7 +335,7 @@ def read_spec(spec):
     training settings (TRAINING_SETTINGS)."""
     spec = validate_spec(spec)
     f, block = _facts(spec), spec["block"]
-    word = {"letters": 0, "small word list": 1, "large word list": 2, "whole words": 3}.get(f["words"], 1)
+    word = {"letters": 0, "small word list": 1, "large word list": 2}.get(f["words"], 1)
     parts = {slot: spec[slot]["id"] for slot in PART_SLOTS} | {slot: block[slot]["id"] for slot in BLOCK_SLOTS}
     own = {(o["index"], slot): o[slot]["id"] for o in spec["blocks"] for slot in BLOCK_SLOTS if slot in o}
     run = spec["train"].get("run") or {}
@@ -387,7 +386,7 @@ def write_spec(base, s, was=None):
     if s["V"] != was["V"]:
         spec["tokenizer"] = {"id": TOKENIZERS[s["V"]], "config": tokenizer_config(TOKENIZERS[s["V"]], spec)}
     tokenizer_id = TOKENIZERS[s["V"]]
-    if vocab_size != was["U"] and tokenizer_id in ("bpe_fast", "word"):
+    if vocab_size != was["U"] and tokenizer_id == "bpe_fast":
         spec["tokenizer"].setdefault("config", {})["vocab_size"] = vocab_size
     run = dict((spec["train"].get("run") or {}))
     if token_limit:
@@ -784,7 +783,7 @@ def expectations(cur, draft, versions=(), issues=(), facts=None, compares=None):
     if b["W"] < a["W"]:
         out.append(EXPECT["narrower"])
     if b["V"] != a["V"]:
-        out.append(EXPECT[("letters", "small", "large", "words")[b["V"]]])
+        out.append(EXPECT[("letters", "small", "large")[b["V"]]])
     for slot in ("embedding", "position", *BLOCK_SLOTS, "head"):
         if b["M"][slot] != a["M"][slot]:
             module = registry.get(slot, b["M"][slot])
@@ -1090,15 +1089,14 @@ def notebook_line(row):
 
 
 MISSING = {1: "Built from your text: add some in Your data to see these pieces.",
-           2: "GPT-2’s list could not be downloaded. It is fetched the first time you train with it.",
-           3: "Built from your text: add some in Your data to see these pieces."}
+           2: "GPT-2’s list could not be downloaded. It is fetched the first time you train with it."}
 
 
 def pieces_for(v, lists):
     """([(label, state)], count line) for the example sentence under word list v. `lists` = services.word_lists(), or None
     while it is still being read. The count line puts every list's count side by side, in the order of the buttons."""
     if lists is None:
-        lists = {"tokenizers": (cut.Tokenizer("byte"), None, None, None), "sentence": cut.EXAMPLE}
+        lists = {"tokenizers": (cut.Tokenizer("byte"), None, None), "sentence": cut.EXAMPLE}
         note = "Reading your text…"
     else:
         note = MISSING.get(v)
@@ -1107,9 +1105,6 @@ def pieces_for(v, lists):
     if tok is None:
         return [(note, "neutral")], line
     chips = [(label, "pieces" if known else "attention") for label, known in cut.chips(tok, lists["sentence"])]
-    lost = sum(state == "attention" for _, state in chips)
-    if lost:
-        line += f", {lost} word{'s' if lost > 1 else ''} lost to “unknown”"
     return chips, line
 
 
@@ -1150,7 +1145,7 @@ def example_text(part, s, short, lists=None):
 def example_for(part, s, short, pieces, sentence):
     """example_text with the example sentence already cut by the draft's word list: `pieces` ([label] or None) of `sentence`."""
     d, rows = draft_width(s), s["U"]
-    upto = T["up_to"] if s["V"] in (1, 3) else ""  # built from your text: the size is a cap
+    upto = T["up_to"] if s["V"] == 1 else ""  # built from your text: the size is a cap
     last, before = (pieces[-1].strip() or pieces[-1], len(pieces) - 1) if pieces and len(pieces) > 1 else (None, 0)
     slot = "norm" if part == "final_norm" else part
     if slot == "norm" or slot == "mixer" or slot == "channel":

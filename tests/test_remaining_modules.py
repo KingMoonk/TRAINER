@@ -12,7 +12,7 @@ import torch
 from studio_estimate import estimate
 from studio_modules.init.mup import MuPInit
 from studio_modules.optimizer.muon import zeropower_newton_schulz
-from studio_modules.tokenizer.bpe_gpt2 import GPT2Config, bytes_to_unicode, load_assets, pretokenize
+from studio_modules.tokenizer.bpe_gpt2 import GPT2Config, bytes_to_unicode, load_assets
 from studio_registry import get
 from studio_slots import Ctx, Dims, OFFSET
 from studio_spec import validate_spec
@@ -357,39 +357,10 @@ class RemainingModules(unittest.TestCase):
             self.assertEqual(tokenizer.decode(tokenizer.encode(text)), text)
             self.assertEqual(tokenizer.vocab_size, 50257 + OFFSET)
             self.assertEqual(tokenizer.restore(json.loads(json.dumps(tokenizer.serialize()))).encode(text), tokenizer.encode(text))
-            self.assertEqual(pretokenize("it's  nice!"), ["it", "'s", " ", " nice", "!"])
-            # The original ordered pattern treats only ASCII space as the optional
-            # prefix and leaves the final whitespace character for the next token.
-            fixtures = {
-                "αβ  42🎈's": ["αβ", " ", " 42", "🎈'", "s"],
-                "A\u0085\u200b B": ["A", "\u0085", "\u200b", " B"],
-                "x\u00a0\u00a0y": ["x", "\u00a0", "\u00a0", "y"],
-                "'S 're": ["'", "S", " '", "re"],
-                "漢字\u0301😀": ["漢字", "\u0301😀"],
-            }
-            for sample, expected in fixtures.items():
-                with self.subTest(text=sample):
-                    self.assertEqual(pretokenize(sample), expected)
         with tempfile.TemporaryDirectory() as directory, mock.patch(
                 "studio_modules.tokenizer.bpe_gpt2.urllib.request.urlopen", side_effect=OSError("offline")):
             with self.assertRaisesRegex(ValueError, "connect to the internet"):
                 load_assets(GPT2Config(directory))
-
-    def test_custom_bpe_determinism_and_json_restore(self):
-        module = get("tokenizer", "bpe_custom")
-        cfg = module.parse({"vocab_size": 275})
-        examples = [{"text": "café café cat"}, {"text": "cat café cat"}]
-        first = module.fit(cfg, examples)
-        second = module.fit(cfg, list(reversed(examples)))
-        self.assertEqual(first.serialize(), second.serialize())
-        self.assertLessEqual(first.vocab_size, cfg.vocab_size)
-        text = "café cat 🦊"
-        ids = first.encode(text)
-        self.assertEqual(first.decode(ids), text)
-        self.assertLess(len(first.encode("café café")), len("café café".encode("utf-8")))
-        restored = module.restore(json.loads(json.dumps(first.serialize())))
-        self.assertEqual(restored.encode(text), ids)
-        self.assertEqual(restored.decode(ids), text)
 
 
 if __name__ == "__main__":

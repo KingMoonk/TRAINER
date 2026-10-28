@@ -150,9 +150,9 @@ type ControlsProps = {
 type ModelSettingKey = "d" | "T" | "U" | "token_limit_millions";
 
 export function Controls({ registry, cur, draft, knobs, onKnob, onModelSetting = () => {} }: ControlsProps) {
-  const vocabEditable = draft.V === 1 || draft.V === 3;
-  const vocabMin = draft.V === 1 ? 1024 : 263;
-  const vocabMax = draft.V === 1 ? 65536 : 16384;
+  const vocabEditable = draft.V === 1;
+  const vocabMin = 1024;
+  const vocabMax = 65536;
   const mixer = registry.slots.find((slot) => slot.slot === "mixer")?.modules.find((module) => module.short === draft.M.mixer);
   const hasHeads = mixer?.fields.some((field) => field.name === "heads") ?? false;
   const numberInput = (label: string, key: ModelSettingKey, value: number, min: number, max: number, disabled = false) => (

@@ -12,11 +12,9 @@ import studio_export as export
 import studio_spec
 from studio_compile import CompiledModel
 from studio_model import DEFAULT_CONFIG, LocalModel, validate_config
-from studio_modules.tokenizer.bpe_custom import CustomBPETokenizer
 from studio_modules.tokenizer.bpe_fast import FastBPETokenizer
 from studio_modules.tokenizer.bpe_gpt2 import GPT2Tokenizer, bytes_to_unicode
 from studio_modules.tokenizer.byte import Tokenizer
-from studio_modules.tokenizer.word import WordTokenizer
 from studio_slots import OFFSET
 
 try:
@@ -355,8 +353,7 @@ class HuggingFaceExport(unittest.TestCase):
 
     def test_tokenizers_hugging_face_cannot_load_export_their_vocabulary_as_json(self):
         examples = [{"text": "the cat sat on the mat. the cat ran, the cat sat."}]
-        cases = {"character": Tokenizer.fit("character", examples), "word": WordTokenizer.fit(examples, 40),
-                 "bpe_custom": CustomBPETokenizer.fit(examples, 280)}
+        cases = {"character": Tokenizer.fit("character", examples)}
         for kind, tokenizer in cases.items():
             with self.subTest(kind):
                 out = self.root / kind
@@ -370,8 +367,6 @@ class HuggingFaceExport(unittest.TestCase):
                 self.assertEqual(data["vocabulary"][:OFFSET], list(export.SPECIAL_TOKENS))
                 self.assertEqual(len(set(data["vocabulary"])), len(data["vocabulary"]))
                 self.assertIn("cannot load it", (out / "README.md").read_text(encoding="utf-8"))
-                if kind == "bpe_custom":
-                    self.assertEqual(data["merges"], [[left[0], right[0]] for left, right in tokenizer.merges])
                 # the model itself is still a GPT-2 design
                 self.assertTrue(report["huggingface_loadable"])
 
@@ -498,9 +493,7 @@ class GGUFExport(unittest.TestCase):
             export.export_gguf(self.root / "rope.npz", self.root / "rope.gguf")
         self.assertFalse((self.root / "rope.gguf").exists())
         examples = [{"text": "the cat sat on the mat."}]
-        for kind, tokenizer, words in (("character", Tokenizer.fit("character", examples), "character tokenizer"),
-                                       ("word", WordTokenizer.fit(examples, 40), "whole-word tokenizer"),
-                                       ("bpe_custom", CustomBPETokenizer.fit(examples, 270), "custom BPE tokenizer")):
+        for kind, tokenizer, words in (("character", Tokenizer.fit("character", examples), "character tokenizer"),):
             with self.subTest(kind):
                 write_checkpoint(self.root / f"{kind}.npz", gpt2_spec(tokenizer=kind), tokenizer)
                 with self.assertRaisesRegex(export.ExportError, words):
