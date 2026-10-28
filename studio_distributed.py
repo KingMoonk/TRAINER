@@ -58,6 +58,7 @@ class Machine:
     invite_id: str = ""  # the id this computer chose for the member job it asks the machine to queue: asked again, the machine adds it once
     asked_round: int = 0  # the round its invitation was last asked again at (`reinvite`)
     late: bool = False  # it came online after the run began and the owner invited it by itself (studio_remote.Cluster.offer)
+    epoch: int = 0  # lease epoch for this member
 
     @property
     def local(self):
@@ -393,7 +394,7 @@ def invite(job, client_for=PeerClient, only=None, wait=INVITE_WAIT):
                                                              + " cannot be told where to join. Set TRAINER_NODE_ADDRESS to it.")
             return
         body = {"kind": "diloco_member", "label": f"{job.label} (member)",
-                "params": {"coordinator_url": url, "run": job.id, "node": machine.node, "epoch": 0,
+                "params": {"coordinator_url": url, "run": job.id, "node": machine.node, "epoch": getattr(machine, "epoch", 0),
                            **({"member_options": p["member_options"]} if p.get("member_options") else {}),
                            **({"fit": p["member_fit"][machine.address]} if (p.get("member_fit") or {}).get(machine.address) else {}),
                            **({"ignore_plan": True} if p.get("ignore_plan") else {})}}
@@ -413,7 +414,9 @@ def invite(job, client_for=PeerClient, only=None, wait=INVITE_WAIT):
     todo = []
     with _LOCK:
         for m in run.machines:
-            if not m.local and not (m.peer_job and m.state == "invited") and (run.id, m.node) not in _ASKING:
+            if only is not None and m.address not in only:
+                continue
+            if not m.local and (only is not None or not (m.peer_job and m.state == "invited")) and (run.id, m.node) not in _ASKING:
                 _ASKING.add((run.id, m.node))
                 todo.append(m)
     threads = [threading.Thread(target=asking, args=(m,), name=f"invite {m.node}", daemon=True) for m in todo]
@@ -444,13 +447,15 @@ def take(machine, client, body):
 
 
 def reinvite(job, round_, client_for=PeerClient, among=None):
-    """Ask again, once per round, each machine whose invitation failed (`unreachable`), so a machine that was slow or away when the run
+    """Ask again, once per round, each machine whose invitation failed (`unreachable`) or which was unplaced, so a machine that was slow or away when the run
     started joins a later round instead of none. `round_` is the round the coordinator is at; `among` limits it to those addresses (the
     machines holding a slot of the run). Returns at once: the asks go on in the background."""
     run = RUNS.get(job.id)
     if run is None:
         return
-    again = [m for m in run.machines if not m.local and m.state == "unreachable" and m.asked_round < round_
+    again = [m for m in run.machines if not m.local
+             and (m.state in ("unreachable", "unplaced") or not m.peer_job)
+             and m.asked_round < round_
              and (among is None or m.address in among)]
     for machine in again:
         machine.asked_round = round_
@@ -541,7 +546,7 @@ def lapse(run, node, client_for=PeerClient):
     release_member(run, node, client_for)
     machine = next((m for m in run.machines if m.node == node), None)
     if machine is not None and not machine.local:
-        machine.peer_job, machine.state = "", "unplaced"
+        machine.peer_job, machine.invite_id, machine.state = "", "", "unplaced"
         machine.reason = "Its lease lapsed, so the run let it go. It joins a later round if it is free by then."
 
 
