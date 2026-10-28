@@ -25,7 +25,7 @@ import studio_model
 import studio_peer
 import studio_stages
 from studio_api.app import get_services
-from studio_api.routers.pretraining import _version
+from studio_api.routers.pretraining import CHAT_SHARE_MAX, _absolute, _version
 from studio_api.version import app_version
 from studio_ia import pretraining_plan as plan
 from studio_ia.services import Job
@@ -81,6 +81,11 @@ class StartRun(BaseModel):
     pivots: list[Literal["halve_lr", "next_dataset", "drop_lessons"]] | None = None  # what the run tries, in this order, when the loss plateaus: back to the best weights, then the change; with none left, or no plateau window, it ends. Needs plateau_checks
     stages: Stages | None = None  # next_dataset moves on to the workspace's unseen text sets, worst held-out loss first; needs next_dataset in pivots
     window_hours: float | None = Field(None, gt=0, le=24 * 365)  # the longest the run may take (default studio_fit.DEFAULT_WINDOW_HOURS): rounds the members cannot finish in it at their measured speed are cut
+    rows: int = Field(ROWS, ge=1, le=256)  # rows per step, split over the members (the Pretraining page's answer)
+    hold: float = Field(HOLD, ge=0.0, lt=0.5)  # share of the text held back for validation
+    from_version: int | None = None  # a catch-up: the version whose best weights the run starts from (same design and word list as `version`); None: from scratch
+    chat_share: float = Field(0.0, ge=0.0, le=CHAT_SHARE_MAX)  # conversations of chat_datasets mixed into the text as this share of its characters; 0: none
+    chat_datasets: list[str] = []  # the conversation sets that mix draws from; needed by chat_share
     leave_out: list[str] | None = None  # the machines (by the names RunSizing.flagged gives) the person confirmed to start without because they cannot hold their share; the start is a 409 when the machines that cannot hold it NOW differ from this list, and without it a machine that cannot is a 409 naming it
 
 
@@ -666,7 +671,7 @@ def _sizing(body, services, version, peers, own):
     local = services.hardware_profile()
     if local is None:
         return None
-    config = plan.pretrain_config(version.spec, body.rounds * body.inner_steps, ROWS, HOLD)
+    config = plan.pretrain_config(version.spec, body.rounds * body.inner_steps, body.rows, body.hold)
     shape = _design_shape(config)
     members = [{"name": own.hostname, "address": studio_cluster.LOCAL, "profile": local, "share": services.memory_share(),
                 "speed": own.tokens_per_second_for(shape)}]
@@ -676,7 +681,7 @@ def _sizing(body, services, version, peers, own):
                             "share": peer.memory_share or 1., "speed": peer.tokens_per_second_for(shape)})
     window = body.window_hours or studio_fit.DEFAULT_WINDOW_HOURS
     first = studio_fit.fit_members(config, members, window_hours=window)
-    per_round = body.inner_steps * ROWS * config["context"]  # tokens one member trains in a round (a batch of ROWS rows, however it is split)
+    per_round = body.inner_steps * body.rows * config["context"]  # tokens one member trains in a round (a batch of body.rows rows, however it is split)
     counted = first["measured"]  # the members that fit and have a speed for this design: only they set the cut
     found = studio_fit.fit_members(config, members, token_budget=body.rounds * per_round * counted, window_hours=window) if counted else first
     rounds, budget = body.rounds, found["token_budget"]
@@ -743,6 +748,37 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     return Run.model_validate(_found(services, job.id))
 
 
+def _start_weights(body, services, version):
+    """(the checkpoint a catch-up run starts from, the version it comes from) for `body.from_version`, or (None, None) for a run from
+    scratch. 400 with a sentence when that version has no trained weights, another word list, or another design than `version`:
+    the run starts every member from the same weights, so only a checkpoint whose every tensor fits can be its start."""
+    if body.from_version is None:
+        return None, None
+    source = next((v for v in services.versions() if v.number == body.from_version), None)
+    if source is None or not source.best_checkpoint:
+        raise HTTPException(400, f"Version {body.from_version} has no trained weights to start from.")
+    if plan.word_list_changed(version, source):
+        raise HTTPException(400, f"Version {source.number} has another word list than version {version.number}, so its weights cannot be the start.")
+    if not plan.same_design(source.spec, version.spec):
+        raise HTTPException(400, f"Version {source.number} has another design than version {version.number}. A run across machines copies every weight, "
+                                 "so it can only continue a version of the same design.")
+    path = _absolute(services, source.best_checkpoint)
+    if not os.path.isfile(path):
+        raise HTTPException(409, f"The best weights of version {source.number} are not on this computer ({path}).")
+    return path, source
+
+
+def _chat_mix(body, services):
+    """The params of a chat mix: {"chat_share", "chat_datasets"}, empty without one. 400 when the share names no conversation set that exists."""
+    if body.chat_share <= 0:
+        return {}
+    known = {s["id"] for s in services.conversation_sets()}
+    sets = [d for d in dict.fromkeys(body.chat_datasets) if d in known]
+    if not sets:
+        raise HTTPException(400, "A chat share needs conversations to mix in. Add some in Your data, or turn the chat share off.")
+    return {"chat_share": body.chat_share, "chat_datasets": sets}
+
+
 def build_run(body, services, peer_url, api_port, replaced=None):
     """The queued-run Job POST /distributed/runs adds for `body` (every check and the per-member sizing included; HTTPException with a
     sentence when it cannot start), not yet recorded or enqueued: `peer_url` and `api_port` are how the other machines reach this one.
@@ -760,6 +796,8 @@ def build_run(body, services, peer_url, api_port, replaced=None):
         raise HTTPException(400, f"No text set {', '.join(unknown)}." if unknown else "Choose some text first.")
     if body.reviewed_only and not services.has_reviewed_text(dataset_ids):
         raise HTTPException(400, "No example in the chosen text is marked Good (and free to train on), so there is nothing to train on. Review some first, or turn off reviewed examples only.")
+    start, source = _start_weights(body, services, version)
+    chat = _chat_mix(body, services)
     shape = {k: getattr(body, k) for k in ("min_members", "max_members") if getattr(body, k) is not None}
     teaching, teaching_params = _teacher_options(body, services, dataset_ids)
     rules = _rule_options(body)
@@ -812,12 +850,16 @@ def build_run(body, services, peer_url, api_port, replaced=None):
     member_options = {**({"overlap": True} if overlap else {}), **({"receiver_grants": True} if body.receiver_grants else {})}
     boxed = body.time_box if body.time_box is not None else len(machines) > 1  # machines differ in speed, and none should wait for another
     settings = replace(settings, time_box=boxed)
-    config = plan.pretrain_config(version.spec, rounds * body.inner_steps, ROWS, HOLD)
+    config = plan.pretrain_config(version.spec, rounds * body.inner_steps, body.rows, body.hold)
     label = runs.across_label(version.number, len(machines))
+    if source is not None:
+        label += f", continuing version {source.number}" if source.number != version.number else ", trained further"
+    if chat:
+        label += f", {body.chat_share:.0%} chat"
     job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
-        "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
-        "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("inner_steps", "outer_lr", "outer_momentum")}, "rounds": rounds,
-        "delta_dtype": settings.delta_dtype, "delta_sparsity": settings.delta_sparsity, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **rules["settings"], **rules["params"], **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": member_options} if member_options else {}), "machines": machines, "owner": own.hostname,
+        "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "catch_up" if start else "from_scratch", "version": version.number,
+        "heldout_fraction": body.hold, **{k: getattr(body, k) for k in ("inner_steps", "outer_lr", "outer_momentum")}, "rounds": rounds,
+        "delta_dtype": settings.delta_dtype, "delta_sparsity": settings.delta_sparsity, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **rules["settings"], **rules["params"], **({"reviewed_only": True} if body.reviewed_only else {}), **({"restart_from": start} if start else {}), **chat, **({"member_options": member_options} if member_options else {}), "machines": machines, "owner": own.hostname,
         **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": peer_url, "api_port": api_port,
         **({"left_out": left_out} if body.all_machines or left_out else {}), **({"member_fit": fit_of} if fit_of else {})}, note=_sizing_note(sizing))
     return job

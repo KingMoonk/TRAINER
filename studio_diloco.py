@@ -2583,8 +2583,12 @@ def _prepare(job, services, directory, port, client_for, p, say):
     if p.get("stages"):  # next_dataset goes to the workspace's unseen text sets, worst first, with replay (studio_stages)
         import studio_stages
         policy, examples = studio_stages.Policy.for_job(p, services)
+    elif "examples" in p:
+        examples = p["examples"]
+    elif p.get("chat_share") and hasattr(services, "example_stream"):  # the text with the chosen conversations mixed in, as a solo pretrain run reads it
+        examples = list(services.example_stream(p))
     else:
-        examples = p["examples"] if "examples" in p else services.examples(p)
+        examples = services.examples(p)
     conversations = services.conversations(p) if p.get("conversations") else None  # the teacher's prompts: kept apart from what the members train on
     if not examples and p.get("reviewed_only"):
         raise ValueError("Reviewed examples only is on, but no example in the chosen text is marked Good and free to train on.")
