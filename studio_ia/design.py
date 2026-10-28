@@ -383,10 +383,9 @@ def write_spec(base, s, was=None):
             for override in spec["blocks"]:
                 if override["index"] == index:
                     override.pop(slot, None)
-    v = min(s["V"], len(TOKENIZERS) - 1)
     if s["V"] != was["V"]:
-        spec["tokenizer"] = {"id": TOKENIZERS[v], "config": tokenizer_config(TOKENIZERS[v], spec)}
-    tokenizer_id = TOKENIZERS[v]
+        spec["tokenizer"] = {"id": TOKENIZERS[s["V"]], "config": tokenizer_config(TOKENIZERS[s["V"]], spec)}
+    tokenizer_id = TOKENIZERS[s["V"]]
     if vocab_size != was["U"] and tokenizer_id == "bpe_fast":
         spec["tokenizer"].setdefault("config", {})["vocab_size"] = vocab_size
     run = dict((spec["train"].get("run") or {}))
