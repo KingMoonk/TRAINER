@@ -8200,6 +8200,12 @@ export interface components {
             lora_rank: number;
             /** Max Tokens */
             max_tokens?: number | null;
+            /**
+             * Method
+             * @default practice
+             * @enum {string}
+             */
+            method: "practice" | "rejection";
             /** Prompts Per Step */
             prompts_per_step?: number | null;
             /** Round */

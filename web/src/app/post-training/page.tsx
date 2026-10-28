@@ -24,7 +24,7 @@ const REFRESH_MS = 600;
 export default function PostTrainingPage() {
   const queryClient = useQueryClient();
   const [picked, setPicked] = useState<number | null>(null);
-  const [choices, setChoices] = useState<Choices>({ lora: null, rank: 8, teacher: "version", teacherVersion: null, leash: "Medium", round2: { steps: "", prompts_per_step: "", group: "", temperature: "", max_tokens: "", kl: "" } });
+  const [choices, setChoices] = useState<Choices>({ lora: null, rank: 8, teacher: "version", teacherVersion: null, leash: "Medium", method: "practice", round2: { steps: "", prompts_per_step: "", group: "", temperature: "", max_tokens: "", kl: "" } });
   const [live, setLive] = useState<Live>({});
   const [liveGates, setLiveGates] = useState<Record<number, Gate>>({});
 
@@ -129,6 +129,7 @@ export default function PostTrainingPage() {
             teacher: choices.teacher,
             teacher_version: choices.teacher === "version" ? choices.teacherVersion : null,
             leash: choices.leash,
+            method: selected === 2 ? choices.method : "practice",
             ...(selected === 2
               ? Object.fromEntries(ROUND2_SETTINGS.map((spec) => [spec.key, settingValue(choices.round2[spec.key], spec)]))
               : {}),

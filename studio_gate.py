@@ -81,7 +81,7 @@ def _dpo_check(record, threshold=DPO_ACCURACY):
     return {"name": name, "detail": detail, "ok": bool(acc > threshold)}
 
 
-def passes(before, after, band=None, number=None, drift=DRIFT, record=None):
+def passes(before, after, band=None, number=None, drift=DRIFT, record=None, rejection=False):
     """(ok, checks): checks are [{"name", "detail", "ok"}] in display order; a check's ok is True, False, or None (not measured).
 
     Round 1 (number=1): held-back conversation loss fell AND the stop-with-EOS rate did not fall AND raw-text bpc stayed within
@@ -91,7 +91,12 @@ def passes(before, after, band=None, number=None, drift=DRIFT, record=None):
     Rounds 2-4 also need a measured improvement, and a missing measurement fails them (ok=False, never None): round 2 the held-back
     pass rate rose (_rose_check); round 3 the pass rate did not fall and the teacher KL fell; round 4 the held-back DPO reward
     accuracy is above DPO_ACCURACY. `record` is the round's training record (round 3: kl_before/kl_after; round 4: final_validation
-    and validation_pairs)."""
+    and validation_pairs).
+
+    rejection: Round 2's keep-the-passes variant (it trains on passing answers like Round 1 trains on conversations), gated like Round 1
+    (answer error fell, answers still stop, raw text within the drift budget) plus the held-back pass rate did not fall."""
+    if rejection:
+        number = 1
     k0, n0, k1, n1 = before.get("pass_k", 0), before.get("pass_n", 0), after.get("pass_k", 0), after.get("pass_n", 0)
     rate_ok = not (n0 and n1) or k1 * n0 >= k0 * n1   # no problems on either side: nothing can have fallen
     rate_detail = f"{k1} of {n1} held-back problems, was {k0} of {n0}" if n0 and n1 else "no held-back problems to check"
