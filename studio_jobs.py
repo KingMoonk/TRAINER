@@ -28,7 +28,7 @@ def prepare(job, services):
     p = job.params
     run_dir = Path(services.workspace.run_dir)
     p.pop("result", None)  # a run cut short by a restart starts afresh; an old result must not be recorded again
-    if job.kind in ("pretrain", "compare", "import_pretrained", "midtrain", "sft") + ROUNDS:
+    if job.kind in ("pretrain", "compare", "import_pretrained", "midtrain") + ROUNDS:
         p["output_dir"] = str(output_dir(job, run_dir))
     if job.kind == "pretrain" and not getattr(job, "owner", ""):
         continue_here(job)
@@ -40,13 +40,13 @@ def prepare(job, services):
     if job.kind in ROUNDS:
         import studio_rl
         studio_rl.resolve(studio_rl.number_of(job), job, services)
-    if job.kind in ("midtrain", "sft") and not p.get("checkpoint"):
+    if job.kind == "midtrain" and not p.get("checkpoint"):
         version = next((v for v in services.versions() if v.number == p.get("version")), None)
         if version is None or not version.best_checkpoint:
             from studio_versions import NoCheckpoint
             raise NoCheckpoint(p.get("version"))
         p["checkpoint"] = str(version.best_checkpoint)
-    if job.kind in ("midtrain", "sft"):
+    if job.kind == "midtrain":
         _continue_stage(job)
     return {"root": str(services.root), "run_dir": str(run_dir)}
 
@@ -344,7 +344,7 @@ def rlhf_loop(job, context, emit, stop, pause):
 
 
 def training_stage(job, context, emit, stop, pause):
-    """A mid-training or SFT job; adoption is decided by its gate in the app."""
+    """A mid-training job; adoption is decided by its gate in the app."""
     import studio_training_stages
     p = job.params
     result = studio_training_stages.run_stage(job.kind, p["checkpoint"], context, output_dir(job, context.run_dir),
@@ -385,4 +385,4 @@ def not_built(job, context, emit, stop, pause):
 HANDLERS = {"pretrain": pretrain, "checkpoint_now": checkpoint_now, "quicktest": quicktest, "compare": compare,
             "post_round": post_round, "restore_answers": restore_answers, "import_pretrained": import_pretrained,
             "pretrain_distributed": pretrain_distributed, "diloco_member": diloco_member, "rlhf_loop": rlhf_loop,
-            "midtrain": training_stage, "sft": training_stage, "mlperf": mlperf}
+            "midtrain": training_stage, "mlperf": mlperf}

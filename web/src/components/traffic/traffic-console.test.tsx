@@ -47,13 +47,15 @@ function stream(first: TrafficRecord[]) {
 const openButton = () => screen.getAllByRole("button", { name: "API traffic console" })[0];
 const console_ = () => screen.getByRole("region", { name: "API traffic" });
 
-function setup(first: TrafficRecord[], extra: Record<string, unknown> = {}) {
+function setup(first: TrafficRecord[], extra: Record<string, unknown> = {}, developerTools = true) {
   const live = stream(first);
   const calls = mockApi({
     "GET /traffic": live.respond,
     "GET /traffic/rules": { body: { rules: RULES } },
     ...extra,
   });
+  // the sidebar button is hidden until Developer tools is on; Ctrl+` works either way
+  if (developerTools) localStorage.setItem("settings.developerTools", "on");
   renderPage(<main>page</main>, { shell: true });
   return { live, calls };
 }
@@ -82,6 +84,14 @@ describe("the traffic console", () => {
     expect(console_()).toBeInTheDocument();
     await user.keyboard("{Control>}`{/Control}");
     expect(screen.queryByRole("region", { name: "API traffic" })).not.toBeInTheDocument();
+  });
+
+  test("Ctrl+` works with Developer tools off, when the sidebar has no button", async () => {
+    setup([], {}, false);
+    const user = userEvent.setup();
+    expect(screen.queryByRole("button", { name: "API traffic console" })).not.toBeInTheDocument();
+    await user.keyboard("{Control>}`{/Control}");
+    expect(console_()).toBeInTheDocument();
   });
 
   test("shows new records as they arrive, hides noise, and filters by status and search", async () => {

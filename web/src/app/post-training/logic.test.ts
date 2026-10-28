@@ -1,7 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api";
 import { T, fill } from "./copy";
-import { count, errorText, firstOpenRound, gateState, roundBlocker, rowText, spreadText, stepLine, type Status } from "./logic";
+import { count, errorText, firstOpenRound, gateState, roundBlocker, rowText, settingValue, spreadText, stepLine, type Status } from "./logic";
+
+describe("settingValue", () => {
+  const steps = { min: 1, max: 5000, integer: true };
+  it("is null when empty so the server default applies", () => {
+    expect(settingValue("", steps)).toBeNull();
+    expect(settingValue("  ", steps)).toBeNull();
+  });
+  it("reads a number inside the bounds", () => {
+    expect(settingValue("50", steps)).toBe(50);
+    expect(settingValue("0.7", { min: 0.1, max: 2, integer: false })).toBe(0.7);
+  });
+  it("ignores text, fractions of a whole setting and numbers out of bounds", () => {
+    expect(settingValue("abc", steps)).toBeNull();
+    expect(settingValue("2.5", steps)).toBeNull();
+    expect(settingValue("0", steps)).toBeNull();
+    expect(settingValue("9000", steps)).toBeNull();
+  });
+});
 
 const rounds = (statuses: Record<string, string>) => ({ rounds: Object.fromEntries(Object.entries(statuses).map(([k, status]) => [k, { status }])) }) as unknown as Status;
 
@@ -18,10 +36,10 @@ describe("roundBlocker", () => {
     expect(roundBlocker(2, { conversations: 9 }, false, false, true)).toBe("Make problems a rule can check first.");
     expect(roundBlocker(2, { problems: 1 }, false, false, true)).toBeNull();
   });
-  it("round 4 needs at least two rated pairs", () => {
-    expect(roundBlocker(4, { pairs: 1 }, false, false, true)).toBe("Rate at least 2 pairs in Chat first.");
-    expect(roundBlocker(4, {}, false, false, true)).toBe("Rate at least 2 pairs in Chat first.");
-    expect(roundBlocker(4, { pairs: 2 }, false, false, true)).toBeNull();
+  it("round 4 needs at least twenty rated pairs", () => {
+    expect(roundBlocker(4, { pairs: 19 }, false, false, true)).toBe("Rate at least 20 pairs in Chat first: fewer are memorised, not learned.");
+    expect(roundBlocker(4, {}, false, false, true)).toBe("Rate at least 20 pairs in Chat first: fewer are memorised, not learned.");
+    expect(roundBlocker(4, { pairs: 20 }, false, false, true)).toBeNull();
   });
   it("round 3 learns from another version, or from corrections", () => {
     expect(roundBlocker(3, {}, true, false, true)).toBe("There is no other trained version to learn from yet.");

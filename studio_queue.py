@@ -20,7 +20,7 @@ from studio_timing import timed
 
 WATCHED = ("pretrain", "pretrain_distributed")  # jobs whose out-of-memory halvings and free disk and RAM the queue watches while they run
 KINDS = ("pretrain", "quicktest", "compare", "post_round", "restore_answers", "checkpoint_now", "import_pretrained",
-         "pretrain_distributed", "diloco_member", "rlhf_loop", "midtrain", "sft", "mlperf")
+         "pretrain_distributed", "diloco_member", "rlhf_loop", "midtrain", "mlperf")
 MEMORY = {"half": .5, "most": .75, "all": 1.}
 QUEUED = ("waiting", "held")  # jobs listed under Up next, in order; only "waiting" ones are picked to run
 SIZING_PERCENT = "sizing_percent"  # with SIZING: how far the size of the text is worked out, in percent (set in memory; not saved on its own)

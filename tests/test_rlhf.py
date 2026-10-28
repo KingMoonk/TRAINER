@@ -214,6 +214,28 @@ class RLHFChecks(unittest.TestCase):
         for got, want in zip(validation, (1.27481, .66271, .56367)):
             self.assertAlmostEqual(got, want, delta=1e-3)
 
+    def test_steps_scale_with_the_pair_count_and_the_default_rate_is_small(self):
+        self.assertEqual([studio_rlhf.dpo_steps(n, 4) for n in (20, 21, 100, 1000)], [15, 16, 75, 300])
+        with tempfile.TemporaryDirectory() as directory:
+            base = pretrained(directory)
+            store = PreferenceStore(directory)
+            for word in ("yes", "no", "cat", "dog", "sun", "red", "sky", "big"):
+                store.add([{"role": "user", "content": f"say {word}"}], word, word + " " + word + " " + word, "human", note=word)
+            result = dpo_train(base, store.all(), Path(directory) / "dpo", {"device": "cpu", "eval_every": 3})
+        self.assertEqual(result["steps"], 6)   # ceil(3 x 8 pairs / batch 4)
+        self.assertEqual(result["dpo"]["learning_rate"], studio_rlhf.DPO_LR_FULL)
+        self.assertEqual(result["validation_pairs"], 2)   # 10 % of 8 pairs is 0, but at least 2 are always held back
+
+    def test_the_shipped_checkpoint_is_the_best_one_only_when_pairs_were_held_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pretrained(directory)
+            store = PreferenceStore(directory)
+            for word in ("yes", "no", "cat", "dog", "sun", "red"):
+                store.add([{"role": "user", "content": f"say {word}"}], word, word + " " + word + " " + word, "human", note=word)
+            for validation, name in ((.2, "best.npz"), (0, "last.npz")):
+                result = dpo_train(base, store.all(), Path(directory) / name, {"steps": 4, "eval_every": 2, "device": "cpu", "validation": validation})
+                self.assertEqual(Path(result["checkpoint"]).name, name)
+
     def test_the_reference_is_gone_before_the_policy_goes_backward(self):
         model, live = watched_models()
         with tempfile.TemporaryDirectory() as directory:

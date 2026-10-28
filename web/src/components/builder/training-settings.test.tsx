@@ -13,6 +13,15 @@ const registry = {
 const saved = { batch_size: 4, accumulation: 1, learning_rate: 0.001, weight_decay: 0.01, warmup: 20, dropout: 0.1, eval_every: 25, seed: 42, precision: "fp32" } as Choices;
 
 describe("training settings", () => {
+  test("sit in a disclosure that is closed by default and keeps the fields mounted", () => {
+    render(<TrainingSettings registry={registry} cur={saved} draft={saved} onChange={vi.fn()} />);
+    const details = screen.getByTestId("training-settings") as HTMLDetailsElement;
+    expect(details.tagName).toBe("DETAILS");
+    expect(details.open).toBe(false);
+    expect(screen.getByText("Training settings")).toBeInTheDocument();
+    expect(screen.getByLabelText("Batch size")).toBeInTheDocument();
+  });
+
   test("show every saved value", () => {
     render(<TrainingSettings registry={registry} cur={saved} draft={saved} onChange={vi.fn()} />);
     const value = (label: string) => (screen.getByLabelText(label) as HTMLInputElement).value;

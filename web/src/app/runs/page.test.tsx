@@ -49,6 +49,12 @@ describe("Runs page", () => {
     expect(screen.getByRole("link", { name: "New run" })).toHaveAttribute("href", expect.stringMatching(/^\/runs\/new\/?$/));
   });
 
+  test("the Scheduled header links to the Queue", async () => {
+    server();
+    renderPage(<RunsPage />);
+    expect(await screen.findByRole("link", { name: "Queue ›" })).toHaveAttribute("href", expect.stringMatching(/^\/queue\/?$/));
+  });
+
   test("a running run another computer coordinates has a Join that asks it to add this one; this computer's own run has none", async () => {
     const runs = [diloco({ owner: "beast", can_join: true, members: [member("beast", "local")] }), diloco({ id: "own" })];
     const calls = server(runs, [], { "POST /distributed/runs/*/join": { body: diloco({ owner: "beast" }) } });

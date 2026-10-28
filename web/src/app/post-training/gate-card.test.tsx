@@ -50,4 +50,13 @@ describe("GateCard", () => {
     expect(screen.getByText(T.stopCheck)).toBeVisible();
     expect(screen.queryByTestId("gate-state")).toBeNull();
   });
+
+  test.each([
+    [2, T.problemsRoseCheck],
+    [3, T.teacherGapCheck],
+    [4, T.pairsCheck],
+  ])("before Round %i ends, its improvement check is listed as pending", (round, name) => {
+    render(<GateCard round={round} status="running" gate={undefined} queue={undefined} checkpoint="ck1" overlap={undefined} />);
+    expect(screen.getByText(name)).toBeVisible();
+  });
 });

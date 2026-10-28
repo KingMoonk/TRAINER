@@ -133,5 +133,51 @@ class Excluded(unittest.TestCase):
             self.assertFalse(decontam.Index().add_all(e["text"] for e in train).overlaps(text))
 
 
+class ChoiceRows(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.ws = Workspace(self.tmp.name)
+        self.svc = WorkspaceServices(self.ws)
+        self.addCleanup(self.svc.close)
+
+    def _add(self, count, options, prefix="Q"):
+        ds = self.ws.create_dataset(f"{prefix}{options}")
+        rows = []
+        for i in range(count):
+            lines = "\n".join(f"{'ABCDEFGHIJ'[j]}) {prefix}{i} option {j}" for j in range(options))
+            rows.append({"user": f"Answer the question. Reply with the letter and the option text.\n\n{prefix}{i} {words(f'{prefix}{i}w', 20)}?\n\n{lines}",
+                         "assistant": "A) x", "metadata": {"rule": "choice", "params": {"answer": "A"}}})
+        self.ws.add(ds, rows)
+
+    def test_options_are_reshuffled_by_seed_with_the_key_following(self):
+        self._add(120, 4)
+        a, b = self.svc.post_rows("problems", seed=1), self.svc.post_rows("problems", seed=2)
+        self.assertTrue(a)
+        self.assertEqual(self.svc.post_rows("problems", seed=1), a)
+        self.assertNotEqual([r["prompt"] for r in a], [r["prompt"] for r in b])
+        for row in a:
+            lines = row["prompt"].rpartition("\n\n")[2].split("\n")
+            self.assertTrue(next(l for l in lines if l.startswith(row["params"]["answer"] + ")")).endswith("option 0"))
+        self.assertGreater(len({r["params"]["answer"] for r in a}), 1)
+
+    def test_two_option_sets_are_left_out_of_problems_unless_asked(self):
+        self._add(120, 2, "B")
+        self.assertEqual(self.svc.post_rows("problems"), [])
+        self.assertTrue(self.svc.post_rows("problems", binary=True))
+        self.assertTrue(self.svc.post_rows("heldout_problems"))
+
+    def test_no_held_back_prompt_is_a_training_prompt(self):
+        self._add(150, 4)
+        held = self.svc.post_rows("heldout_problems")
+        self.assertTrue(held)
+        prompt = self.svc._kind_rows("problems", True)[0]["prompt"]
+        talk = self.ws.create_dataset("talk")
+        for attempt in range(4):  # copies hash to either side, so add a few until one is trained on
+            self.ws.add(talk, [{"user": prompt, "assistant": f"copy {attempt}"}])
+        trained = {r.get("prompt") or r.get("user") for r in self.svc._kind_rows("problems", False) + self.svc._kind_rows("conversations", False)}
+        self.assertFalse({r["prompt"] for r in self.svc.post_rows("heldout_problems")} & trained)
+
+
 if __name__ == "__main__":
     unittest.main()

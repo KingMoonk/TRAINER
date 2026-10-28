@@ -19,8 +19,12 @@ const table = (correct: number, heldBack = true) => ({
   items: 20, tasks: 2, held_back: heldBack, chance: 0.25,
   rows: [{ shots: 0, used: 0, correct, accuracy: correct / 20 }, { shots: 4, used: 2.5, correct, accuracy: correct / 20 }],
 });
+// The check sits in the "Scores for this version" disclosure, closed until opened; jsdom hides a closed one's content.
 const card = (number: number) => screen.getByLabelText(`Learning from examples in the question: Version ${number}`);
-const checkIt = (number: number) => userEvent.click(within(card(number)).getByRole("button", { name: "Check it" }));
+const checkIt = (number: number) => {
+  card(number).closest("details")!.open = true;
+  return userEvent.click(within(card(number)).getByRole("button", { name: "Check it" }));
+};
 const pick = (number: number) => userEvent.click(screen.getByRole("button", { name: new RegExp(`^Version ${number}`) }));
 const SLOW = { timeout: 4_000 }; // a running job is polled once a second
 

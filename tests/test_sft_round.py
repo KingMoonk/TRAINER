@@ -179,7 +179,7 @@ class Measure(unittest.TestCase):
     def test_it_returns_bpc_conv_loss_and_eos_rate(self):
         held = [{"user": "Copy: yes", "assistant": "yes"}, {"messages": [{"role": "user", "content": "Copy: no"}, {"role": "assistant", "content": "no"}]}]
         got = studio_rl.measure(self.ckpt, ["Copy: yes yes", "Copy: no no"], [], heldout_conversations=held)
-        self.assertEqual(set(got), {"bpc", "conv_loss", "eos_rate", "pass_k", "pass_n"})
+        self.assertEqual(set(got), {"bpc", "conv_loss", "eos_rate", "pass_k", "pass_n", "letters"})
         self.assertGreater(got["bpc"], 0)
         self.assertGreater(got["conv_loss"], 0)
         self.assertTrue(0 <= got["eos_rate"] <= 1)

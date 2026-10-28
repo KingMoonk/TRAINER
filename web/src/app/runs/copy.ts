@@ -39,6 +39,7 @@ export const T = {
   starting: "Starting",
 
   scheduled: "Scheduled",
+  queueLink: "Queue ›",
   allowedHours: "Allowed hours",
   allowedHoursTip: "Runs only inside each node's configured training hours.",
   allowedHoursTitle: "Allowed hours",

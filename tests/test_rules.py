@@ -40,6 +40,13 @@ class Checks(unittest.TestCase):
         for bad in ("120", "1200 then 3", "twelve hundred", ""):
             self.assertFalse(rules.check("final_number", "q", bad, number), bad)
         self.assertTrue(rules.check("final_number", "q", "about 0.5", {"answer": "0.5"}))
+        # a worked answer: the 'Answer:' line wins over other numbers, whatever order they come in
+        for ok, key in (("2 + 3 = 5, so 5 * 2 = 10.\nAnswer: -3", "-3"), ("Answer: \u22123", "-3"), ("Answer: 1/2", "0.5"),
+                        ("Answer: 50%", "50"), ("Answer: 1,200 apples", "1200"), ("Answer: 4\nI checked 7 times.", "4"),
+                        ("It is \u22123", "-3"), ("Answer: 4. Answer: 6", "6")):
+            self.assertTrue(rules.check("final_number", "q", ok, {"answer": key}), ok)
+        for bad in ("Answer: 3", "Answer: 1/0", "Answer:"):
+            self.assertFalse(rules.check("final_number", "q", bad, {"answer": "-3"}), bad)
         for ok in ("B) water", "B", " (B) water", "B. water"):
             self.assertTrue(rules.check("choice", "q", ok, {"answer": "B"}), ok)
         for bad in ("A) rock", "water", "Because B", ""):
@@ -50,10 +57,28 @@ class Checks(unittest.TestCase):
         self.assertEqual(set(rules.CHECKABLE), set(rules.RULES) | {"final_number", "choice"})
 
     def test_ends_cleanly_details(self):
-        for ok in ("Done.", "Really?", "He said (quietly).", "Done.\n", "It's fine."):
+        for ok in ("Done now.", "Really now?", "He said (quietly).", "Done here.\n", "Wait... what?", "It's fine."):
             self.assertTrue(rules.check("ends_cleanly", "", ok), ok)
-        for bad in ("Done", "Done,", "(Done.", "Say \"hi."):
+        for bad in ("Done", "Done,", "(Done.", "Say \"hi.", ".", "!", "Ok.", "?!.", "1 2.", "Aaaa is here.", "go go go.", "Yes yes yes yes."):
             self.assertFalse(rules.check("ends_cleanly", "", bad), bad)
+
+    def test_trivial_answers_fail_max_length(self):
+        prompt = "Describe rain in under 60 characters."
+        for bad in (".", "x", "ab", "Rain.", "Rain falls on the old grey roofs and the streets and the sea all night long"):
+            self.assertFalse(rules.check("max_length", prompt, bad), bad)
+        self.assertTrue(rules.check("max_length", prompt, "Soft grey water."))
+
+    def test_sort_numbers_numerically(self):
+        prompt = "Sort these numbers: 10 9 100 2"
+        self.assertTrue(rules.check("sort", prompt, "2 9 10 100"))
+        self.assertTrue(rules.check("sort", prompt, "2, 9, 10, 100"))
+        self.assertFalse(rules.check("sort", prompt, "10 100 2 9"))
+        self.assertTrue(rules.check("sort", "Sort these words: pear apple", "apple pear"))
+
+    def test_word_pool_is_large_and_unique(self):
+        self.assertGreaterEqual(len(rules.WORDS), 500)
+        self.assertEqual(len(set(rules.WORDS)), len(rules.WORDS))
+        self.assertTrue(all(w.isalpha() and w.islower() for w in rules.WORDS))
 
 
 class Generators(unittest.TestCase):
@@ -138,6 +163,17 @@ class Kinds(unittest.TestCase):
         ws.add(small, ["a short note kept whole", "held back"])
         self.assertEqual(dk.text_characters(ws, [disk, small], exclude={"held back"}), sum(map(len, docs)) + len("a short note kept whole"))
         self.assertEqual(dk.text_characters(ws, []), 0)
+
+    def test_text_fingerprints_are_those_of_the_text_characters_counts(self):
+        import studio_core
+        ws = workspace()
+        disk, small = ws.create_dataset("disk", storage="sqlite"), ws.create_dataset("small")
+        docs = [f"document {i:03d} " + "x" * 40 for i in range(30)]
+        ws.add(disk, docs + [{"user": "q", "assistant": "a"}, {"text": "an unreviewed draft", "quality": "Review", "synthetic": True}])
+        ws.add(small, ["a short note kept whole", "held back"])
+        found = list(dk.text_fingerprints(ws, [disk, small], exclude={"held back", docs[0]}))
+        self.assertEqual(sorted(found), sorted(studio_core.fingerprint({"text": t}) for t in docs[1:] + ["a short note kept whole"]))
+        self.assertEqual(list(dk.text_fingerprints(ws, [])), [])
 
     def test_text_characters_counts_only_training_text_of_disk_sets(self):
         ws = workspace()

@@ -203,7 +203,7 @@ export default function Page() {
   return (
     <main className={PAGE_MAIN}>
       <PageHeader
-        breadcrumb={<Link href="/builder" className="hover:underline">‹ Network designer</Link>}
+        breadcrumb={<Link href="/builder" className="hover:underline">‹ Build your model</Link>}
         title={route.title}
         lead={QUICKTEST.lead}
       />

@@ -175,7 +175,7 @@ describe("Pretraining page", () => {
     const user = userEvent.setup();
     renderPage(<PretrainingPage />, { route: "/pretraining/" });
     expect(await screen.findByRole("heading", { level: 1, name: "Pretraining" })).toBeVisible();
-    await waitFor(() => expect(screen.getByTestId("model-line")).toHaveTextContent(/^Version 2 · from the Network designer$/));
+    await waitFor(() => expect(screen.getByTestId("model-line")).toHaveTextContent(/^Version 2 · from Build your model$/));
     expect(await screen.findByTestId("set-stories")).toHaveAttribute("aria-checked", "true");
     expect(screen.getByTestId("set-catalog_wiki_validation")).toHaveAttribute("aria-checked", "false");
     expect(screen.getByTestId("set-catalog_wiki_validation")).toHaveTextContent("held-out: kept for testing, not trained on");
@@ -238,7 +238,7 @@ describe("Pretraining page", () => {
     expect(screen.getByTestId("sizing-expected")).toHaveTextContent("by step 129,129");
     expect(screen.getByTestId("expected-curve")).toBeVisible();
     expect(screen.getByTestId("sizing-suggestion")).toHaveTextContent("a design about 192 wide and 4 layers deep");
-    expect(screen.getByRole("link", { name: /Open the Network designer/ })).toHaveAttribute("href", "/builder");
+    expect(screen.getByRole("link", { name: /Open Build your model/ })).toHaveAttribute("href", "/builder");
     expect(screen.getByTestId("sizing-gpu")).toHaveTextContent("RTX 4090");
     expect(state.plans.at(-1)).toMatchObject({ hours: 4, window_hours: 4, steps: null });
     expect(state.rates).toEqual([]); // measured already: no timing job
@@ -251,6 +251,7 @@ describe("Pretraining page", () => {
     const state = server({ scaling: SCALING });
     const user = userEvent.setup();
     renderPage(<PretrainingPage />, { route: "/pretraining/" });
+    await user.click(await screen.findByText("Advanced: learning rate and scaling"));
     expect(await screen.findByTestId("hardware-line")).toHaveTextContent("This computer: Test GPU, 8.0 GB GPU memory (7.0 GB free), 24.0 GB RAM free, 300.0 GB disk free, 14,000 tokens/s measured.");
     expect(screen.getByTestId("scaling-lead")).toHaveTextContent("The run was scaled to fit this computer:");
     const notes = screen.getByTestId("scaling-notes");
@@ -307,7 +308,7 @@ describe("Pretraining page", () => {
     renderPage(<PretrainingPage />, { route: "/pretraining/" });
     await user.click(await screen.findByRole("button", { name: "Use 500 steps" }));
     await waitFor(() => expect(state.plans.at(-1)).toMatchObject({ steps: 500 }));
-    expect(screen.queryByRole("link", { name: /Network designer/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Build your model/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("radio", { name: "Long" }));
     await waitFor(() => expect(state.plans.at(-1)).toMatchObject({ steps: null, passes: 4 }));
   });
@@ -361,11 +362,25 @@ describe("Pretraining page", () => {
     expect(await screen.findByTestId("queue-line")).toHaveTextContent("Queued. Starts after the run in progress."); // no job to wait for
   });
 
+  test("the advanced and download cards sit in closed disclosures with their children mounted", async () => {
+    server({ scaling: SCALING });
+    renderPage(<PretrainingPage />, { route: "/pretraining/" });
+    const advanced = await screen.findByTestId("advanced-disclosure");
+    const download = screen.getByTestId("collection-disclosure");
+    expect(advanced).not.toHaveAttribute("open");
+    expect(download).not.toHaveAttribute("open");
+    expect(advanced).toHaveTextContent("Advanced: learning rate and scaling");
+    expect(download).toHaveTextContent("Download more text");
+    expect(await screen.findByTestId("scaling-lead")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Find a learning rate" })).toBeInTheDocument();
+  });
+
   test("the learning-rate range test shows a skeleton, then its chart and the sentence that reads it", async () => {
     const state = server();
     const user = userEvent.setup();
     renderPage(<PretrainingPage />, { route: "/pretraining/" });
     await waitFor(() => expect(screen.getByTestId("model-line")).toBeVisible());
+    await user.click(screen.getByText("Advanced: learning rate and scaling"));
     await user.click(await screen.findByRole("button", { name: "Find a learning rate" }));
     expect(await screen.findByLabelText("Trying learning rates, smallest first. This takes a moment.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Stop" })).toBeVisible();

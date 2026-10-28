@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import uuid
 from pathlib import Path
 from typing import Any, Literal
 
@@ -12,9 +11,11 @@ from fastapi.exceptions import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 import studio_registry as registry
+import studio_rl
+import studio_rlhf
+from studio_queue import Job
 from studio_api.app import get_services
 from studio_api.models_work import JobOut, VersionOut, start_job, version_out
-from studio_ia.services import Job
 
 
 T = {
@@ -58,7 +59,6 @@ T = {
 "lora_desc_on": "The model's own weights stay frozen. Only small add-on layers learn, so the round is lighter and the model drifts less from what it already knows. A bigger rank can learn more and costs more memory.",
 "lora_no_checkpoint": "LoRA needs a trained version to start from.",
 "lora_mixed": "LoRA needs float32. This version trains in mixed precision.",
-"lora_job": "LoRA rank {rank}",
 "few_thousand": "A few thousand conversations teach the chat format; more keep improving the answers. It trains about two passes over all your conversations, up to 2,000 steps, so a large mix takes a while. Only the answer part is scored. No frozen copy and no leash: this round is ordinary training on good examples.",
     "prompt_rule": "PROMPT · RULE: {rule}",
     "answer_output": "its answer",
@@ -130,7 +130,6 @@ T = {
 
 router = APIRouter(prefix="/post-training", tags=["post-training"])
 
-ROUND_NAMES = ("Practice answers", "Practice with checks", "Learn from a teacher", "Your votes")
 LEASH = (("Close", .5, T["close_note"]), ("Medium", .1, T["medium_note"]), ("Far", .02, T["far_note"]))  # label, beta, note
 LORA_RANKS = (4, 8, 16, 32)  # adapter sizes offered; studio_lora's own default (8) is the middle one
 CHUNK = 1 << 20
@@ -204,6 +203,13 @@ class RoundRequest(BaseModel):
     teacher: Literal["version", "correction"] = "version"  # round 3: another trained version, or this model shown a correction
     teacher_version: int | None = None  # None = the previous best
     leash: Literal["Close", "Medium", "Far"] = "Medium"  # round 4
+    method: Literal["practice", "rejection"] = "practice"  # round 2: practise with rewards, or train once on the answers that passed the check and stopped
+    steps: int | None = Field(default=None, ge=1, le=5000)  # round 2: None = the round's default (studio_rl.ROUND2_DEFAULTS)
+    prompts_per_step: int | None = Field(default=None, ge=1, le=64)  # round 2: prompts trained on each step
+    group: int | None = Field(default=None, ge=2, le=32)  # round 2: answers sampled per prompt
+    temperature: float | None = Field(default=None, gt=0, le=2)  # round 2: sampling temperature
+    max_tokens: int | None = Field(default=None, ge=1, le=2048)  # round 2: answer length cap; None = sized by the rule
+    kl: float | None = Field(default=None, ge=0, le=1)  # round 2: pull back to the start weights; None = studio_rl.KL_DEFAULT (0 for LoRA), 0 = off
 
 
 class RoundQueued(BaseModel):
@@ -214,7 +220,7 @@ class RoundQueued(BaseModel):
 
 
 class StageRequest(BaseModel):
-    stage: Literal["midtrain", "sft"]
+    stage: Literal["midtrain"]
     version: int | None = None
     steps: int | None = Field(None, ge=1, le=100_000)
 
@@ -222,7 +228,7 @@ class StageRequest(BaseModel):
 class StageQueued(BaseModel):
     id: str
     label: str
-    stage: Literal["midtrain", "sft"]
+    stage: Literal["midtrain"]
 
 
 class AdoptRequest(BaseModel):
@@ -340,7 +346,7 @@ def round_blocker(round_number, counts, teacher_is_version, has_teacher, checkpo
     """Why a round cannot be queued yet (plain words), or None. counts = post_training()["counts"]."""
     need = {1: ("conversations", 1, "Add conversations in Your data first."),
             2: ("problems", 1, "Make problems a rule can check first."),
-            4: ("pairs", 2, "Rate at least 2 pairs in Chat first.")}
+            4: ("pairs", studio_rlhf.MIN_PAIRS_TO_TRAIN, f"Rate at least {studio_rlhf.MIN_PAIRS_TO_TRAIN} pairs in Chat first: fewer are memorised, not learned.")}
     if not checkpoint:
         return "Train this version in Pretraining first."
     if round_number == 3:
@@ -393,8 +399,7 @@ def queue_round(body: RoundRequest, services=Depends(get_services)):
     why = round_blocker(body.round, counts, body.teacher == "version", bool(teachers), bool(version.best_checkpoint))
     if why:
         raise ValueError(why)
-    name = ROUND_NAMES[body.round - 1]
-    params = {"round": body.round, "version": version.number, "checkpoint": version.best_checkpoint}
+    settings = {}
     if body.round == 1:
         if body.lora_rank not in LORA_RANKS:
             raise ValueError(f"LoRA rank is one of {', '.join(map(str, LORA_RANKS))}.")
@@ -403,9 +408,7 @@ def queue_round(body: RoundRequest, services=Depends(get_services)):
         if wanted and blocked and body.lora:
             raise ValueError(blocked)
         if not blocked:
-            params["config"] = {"lora": {"rank": body.lora_rank} if wanted else None}
-            if wanted:
-                name += " · " + T["lora_job"].format(rank=body.lora_rank)
+            settings["lora"] = body.lora_rank if wanted else None
     if body.round == 3:
         teacher = None
         if body.teacher == "version":
@@ -415,11 +418,15 @@ def queue_round(body: RoundRequest, services=Depends(get_services)):
                                  "it needs a checkpoint, the same word list and the same reading window.")
             if teacher is None:
                 raise ValueError(T["no_default_teacher"])
-        params["teacher"] = teacher.best_checkpoint if teacher else None
-        params["teacher_choice"] = "previous best" if body.teacher == "version" else "correction"
+        settings["teacher"] = teacher.best_checkpoint if teacher else None
+        settings["teacher_choice"] = "previous best" if body.teacher == "version" else "correction"
     if body.round == 4:
-        params["beta"] = next(beta for label, beta, _note in LEASH if label == body.leash)
-    job = Job(uuid.uuid4().hex[:8], "post_round", f"Round {body.round} · {name}", f"post-training round {body.round}", params=params)
+        settings["beta"] = next(beta for label, beta, _note in LEASH if label == body.leash)
+    if body.round == 2:
+        settings.update(method=body.method, steps=body.steps, prompts_per_step=body.prompts_per_step, group=body.group, temperature=body.temperature,
+                        max_tokens=body.max_tokens, kl=body.kl)
+    job = studio_rl.round_job(body.round, version, settings)   # the Auto Run builds its rounds the same way
+    params = job.params
     services.enqueue(job)
     if body.round == 3:  # a round 3 goes to the front of the queue, as the page does
         for _ in range(len(services.queue().up_next)):
@@ -429,15 +436,15 @@ def queue_round(body: RoundRequest, services=Depends(get_services)):
 
 @router.post("/stages", response_model=StageQueued, status_code=202)
 def queue_stage(body: StageRequest, services=Depends(get_services)):
-    """Queue mid-training or SFT from a trained version's best weights."""
+    """Queue mid-training from a trained version's best weights."""
     version = pick_version(services, body.version)
     if version is None or not version.best_checkpoint:
         raise HTTPException(409, "Choose a trained version with a checkpoint first.")
-    label = f"Version {version.number} · {'mid-training' if body.stage == 'midtrain' else 'chat SFT'}"
+    label = f"Version {version.number} · {'mid-training'}"
     params = {"version": version.number}
     if body.steps is not None:
         params["config"] = {"steps": body.steps}
-    job = Job(uuid.uuid4().hex[:8], body.stage, label, f"{body.stage} stage", params=params)
+    job = Job(body.stage, label, f"{body.stage} stage", params=params)
     services.enqueue(job)
     return StageQueued(id=job.id, label=label, stage=body.stage)
 

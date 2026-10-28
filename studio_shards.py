@@ -253,6 +253,17 @@ class TokenCache:
     def __contains__(self, fingerprint):
         return self.digest(fingerprint) in self.where
 
+    def cached_tokens(self, fingerprints):
+        """How many tokens the cache holds for these examples (each distinct fingerprint counted once, the ones it lacks not at all).
+        Reads only the fingerprints and offsets; nothing is tokenized."""
+        total = 0
+        for digest in {self.digest(f) for f in fingerprints}:
+            found = self.where.get(digest)
+            if found is not None:
+                offsets = self._files(found[0])[3]
+                total += int(offsets[found[1] + 1]) - int(offsets[found[1]])
+        return total
+
     def touch(self):
         """Mark the cache as in use, so Storage ages it by its last run, not by when its oldest segment was written."""
         try:
@@ -318,6 +329,17 @@ class TokenCache:
         for files in self.maps.values():
             release_maps(*files)
         self.maps.clear()
+
+
+def cached_tokens(root, tokenizer_hash, vocab_size, assistant_only, fingerprints):
+    """How many tokens of the examples with these `fingerprints` an earlier run already encoded under this tokenizer: the pre-flight
+    lookup behind studio_fit's `cached_pieces`. It never tokenizes and writes nothing (a missing cache folder is 0). The shards cut
+    from the cache are not looked up: their key needs the run's train/validation split, which is not known before the run."""
+    cache = TokenCache(root, tokenizer_hash, vocab_size, assistant_only)
+    try:
+        return cache.cached_tokens(fingerprints) if cache.names else 0
+    finally:
+        cache.close()
 
 
 class _SegmentWriter:

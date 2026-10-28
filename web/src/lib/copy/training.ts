@@ -8,7 +8,7 @@ export const TRAINING = {
   startLead: "This computer coordinates: it holds the weights, averages what every machine sends back, and takes part itself. The machines you tick are asked to join.",
   design: "Design",
   designLatest: "Newest saved design",
-  noDesign: "No design is saved yet. Save one in the Network designer first.",
+  noDesign: "No design is saved yet. Save one in the Build your model first.",
   version: "Version {number}",
   data: "Text to train on",
   dataLead: "Tick the text sets to use. The same text is read on every machine.",

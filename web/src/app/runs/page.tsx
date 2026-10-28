@@ -53,9 +53,12 @@ export default function RunsPage() {
       <section aria-labelledby="runs-scheduled" className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 id="runs-scheduled" className="text-lg font-semibold">{T.scheduled}</h2>
-          <AllowedHours>
-            <Button variant="outline" size="sm">{T.allowedHours}</Button>
-          </AllowedHours>
+          <div className="flex flex-wrap items-center gap-3">
+            <Link href="/queue/" className="text-sm text-highlight hover:underline">{T.queueLink}</Link>
+            <AllowedHours>
+              <Button variant="outline" size="sm">{T.allowedHours}</Button>
+            </AllowedHours>
+          </div>
         </div>
         {loading ? <Skeleton className="h-20 w-full" /> : scheduled.length === 0 ? <Empty>{T.nothingScheduled}</Empty> : <ScheduledTable rows={scheduled} actions={actions} />}
       </section>

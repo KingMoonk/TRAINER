@@ -22,6 +22,7 @@ import { backLink, collectionShown, dupLabel, errorText, kindOf, type DataRow, t
 import { Overview } from "./overview";
 import { RowsList, useRows } from "./rows-table";
 import { PAGE_MAIN, PageHeader } from "@/components/page-header";
+import { Disclosure } from "@/components/disclosure";
 import { optionBox } from "@/components/option-box";
 
 const SEARCH_MS = 250; // after the last key before a search runs
@@ -188,11 +189,15 @@ function YourData() {
 
   const back = backLink(kind);
   const duplicates = summary?.near_duplicates ?? 0;
+  const placement = collectionShown(summary);
 
   return (
     <main className={PAGE_MAIN}>
       <PageHeader title={T.h1} lead={T.lead}>
         <div className="flex flex-wrap gap-6 text-sm">
+          <Link href="/collect" className="text-highlight hover:underline">
+            {T.collectLink}
+          </Link>
           <Link href="/storage" className="text-highlight hover:underline">
             {T.storageLink}
           </Link>
@@ -241,17 +246,18 @@ function YourData() {
         <Button variant="outline" onClick={() => setPanel(panel === "import" ? null : "import")}>
           {T.importFiles}
         </Button>
-        <Button
-          variant="outline"
-          aria-pressed={onlyDuplicates}
-          disabled={!duplicates}
-          onClick={() => {
-            setOnlyDuplicates((on) => !on);
-            setBrowse(true);
-          }}
-        >
-          {dupLabel(duplicates, onlyDuplicates)}
-        </Button>
+        {(duplicates > 0 || onlyDuplicates) && (
+          <Button
+            variant="outline"
+            aria-pressed={onlyDuplicates}
+            onClick={() => {
+              setOnlyDuplicates((on) => !on);
+              setBrowse(true);
+            }}
+          >
+            {dupLabel(duplicates, onlyDuplicates)}
+          </Button>
+        )}
         <Button variant="outline" onClick={() => setPanel(panel === "make" ? null : "make")}>
           {MAKE.title}
         </Button>
@@ -311,7 +317,12 @@ function YourData() {
         )}
       </section>
 
-      {collectionShown(summary) && <CollectionCard kind={kind} description={KIND[kind].collectionDesc} />}
+      {placement === "card" && <CollectionCard kind={kind} description={KIND[kind].collectionDesc} />}
+      {placement === "tucked" && (
+        <Disclosure title={T.downloadMore} hint={T.downloadMoreHint} testId="download-more">
+          <CollectionCard kind={kind} description={KIND[kind].collectionDesc} />
+        </Disclosure>
+      )}
     </main>
   );
 }

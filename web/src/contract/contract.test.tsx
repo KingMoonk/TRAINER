@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
+import AutoRunPage from "@/app/auto-run/page";
 import RunViewPage from "@/app/runs/view/page";
 import StoragePage from "@/app/storage/page";
 import QueuePage from "@/app/queue/page";
@@ -28,7 +29,7 @@ function replay(names: string[], extra: Parameters<typeof mockApi>[0] = {}) {
   const handlers: Parameters<typeof mockApi>[0] = {};
   for (const name of names) {
     const { request, status, body } = fixtures[name];
-    handlers[`${request.method} ${request.path.replace(/\{[^}]+\}/g, "*")}`] = () => json(body, status);
+    handlers[`${request.method} ${request.path.split("?")[0].replace(/\{[^}]+\}/g, "*")}`] = () => json(body, status);
   }
   return mockApi({ ...handlers, ...extra });
 }
@@ -72,6 +73,7 @@ describe("pages on recorded responses", () => {
 
   test("the traffic console lists the alert rules the API shipped, each with a switch", async () => {
     replay(["traffic-rules"]);
+    localStorage.setItem("settings.developerTools", "on"); // the sidebar button is hidden until Developer tools is on
     renderPage(<main />, { shell: true });
     await userEvent.setup().click(screen.getAllByRole("button", { name: "API traffic console" })[0]);
     await userEvent.setup().click(await screen.findByRole("button", { name: "Alert rules" }));
@@ -85,6 +87,20 @@ describe("pages on recorded responses", () => {
     renderPage(<StoragePage />, { route: "/storage/" });
     expect(await screen.findByRole("heading", { name: "Storage" })).toBeVisible();
     expect(await screen.findByText(/free on this computer's disk/)).toBeVisible();
+  });
+});
+
+describe("Auto Run on recorded responses", () => {
+  test("with no runs, offers a card for each phase of the plan the API ships (mid-training stays off)", async () => {
+    replay(["auto-runs-empty", "auto-run-defaults"], { "GET /versions": { body: [{ number: 1, name: "tiny", best_checkpoint: null }] } });
+    renderPage(<AutoRunPage />);
+    expect(await screen.findByTestId("plan-editor")).toBeVisible();
+    const phases = (fixtures["auto-run-defaults"].body as { phases: { kind: string; enabled: boolean }[] }).phases;
+    expect(phases.length).toBeGreaterThan(5);
+    for (const { kind, enabled } of phases) {
+      if (enabled) expect(screen.getByTestId(`plan-${kind}`)).toBeVisible();
+      else expect(screen.queryByTestId(`plan-${kind}`)).toBeNull();
+    }
   });
 });
 

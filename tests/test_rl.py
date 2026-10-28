@@ -17,7 +17,8 @@ import studio_rules
 from studio_jobs import post_round
 from studio_model import AdamW, ScratchTransformer, Tokenizer, load_checkpoint, train, validate_config
 from studio_queue import Job, Plan, Runner
-from studio_rlhf import _encode_pair
+from studio_model import EOS
+from studio_rlhf import _encode_pair, is_cut
 from tests.fixtures.ia_workspace import _generate_problems
 from tests.torchcheck import counting_backward, watched_models
 
@@ -87,9 +88,53 @@ class RLChecks(unittest.TestCase):
             optimizer.update(model, 2e-3)
         self.assertLess(studio_rl.reinforce_loss(model, rows, adv), start)
 
+    def test_kl_term_adds_the_k3_gradient_and_reports_the_mean_kl(self):
+        model, tokenizer = self.model()
+        reference = studio_rl.reference_rows(studio_rl.Teacher(self.ckpt, device="cpu"), self.rows(tokenizer, ["yes", "no", "cat"]))
+        rows, adv = self.rows(tokenizer, ["yes", "no", "cat"]), [1., -1., .5]
+        stats = {}
+        studio_rl.reinforce_loss(model, rows, adv, reference=reference, kl=.5, stats=stats)
+        self.assertAlmostEqual(stats["kl"], 0., places=5)   # the policy is still the reference
+        for key in ("block0.f1.w", "token"):   # move the policy off the reference so the KL has a gradient
+            model.p[key] += .05 * torch.randn_like(model.p[key])
+        zero_adv = [0., 0., 0.]
+        model.zero_grad()
+        studio_rl.reinforce_loss(model, rows, zero_adv, backward=True, reference=reference, kl=.5, stats=stats)
+        self.assertGreater(stats["kl"], 0.)
+        index = tuple(np.unravel_index(np.argmax(np.abs(model.g["block0.f1.w"].numpy())), model.g["block0.f1.w"].shape))
+        original = float(model.p["block0.f1.w"][index])
+        losses = []
+        for delta in (1e-2, -1e-2):
+            model.p["block0.f1.w"][index] = original + delta
+            losses.append(studio_rl.reinforce_loss(model, rows, zero_adv, reference=reference, kl=.5))
+        model.p["block0.f1.w"][index] = original
+        numeric = (losses[0] - losses[1]) / 2e-2
+        self.assertAlmostEqual(float(model.g["block0.f1.w"][index]), numeric, delta=max(2e-3, abs(numeric) * .05))
+        self.assertNotEqual(float(model.g["block0.f1.w"][index]), 0.)
+        off = studio_rl.reinforce_loss(model, rows, zero_adv, reference=reference, kl=0.)
+        self.assertEqual(off, 0.)   # kl 0: reported but not added
+
+    def test_practice_with_checks_leash_defaults_and_result(self):
+        problems = [{"prompt": f"Copy: {w}", "rule": "copy"} for w in WORDS[:4]]
+        record = studio_rl.practice_with_checks(self.ckpt, problems, self.dir / "r2kl", group=4, steps=2, learning_rate=1e-3)
+        self.assertEqual(record["kl"], studio_rl.KL_DEFAULT)
+        self.assertIsNotNone(record["mean_kl"])
+        off = studio_rl.practice_with_checks(self.ckpt, problems, self.dir / "r2nokl", group=4, steps=1, kl=0)
+        self.assertEqual((off["kl"], off["mean_kl"]), (0., None))
+        lora = dict(load_checkpoint(self.ckpt), config=dict(load_checkpoint(self.ckpt)["config"], lora={"rank": 4}))
+        with mock.patch.object(studio_rl, "_setup", wraps=studio_rl._setup) as setup:
+            local = studio_rl.LocalModel(self.ckpt, device="cpu")
+            local.config["lora"] = {"rank": 4}
+            setup.side_effect = lambda checkpoint, device, data=None: (local, AdamW(local.model, 0.))
+            record = studio_rl.practice_with_checks(self.ckpt, problems, self.dir / "r2lora", group=4, steps=1)
+        self.assertEqual(record["kl"], 0.)
+        del lora
+
     def test_advantages(self):
         self.assertTrue(np.allclose(studio_rl.advantages([1, 1, 1]), 0))
         self.assertTrue(np.allclose(studio_rl.advantages([1, 0], divide_by_std=False), [.5, -.5]))
+        self.assertTrue(np.allclose(studio_rl.advantages([1, 0]), [.5, -.5]))   # not divided by the std unless asked
+        self.assertTrue(np.allclose(studio_rl.advantages([1, 0], divide_by_std=True), [1, -1]))
 
     def test_share_of_groups_with_spread(self):
         self.assertEqual(studio_rl.group_spread([[1., 0., 0.], [0., 0., 0.], [1., 1., 1.], [.5, .8]]), (2, 4))
@@ -125,6 +170,34 @@ class RLChecks(unittest.TestCase):
         self.assertEqual(record["taught"], sum(1 for e in events if e["type"] == "group" and not e["skipped"]))
         self.assertLessEqual(record["taught"], record["groups"])
 
+    def test_a_cut_off_answer_gets_no_end_token_and_a_penalty(self):
+        _, tokenizer = self.model()
+        budget = 8
+        cut, done = "yes yes yes yes yes yes yes yes yes", "yes"
+        self.assertTrue(is_cut(tokenizer, cut, budget))
+        self.assertFalse(is_cut(tokenizer, done, budget))
+        self.assertEqual(_encode_pair(tokenizer, USER, cut, 64, eos=False)[1][-1], tokenizer.encode(cut)[-1])
+        self.assertEqual(_encode_pair(tokenizer, USER, cut, 64)[1][-1], EOS)
+        self.assertEqual(_encode_pair(tokenizer, USER, done, 64), _encode_pair(tokenizer, USER, done, 64, eos=True))
+        events, encoded = [], []
+        real = studio_rl._encode_pair
+
+        def spy(tok, messages, answer, context, eos=True):
+            encoded.append((answer, eos))
+            return real(tok, messages, answer, context, eos=eos)
+
+        def generate_group(self_, messages, n, **kwargs):
+            word = messages[-1]["content"].split(": ", 1)[1]
+            return [word, "a " * 40, word, "b " * 40][:n]
+        problems = [{"prompt": f"Copy: {w}", "rule": "copy"} for w in WORDS[:2]]
+        with mock.patch.object(studio_rl, "_encode_pair", spy), mock.patch.object(studio_rl.LocalModel, "generate_group", generate_group):
+            studio_rl.practice_with_checks(self.ckpt, problems, self.dir / "r2cut", group=4, steps=1, prompts_per_step=2, max_tokens=8,
+                                           emit=events.append)
+        self.assertTrue(encoded)
+        self.assertTrue(all(eos is (not a.startswith(("a", "b"))) for a, eos in encoded))
+        group = next(e for e in events if e["type"] == "group")
+        self.assertEqual([a["score"] for a in group["answers"]], [1., studio_rl.CUT_REWARD, 1., studio_rl.CUT_REWARD])
+
     def test_pass_at_k_counts_solved_problems(self):
         problems = [{"prompt": f"Copy: {w}", "rule": "copy"} for w in WORDS[:3]]
         probe = studio_rl.pass_at_k(self.ckpt, problems, count=3, k=2)
@@ -132,13 +205,147 @@ class RLChecks(unittest.TestCase):
         self.assertLessEqual(probe["solved"], probe["problems"])
         self.assertLessEqual(probe["solved"], probe["passed"])
 
+    def test_flat_groups_are_replaced_up_to_the_cap(self):
+        flat = {"Copy: yes", "Copy: no", "Copy: cat"}
+        asked = []
+
+        def generate_group(self_, messages, n, **kwargs):
+            word = messages[-1]["content"].split(": ", 1)[1]
+            asked.append(word)
+            return [word] * n if f"Copy: {word}" in flat else [word] + ["zzz"] * (n - 1)   # all pass, or one passes
+
+        problems = [{"prompt": f"Copy: {w}", "rule": "copy"} for w in WORDS]
+        events = []
+        with mock.patch.object(studio_rl.LocalModel, "generate_group", generate_group):
+            record = studio_rl.practice_with_checks(self.ckpt, problems, self.dir / "r2dyn", group=4, steps=1, prompts_per_step=2,
+                                                    emit=events.append)
+        groups = [e for e in events if e["type"] == "group"]
+        self.assertEqual(len([g for g in groups if not g["skipped"]]), 2)   # two groups with spread, however many flat ones came first
+        self.assertLessEqual(len(groups), 2 * studio_rl.RESAMPLE_CAP)
+        self.assertEqual(record["groups"], len(groups))
+        asked.clear()
+        flat.update(f"Copy: {w}" for w in WORDS)   # nothing but flat groups: it stops at the cap instead of looping
+        with mock.patch.object(studio_rl.LocalModel, "generate_group", generate_group):
+            record = studio_rl.practice_with_checks(self.ckpt, problems, self.dir / "r2cap", group=4, steps=1, prompts_per_step=2)
+        self.assertEqual(len(asked), 2 * studio_rl.RESAMPLE_CAP)
+        self.assertEqual((record["groups"], record["taught"]), (2 * studio_rl.RESAMPLE_CAP, 0))
+
+    def test_useful_problems_are_drawn_first(self):
+        asked = []
+
+        def generate_group(self_, messages, n, **kwargs):
+            asked.append(messages[-1]["content"])
+            return [messages[-1]["content"].split(": ", 1)[1]] + ["zzz"] * (n - 1)
+
+        problems = [{"prompt": f"Copy: {w}", "rule": "copy"} for w in WORDS]
+        with mock.patch.object(studio_rl.LocalModel, "generate_group", generate_group):
+            studio_rl.practice_with_checks(self.ckpt, problems, self.dir / "r2use", group=4, steps=1, prompts_per_step=2, useful=[problems[5], problems[6]])
+        self.assertEqual(set(asked), {"Copy: red", "Copy: sky"})
+
+    def test_pass_at_k_returns_the_problems_worth_practising(self):
+        problems = [{"prompt": f"Copy: {w}", "rule": "copy"} for w in WORDS[:3]]
+        probe = studio_rl.pass_at_k(self.ckpt, problems, count=3, k=2)
+        self.assertTrue(all(p in problems for p in probe["useful"]))
+
+    def test_round_two_settings_reach_practice_with_checks(self):
+        from studio_queue import Job
+        seen = {}
+
+        def practice(checkpoint, problems, out, **kwargs):
+            seen.update(kwargs)
+            return {"checkpoint": str(self.ckpt), "groups": 0, "taught": 0}
+
+        job = Job("post_round", "r", params={"round": 2, "checkpoint": str(self.ckpt), "steps": 5, "group": 3, "prompts_per_step": 2,
+                                             "temperature": .5, "max_tokens": 9, "kl": 0.1, "problems": [{"prompt": "Copy: yes", "rule": "copy"}],
+                                             "heldout_docs": [], "heldout_problems": []})
+        with (mock.patch.object(studio_rl, "practice_with_checks", practice), mock.patch.object(studio_rl, "pass_at_k", return_value={"problems": 1, "k": 4, "solved": 1, "passed": 1, "answers": 4, "useful": []}),
+              mock.patch.object(studio_rl, "doc_scores", return_value=[]), mock.patch.object(studio_rl, "measure", return_value={}),
+              mock.patch("studio_gate.passes", return_value=(False, [])), mock.patch.object(studio_rl, "verdict_for", return_value="")):
+            studio_rl.run_round(2, job, mock.Mock(run_dir=self.dir), lambda e: None, None, None)
+        self.assertEqual({k: seen[k] for k in ("steps", "group", "prompts_per_step", "temperature", "max_tokens", "kl")},
+                         {"steps": 5, "group": 3, "prompts_per_step": 2, "temperature": .5, "max_tokens": 9, "kl": .1})
+
+    def test_round_job_builds_the_same_job_for_every_round(self):
+        version = mock.Mock(number=3, best_checkpoint="v3.npz")
+        two = studio_rl.round_job(2, version, {"steps": 50, "group": None, "temperature": 1.2})
+        self.assertEqual((two.kind, two.label), ("post_round", "Round 2 · Practice with checks"))
+        self.assertEqual(two.params, {"round": 2, "version": 3, "checkpoint": "v3.npz", "steps": 50, "temperature": 1.2})
+        one = studio_rl.round_job(1, version, {"lora": 16})
+        self.assertEqual((one.params["config"], one.label), ({"lora": {"rank": 16}}, "Round 1 · Practice answers · LoRA rank 16"))
+        self.assertEqual(studio_rl.round_job(1, version, {"lora": None}).params["config"], {"lora": None})
+        self.assertNotIn("config", studio_rl.round_job(1, version).params)
+        three = studio_rl.round_job(3, version, {"teacher": "t.npz", "teacher_choice": "previous best", "group": 9})
+        self.assertEqual((three.params["teacher"], "group" in three.params), ("t.npz", False))
+        self.assertEqual(studio_rl.round_job(4, version, {"beta": .1}).params["beta"], .1)
+        with self.assertRaises(ValueError):
+            studio_rl.round_job(5, version)
+
+    def test_rejection_rows_are_only_verified_passes_that_ended_with_an_end_token(self):
+        problems = [{"prompt": "Copy: yes", "rule": "copy"}, {"prompt": "Copy: no", "rule": "copy"}]
+        replies = {"Copy: yes": ["yes", "yes", "no", "cat", "yes"], "Copy: no": ["maybe", "no"]}   # pass, repeat, fail, fail, repeat; then a fail and a pass that never stopped
+
+        def generate_group(local, messages, n, **kwargs):
+            return replies[messages[-1]["content"]]
+
+        with mock.patch.object(studio_rl.LocalModel, "generate_group", generate_group),              mock.patch.object(studio_rl, "is_cut", lambda tokenizer, text, budget: text == "no"):
+            found = studio_rl.rejection_rows(self.ckpt, problems, k=5, device="cpu")
+        self.assertEqual([r["messages"] for r in found["rows"]],
+                         [[{"role": "user", "content": "Copy: yes"}, {"role": "assistant", "content": "yes"}]])
+        self.assertEqual({k: found[k] for k in ("problems", "answers", "passed", "cut", "solved")},
+                         {"problems": 2, "answers": 7, "passed": 4, "cut": 1, "solved": 1})
+
+    def test_rejection_round_trains_on_the_passes_and_is_gated_like_round_1(self):
+        problems = [{"prompt": f"Copy: {w}", "rule": "copy"} for w in WORDS]
+        job = Job("post_round", "r", params={"round": 2, "method": "rejection", "checkpoint": str(self.ckpt), "output_dir": str(self.dir / "rej"),
+                                             "problems": problems, "heldout_docs": [], "heldout_problems": problems[:2], "heldout_conversations": EXAMPLES[:2]})
+        rows = [{"messages": [{"role": "user", "content": "Copy: yes"}, {"role": "assistant", "content": "yes"}]}]
+        found = {"rows": rows, "problems": 8, "answers": 64, "passed": 3, "cut": 0, "solved": 1}
+        events = []
+        with mock.patch.object(studio_rl, "rejection_rows", return_value=found), mock.patch.object(studio_rl, "train", return_value={"checkpoint": str(self.ckpt)}) as fit,              mock.patch.object(studio_rl, "pass_at_k") as probe,              mock.patch.object(studio_rl, "measure", return_value={"bpc": None, "conv_loss": 2., "eos_rate": 1., "pass_k": 1, "pass_n": 2}):
+            studio_rl.run_round(2, job, mock.Mock(run_dir=self.dir), events.append, threading.Event(), threading.Event())
+        probe.assert_not_called()
+        self.assertEqual(fit.call_args.args[1], rows)
+        gate = next(e for e in events if e["type"] == "gate")
+        self.assertEqual([c["name"] for c in gate["checks"]], ["Held-back conversations: answer error fell", "Answers still stop: end-of-answer rate did not fall",
+                                                               "Raw text: error stayed within the drift budget", "Checked problems: pass rate did not fall"])
+        self.assertFalse(gate["ok"])   # the loss did not fall, so the candidate is kept but not live, like any other round
+        self.assertEqual((gate["kept"], gate["checkpoint"]), (1, str(self.ckpt)))
+
+    def test_rejection_round_with_nothing_verified_is_skipped_without_training(self):
+        job = Job("post_round", "r", params={"round": 2, "method": "rejection", "checkpoint": str(self.ckpt), "problems": [{"prompt": "Copy: yes", "rule": "copy"}],
+                                             "heldout_docs": [], "heldout_problems": [], "heldout_conversations": []})
+        events = []
+        none = {"rows": [], "problems": 1, "answers": 8, "passed": 0, "cut": 0, "solved": 0}
+        with mock.patch.object(studio_rl, "rejection_rows", return_value=none), mock.patch.object(studio_rl, "train") as fit,              mock.patch.object(studio_rl, "measure", return_value={"bpc": None, "pass_k": 0, "pass_n": 0}):
+            done = studio_rl.run_round(2, job, mock.Mock(run_dir=self.dir), events.append, threading.Event(), threading.Event())
+        fit.assert_not_called()
+        self.assertFalse(done["ok"])
+        self.assertTrue(job.params["result"]["skipped"])
+
+    def test_round_job_marks_the_keep_the_passes_method_and_leaves_practice_alone(self):
+        version = mock.Mock(number=3, best_checkpoint="v3.npz")
+        job = studio_rl.round_job(2, version, {"method": "rejection", "group": 6})
+        self.assertEqual((job.label, job.params["method"], job.params["group"]), ("Round 2 · Practice with checks · keep passing answers", "rejection", 6))
+        self.assertNotIn("method", studio_rl.round_job(2, version, {"method": "practice"}).params)
+        self.assertEqual(studio_rl.rows_needed(2, {"method": "rejection"}), ["problems", "heldout_docs", "heldout_problems", "heldout_conversations"])
+
+    def test_round_three_probe_is_not_always_the_first_prompts(self):
+        prompts = [{"prompt": f"Copy: {w}"} for w in WORDS]
+        events = []
+        studio_rl.learn_from_teacher(self.ckpt, prompts, str(self.ckpt), self.dir / "r3probe", steps=1, prompts_per_step=1, probe=2, seed=11,
+                                     emit=events.append)
+        shown = next(e for e in events if e["type"] == "heat")["prompt"]
+        self.assertIn(shown, [p["prompt"] for p in prompts])
+        self.assertFalse((self.dir / "r3probe" / "best.npz").exists())
+
     def test_practice_with_checks_runs_and_saves(self):
         events = []
         problems = [{"prompt": f"Copy: {w}", "rule": "copy"} for w in WORDS[:4]]
         record = studio_rl.practice_with_checks(self.ckpt, problems, self.dir / "r2", group=4, steps=3, learning_rate=1e-3,
                                                 emit=events.append)
         self.assertEqual(record["status"], "completed")
-        self.assertTrue((self.dir / "r2" / "last.npz").exists() and (self.dir / "r2" / "best.npz").exists())
+        self.assertTrue((self.dir / "r2" / "last.npz").exists())
+        self.assertFalse((self.dir / "r2" / "best.npz").exists())   # no best checkpoint: it would be picked on a noisy training metric
         groups = [e for e in events if e["type"] == "group"]
         self.assertTrue(groups)
         self.assertTrue(all(len(g["answers"]) == 4 for g in groups))

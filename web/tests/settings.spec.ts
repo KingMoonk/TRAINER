@@ -29,6 +29,25 @@ test("the gear opens Settings, and the mode and accent choices set <html> and su
   await expect(html).not.toHaveAttribute("data-theme", /.+/);
 });
 
+test("the Developer tools switch is off by default, shows the traffic console button when on, and survives a reload", async ({ page }) => {
+  await page.goto("/settings/");
+  const consoleButton = page.getByRole("button", { name: "API traffic console" });
+  const toggle = page.getByRole("switch", { name: "Show the API traffic console button" });
+  await expect(toggle).not.toBeChecked();
+  await expect(consoleButton).toHaveCount(0);
+
+  await toggle.click();
+  await expect(toggle).toBeChecked();
+  await expect(consoleButton.locator("visible=true")).toBeVisible();
+
+  await page.reload();
+  await expect(toggle).toBeChecked();
+  await expect(consoleButton.locator("visible=true")).toBeVisible();
+
+  await toggle.click();
+  await expect(consoleButton).toHaveCount(0);
+});
+
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 375, height: 812 } });
   test("the gear is reachable in the top row", async ({ page }) => {

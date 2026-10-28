@@ -1,4 +1,4 @@
-"""Mid-training and chat SFT from an existing checkpoint.
+"""Mid-training from an existing checkpoint. Chat SFT is Round 1 (studio_rl.run_round), so it is not duplicated here.
 
 The worker owns training and measurement; the app adopts the candidate only after
 the returned gate has passed. Autopilot calls ``run_stage`` directly with the same
@@ -14,10 +14,9 @@ import studio_gate
 import studio_model
 import studio_rl
 
-STAGES = ("midtrain", "sft")
+STAGES = ("midtrain",)
 MIX = {
     "midtrain": {"text": .4, "smol_smoltalk": .3, "mmlu_auxiliary": .15, "gsm8k": .15},
-    "sft": {"smol_smoltalk": .83, "toolace": .17},
 }
 DEFAULT_CHARS = 2_000_000
 
@@ -28,15 +27,12 @@ def stage_config(stage, checkpoint, rows, overrides=None):
         raise ValueError(f"Unknown training stage: {stage}.")
     base = studio_model.load_checkpoint(checkpoint, weights_only=True)
     old = base["config"]
-    if stage == "sft":
-        cfg = studio_rl.sft_config(old, rows, base["tokenizer"], steps=500 if old["width"] < 512 else 2000)
-    else:
-        steps = 2000 if old["width"] < 512 else 5000
-        cfg = {**old, "objective": "all", "learning_rate": min(3e-4, old["learning_rate"] * .3),
-               "steps": steps, "warmup": max(1, round(steps * .03)), "eval_every": max(1, steps // 10),
-               "validation": .05 if len(rows) >= 20 else 0.}
+    steps = 2000 if old["width"] < 512 else 5000
+    cfg = {**old, "objective": "all", "learning_rate": min(3e-4, old["learning_rate"] * .3),
+           "steps": steps, "warmup": max(1, round(steps * .03)), "eval_every": max(1, steps // 10),
+           "validation": .05 if len(rows) >= 20 else 0.}
     cfg.update(overrides or {})
-    cfg["objective"] = "assistant" if stage == "sft" else "all"
+    cfg["objective"] = "all"
     if overrides and "steps" in overrides:
         if "warmup" not in overrides:
             cfg["warmup"] = max(1, round(cfg["steps"] * .03))
@@ -56,12 +52,12 @@ def _gate(checkpoint, candidate, context, stage, stop):
     band = studio_eval.band_from_scores(scores) if scores else None
     before = studio_rl.measure(checkpoint, docs, problems, stop, conversations, scores)
     after = studio_rl.measure(candidate, docs, problems, stop, conversations)
-    ok, checks = studio_gate.passes(before, after, band, number=1 if stage == "sft" else None)
+    ok, checks = studio_gate.passes(before, after, band, number=None)
     card = context.gate_eval(candidate, baseline=checkpoint) if hasattr(context, "gate_eval") else None
     if card and card.get("verdict"):
         checks.extend(card["verdict"]["checks"])
         ok = ok and card["verdict"]["ok"]
-    if stage == "midtrain" and before.get("conv_loss") is not None and after.get("conv_loss") is not None:
+    if before.get("conv_loss") is not None and after.get("conv_loss") is not None:
         changed = after["conv_loss"] <= before["conv_loss"]
         checks.append({"name": "Held-back chat: answer error did not rise", "ok": changed,
                        "detail": f"{after['conv_loss']:.3f} per answer token, was {before['conv_loss']:.3f}"})

@@ -147,6 +147,27 @@ def text_characters(workspace, dataset_ids, exclude=()):
     return total
 
 
+def text_fingerprints(workspace, dataset_ids, exclude=()):
+    """The fingerprints of the chosen sets' training text, the rows `text_characters` counts, without tokenizing or reading their text:
+    disk sets give them from the records table, in-memory sets are fingerprinted as they are read. `exclude` (held-back texts) is left out."""
+    held = {studio_core.fingerprint({"text": text}) for text in exclude if text}
+    on_disk = []
+    for dataset_id in dataset_ids:
+        if (workspace._dataset(dataset_id) or {}).get("storage") == "sqlite":
+            on_disk.append(dataset_id)
+            continue
+        for example in pretraining_examples(workspace, [dataset_id]):
+            if example.get("text") and (found := studio_core.fingerprint(example)) not in held:
+                yield found
+    if on_disk:
+        marks = ",".join("?" * len(on_disk))
+        with workspace._connect() as connection:
+            for (found,) in connection.execute(f"SELECT fingerprint FROM records WHERE dataset_id IN ({marks}) AND kind='text' AND NOT "
+                                               "(quality='Review' AND json_extract(payload, '$.synthetic')=1)", on_disk):
+                if found not in held:
+                    yield found
+
+
 def make_problem(item, quality="Good"):
     """A problem item from studio_rules.generate -> a row for normalize/Workspace.add (rule fields mirrored in metadata)."""
     meta = {"rule": item["rule"], "params": item.get("params", {}), "noKey": "answer" not in item}

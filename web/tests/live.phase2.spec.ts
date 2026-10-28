@@ -23,8 +23,10 @@ test("import text, queue pretraining, watch progress and see the trained version
   await page.getByRole("button", { name: "Browse examples", exact: true }).click();
   await expect(page.getByRole("main").getByText(text, { exact: true })).toBeVisible();
 
-  // Pretraining is a page of the Data area, so it is listed in the section tabs, not the Studio nav.
-  await page.getByRole("navigation", { name: "Data pages" }).getByRole("link", { name: "Pretraining", exact: true }).click();
+  // Auto Run is the home of the Train area: open it from the sidebar, then the Pretraining tab.
+  await page.getByRole("navigation", { name: "Studio" }).getByRole("link", { name: "Train", exact: true }).click();
+  await page.getByRole("navigation", { name: "Train pages" }).getByRole("link", { name: "Pretraining", exact: true }).click();
+  await expect(page).toHaveURL(/\/pretraining\/?$/);
   const sets = page.getByRole("list", { name: "Text sets" });
   const imported = sets.getByRole("checkbox", { name: new RegExp(source) });
   await expect(imported).toBeVisible();
@@ -39,7 +41,7 @@ test("import text, queue pretraining, watch progress and see the trained version
   await add.click();
   await expect(page.getByText(/^Added to the queue:/)).toBeVisible();
 
-  // Queue is a Runs page, and the Runs area home (/runs) has no page until #344 lands, so open the page by its href.
+  // Queue is a hidden page of the Train area, so open it by its href.
   await page.goto("/queue/");
   await expect(page.getByRole("main").getByText(new RegExp(`Version ${version.number} from scratch`))).toBeVisible();
   await page.getByRole("main").getByRole("button", { name: "Resume", exact: true }).click();

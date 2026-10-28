@@ -17,7 +17,7 @@ from studio_api.version import app_version
 from studio_versions import NoCheckpoint
 
 ROUTERS = ("versions", "queue", "storage", "data", "pretraining", "post_training", "chat", "benchmark",
-           "node", "quicktest", "design", "cluster", "collective", "distributed", "training_run", "state", "collect", "mlperf", "busy", "voice")  # one module each in studio_api.routers
+           "node", "quicktest", "design", "cluster", "collective", "distributed", "training_run", "state", "collect", "mlperf", "busy", "voice", "auto_run")  # one module each in studio_api.routers
 THREADS = 128  # anyio's default is 40 threads for every plain `def` route; a few slow peers or long reads could fill them and stall the rest
 LOCAL_ORIGIN = r"^http://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
 WEB_OUT = Path(__file__).resolve().parent.parent / "web" / "out"
@@ -105,6 +105,8 @@ def create_app(services, open=False, origins=(), hosts=(), fake_traffic=False, u
                 raise
             continue  # router not written yet
         app.include_router(module.router)
+    from studio_api.routers import pretraining
+    services.build_pretrain = lambda settings, version: pretraining.auto_run_pretrain(services, settings, version)  # the Auto Run's pretrain phase
     app.include_router(events.router)
     app.include_router(traffic.router)
     app.include_router(jobs.router)

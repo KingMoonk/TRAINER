@@ -45,7 +45,11 @@ export function GateCard({
     gate?.checks ??
     (round === 1
       ? [pending(T.conversationsCheck), pending(T.stopCheck), pending(T.heldBackCheck), pending(T.problemsCheck)]
-      : [pending(T.heldBackCheck), pending(T.problemsCheck)]);
+      : round === 2
+        ? [pending(T.heldBackCheck), pending(T.problemsRoseCheck)]
+        : round === 3
+          ? [pending(T.heldBackCheck), pending(T.problemsCheck), pending(T.teacherGapCheck)]
+          : [pending(T.heldBackCheck), pending(T.pairsCheck), pending(T.problemsCheck)]);
   const result = gate ? (state === "passed" && gate.ok !== false ? T.resultLive : T.resultKept) : running ? T.chatKeeps : T.untilThen;
   const total = queue?.total ?? 0;
   const shown = Object.entries(overlap ?? {}).filter(([, o]) => o.left_out);

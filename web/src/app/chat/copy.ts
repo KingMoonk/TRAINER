@@ -27,7 +27,7 @@ export const CHAT = {
   placeholderCompare: "Ask both versions the same thing",
   placeholderSingle: "Type a message",
   testChange: "Test this change properly",
-  openDesigner: "Open in designer",
+  scoresTitle: "Scores for this version",
   noVerdictYet: (version: string) => `No verdict yet: ${version} hasn't finished its schedule.`,
   noVerdictText:
     "Error mid-schedule looks worse than it will after the cool-down, so only runs trained to the same length on the same schedule are compared. Its replies are still worth reading.",
