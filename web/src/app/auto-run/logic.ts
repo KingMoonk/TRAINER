@@ -9,6 +9,7 @@ export type PhaseState = components["schemas"]["AutoRunPhaseState"];
 export type RunView = components["schemas"]["AutoRunRunView"];
 export type RunSummary = components["schemas"]["AutoRunRunSummary"];
 export type Progress = components["schemas"]["AutoRunJobProgress"];
+export type Tuning = components["schemas"]["AutoRunTuning"];
 export type RunStatus = RunView["state"]["status"];
 
 /** The post-training round each phase runs (studio_ia/autorun.py ROUND). */
@@ -110,6 +111,45 @@ export function settingTexts(plan: Plan): Record<string, string> {
   return out;
 }
 
+/** The limits on the controller's automatic choices, with what each bounds. */
+export const BOUNDS = [
+  { key: "learning_rate", label: "Learning rate" },
+  { key: "steps", label: "Steps" },
+  { key: "beta", label: "DPO beta" },
+] as const;
+
+export const boundKey = (key: string, end: "min" | "max") => `bound.${key}.${end}`;
+
+/** The bounds of a plan as the text the editor shows. */
+export function boundTexts(plan: Plan): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, bound] of Object.entries(plan.bounds ?? {})) {
+    out[boundKey(key, "min")] = String(bound.min);
+    out[boundKey(key, "max")] = String(bound.max);
+  }
+  return out;
+}
+
+function buildBounds(texts: Record<string, string>): { bounds: NonNullable<Plan["bounds"]> } | { error: string } {
+  const bounds: NonNullable<Plan["bounds"]> = {};
+  for (const { key, label } of BOUNDS) {
+    const low = (texts[boundKey(key, "min")] ?? "").trim();
+    const high = (texts[boundKey(key, "max")] ?? "").trim();
+    if (!low && !high) continue;
+    const min = Number(low);
+    const max = Number(high);
+    if (!low || !high || !(min > 0) || !(max > 0) || !Number.isFinite(min) || !Number.isFinite(max)) return { error: fill(T.badBound, { label }) };
+    if (min > max) return { error: fill(T.boundOrder, { label }) };
+    bounds[key] = { min, max };
+  }
+  return { bounds };
+}
+
+/** What the controller chose for a phase (its latest attempt), or undefined when it has chosen nothing. */
+export function tuningFor(run: RunView, kind: string): Tuning | undefined {
+  return [...(run.state.tuning ?? [])].reverse().find((t) => t.phase === kind);
+}
+
 export function budgetText(plan: Plan): string {
   return plan.budget.hours == null ? "" : String(plan.budget.hours);
 }
@@ -118,7 +158,7 @@ export function budgetText(plan: Plan): string {
  * The plan the editor's choices make, or the sentence that says what to fix. A setting left empty is dropped so the server uses its default;
  * one outside what the server accepts is refused here rather than silently ignored.
  */
-export function buildPlan(base: Plan, texts: Record<string, string>, budget: string): { plan: Plan } | { error: string } {
+export function buildPlan(base: Plan, texts: Record<string, string>, budget: string, bounds: Record<string, string> = {}): { plan: Plan } | { error: string } {
   if (!base.name.trim()) return { error: T.needName };
   if (!base.phases.some((p) => p.enabled)) return { error: T.atLeastOne };
   let hours: number | null = null;
@@ -126,6 +166,8 @@ export function buildPlan(base: Plan, texts: Record<string, string>, budget: str
     hours = Number(budget);
     if (!Number.isFinite(hours) || hours <= 0) return { error: T.badBudget };
   }
+  const built = buildBounds(bounds);
+  if ("error" in built) return built;
   const phases: PhasePlan[] = [];
   for (const phase of base.phases) {
     const settings: Record<string, unknown> = { ...phase.settings };
@@ -140,7 +182,7 @@ export function buildPlan(base: Plan, texts: Record<string, string>, budget: str
     }
     phases.push({ ...phase, settings });
   }
-  return { plan: { ...base, name: base.name.trim(), budget: { hours }, phases } };
+  return { plan: { ...base, name: base.name.trim(), budget: { hours }, bounds: built.bounds, phases } };
 }
 
 // ---- a run

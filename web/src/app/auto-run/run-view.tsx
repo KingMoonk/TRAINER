@@ -29,6 +29,7 @@ import {
   resultVerdict,
   runLabel,
   timelinePhases,
+  tuningFor,
   when,
   type Progress,
   type RunView,
@@ -74,6 +75,7 @@ function Timeline({ run }: { run: RunView }) {
           const verdict = resultVerdict(state.result);
           const current = run.state.current === state.kind;
           const spec = PHASES[state.kind];
+          const tuning = tuningFor(run, state.kind);
           return (
             <li key={state.kind} aria-current={current ? "step" : undefined} data-testid={`phase-${state.kind}`} className={cn("rounded-lg border p-3", current && "border-highlight")}>
               <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -93,6 +95,24 @@ function Timeline({ run }: { run: RunView }) {
                     </li>
                   ))}
                 </ul>
+              )}
+              {tuning && (tuning.choices.length > 0 || tuning.proposal) && (
+                <div data-testid={`tuning-${state.kind}`} className="mt-1 flex flex-col gap-0.5 text-sm">
+                  <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{T.chosen}</span>
+                  <ul className="flex flex-col gap-0.5">
+                    {tuning.choices.map((choice) => (
+                      <li key={String(choice.param)}>
+                        {String(choice.param).replaceAll("_", " ")}: {String(choice.from ?? "default")} → <strong>{String(choice.to)}</strong>
+                        <span className="text-muted-foreground"> · {String(choice.why)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {tuning.proposal && (
+                    <p>
+                      <span className="font-medium">{T.proposal}:</span> <span className="text-muted-foreground">{String(tuning.proposal.why)}</span>
+                    </p>
+                  )}
+                </div>
               )}
               {state.checkpoint && (
                 <p className="mt-1 break-all text-xs text-muted-foreground">

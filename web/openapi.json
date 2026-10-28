@@ -162,6 +162,24 @@
         "title": "AskPeer",
         "type": "object"
       },
+      "AutoRunBound": {
+        "properties": {
+          "max": {
+            "title": "Max",
+            "type": "number"
+          },
+          "min": {
+            "title": "Min",
+            "type": "number"
+          }
+        },
+        "required": [
+          "min",
+          "max"
+        ],
+        "title": "AutoRunBound",
+        "type": "object"
+      },
       "AutoRunBudget": {
         "properties": {
           "hours": {
@@ -472,6 +490,14 @@
       },
       "AutoRunPlanModel": {
         "properties": {
+          "bounds": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AutoRunBound"
+            },
+            "default": {},
+            "title": "Bounds",
+            "type": "object"
+          },
           "budget": {
             "$ref": "#/components/schemas/AutoRunBudget"
           },
@@ -570,6 +596,14 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "tuning": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AutoRunTuning"
+            },
+            "title": "Tuning",
+            "type": "array"
           },
           "updated": {
             "anyOf": [
@@ -712,6 +746,65 @@
           "journal"
         ],
         "title": "AutoRunRunView",
+        "type": "object"
+      },
+      "AutoRunTuning": {
+        "additionalProperties": true,
+        "description": "The parameters the controller chose for a phase and why. choices: what it changed from the plan; proposal: a bigger design, to\nbe taken by the person; evidence: what the last phase showed.",
+        "properties": {
+          "attempt": {
+            "default": 1,
+            "title": "Attempt",
+            "type": "integer"
+          },
+          "choices": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "proposal": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Settings",
+            "type": "object"
+          }
+        },
+        "required": [
+          "phase"
+        ],
+        "title": "AutoRunTuning",
         "type": "object"
       },
       "Block": {

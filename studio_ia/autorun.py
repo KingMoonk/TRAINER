@@ -35,6 +35,7 @@ import uuid
 from pathlib import Path
 
 import studio_autorun as ar
+import studio_autotune as tune
 from studio_core import now as clock
 
 LOG = logging.getLogger("groundwork.autorun")
@@ -62,6 +63,7 @@ class Orchestrator:
         self.inside = False            # a step is running (an event it caused only asks for another pass)
         self.again = False
         self._loaded = False
+        self.decided = None            # (phase, attempt, controller decision) of the job being built, journalled when it is enqueued
 
     # ---- storage
     def _folder(self, run_id):
@@ -370,7 +372,13 @@ class Orchestrator:
 
     def _finish_phase(self, run_id, kind, status, result):
         run = self.runs[run_id]
-        self._put(run_id, ar.apply_outcome(run["plan"], run["state"], kind, status, result, self.now()))
+        entry = run["state"]["phases"][ar._index(run["plan"], kind)]
+        if kind != "data" and entry["status"] in ("queued", "running"):   # what it showed, for the next phase's parameters
+            used = next((t["settings"] for t in reversed(run["state"].get("tuning", [])) if t["phase"] == kind and t["attempt"] == entry["attempt"]), {})
+            noted = ar.note_outcome(run["state"], tune.outcome(kind, entry["attempt"], status, result, used), self.now())
+        else:
+            noted = run["state"]
+        self._put(run_id, ar.apply_outcome(run["plan"], noted, kind, status, result, self.now()))
 
     def _park(self, run_id):
         """A pause is waiting for a phase whose job has not started: hold the job and park the phase. True when one was parked."""
@@ -437,6 +445,10 @@ class Orchestrator:
             except (ValueError, RuntimeError, OSError) as exc:   # (the plan's reason, or the size of the text could not be worked out)
                 return self._block(run_id, kind, str(exc) or f"The {kind} phase could not be set up.", action)
             self.services.enqueue(job)
+            if self.decided:
+                state = ar.note_tuning(self.runs[run_id]["state"], *self.decided, self.now())
+                self.decided = None
+                self.runs[run_id]["state"] = state     # (begin's put below writes and announces it)
         self._put(run_id, ar.begin(plan, self.runs[run_id]["state"], action, self.now()))   # (a phase already queued is only re-recorded)
 
     def _build(self, run_id, kind, job_id):
@@ -448,6 +460,11 @@ class Orchestrator:
         if version is None:
             raise ValueError(f"There is no version {plan['version']}.")
         settings = ar.phase_settings(plan, state, kind, self.now())
+        if kind in tune.TUNED:      # the controller's choices, within the plan's bounds; journalled with their evidence
+            decision = tune.decide(kind, settings, tune.bounds_of(plan), state.get("outcomes", []))
+            settings = decision["settings"]
+            attempt = state["phases"][ar._index(plan, kind)]["attempt"]
+            self.decided = (kind, attempt, decision)
         if kind == "pretrain":
             build = self.build_pretrain or getattr(self.services, "build_pretrain", None)   # the API app sets the services' one
             if build is None:

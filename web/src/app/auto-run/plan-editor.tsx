@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { T, fill } from "./copy";
-import { PHASES, buildPlan, budgetText, phaseTitle, settingTexts, textKey, type PhasePlan, type Plan } from "./logic";
+import { BOUNDS, PHASES, boundKey, boundTexts, buildPlan, budgetText, phaseTitle, settingTexts, textKey, type PhasePlan, type Plan } from "./logic";
 
 const FIELD = "h-9 w-fit max-w-full rounded-md border border-input bg-background px-2 text-sm text-foreground";
 
@@ -21,6 +21,7 @@ export function PlanEditor({ initial, actions, pending }: { initial: Plan; actio
   const [plan, setPlan] = useState<Plan>(initial);
   const [texts, setTexts] = useState<Record<string, string>>(() => settingTexts(initial));
   const [budget, setBudget] = useState(() => budgetText(initial));
+  const [bounds, setBounds] = useState<Record<string, string>>(() => boundTexts(initial));
   const [problem, setProblem] = useState<string | null>(null);
 
   const change = (kind: string, patch: Partial<PhasePlan>) => {
@@ -29,7 +30,7 @@ export function PlanEditor({ initial, actions, pending }: { initial: Plan; actio
   };
 
   function submit(action: EditorAction) {
-    const built = buildPlan(plan, texts, budget);
+    const built = buildPlan(plan, texts, budget, bounds);
     if ("error" in built) setProblem(built.error);
     else {
       setProblem(null);
@@ -50,6 +51,27 @@ export function PlanEditor({ initial, actions, pending }: { initial: Plan; actio
         </label>
       </div>
       <p className="max-w-prose text-xs text-muted-foreground">{T.budgetHint}</p>
+
+      <Disclosure title={T.boundsTitle} hint={T.boundsHint}>
+        <div className="grid gap-3 sm:grid-cols-3" data-testid="plan-bounds">
+          {BOUNDS.map(({ key, label }) => (
+            <fieldset key={key} className="flex flex-col gap-1 text-sm">
+              <legend className="mb-1">{label}</legend>
+              <div className="flex gap-2">
+                {(["min", "max"] as const).map((end) => (
+                  <Input
+                    key={end}
+                    aria-label={`${label}, ${end === "min" ? "smallest" : "largest"}`}
+                    inputMode="decimal"
+                    value={bounds[boundKey(key, end)] ?? ""}
+                    onChange={(e) => { setProblem(null); setBounds({ ...bounds, [boundKey(key, end)]: e.target.value }); }}
+                  />
+                ))}
+              </div>
+            </fieldset>
+          ))}
+        </div>
+      </Disclosure>
 
       <h2 className="text-sm font-medium">{T.phasesTitle}</h2>
       <ul className="flex flex-col gap-3">

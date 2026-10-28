@@ -254,6 +254,38 @@ class FlowTests(Base):
         self.assertIn("out of order", str(caught.exception))
 
 
+class TuningTests(Base):
+    def test_a_diverged_phase_halves_the_next_phases_learning_rate_and_both_are_journalled(self):
+        plan = plan_of(("sft", "rlvr"), on_fail="skip")
+        plan["phases"][0]["settings"] = {"learning_rate": 4e-4}
+        plan["phases"][1]["settings"] = {"learning_rate": 1e-3, "steps": 50}
+        self.go(plan)
+        self.assertEqual(self.services.queue().up_next[0].params["learning_rate"], 4e-4)
+        self.end("run1-0-1", "done", {"ok": False, "after": {"bpc": float("nan")}, "diverged": True})
+        job = self.services.queue().up_next[0]
+        self.assertEqual((job.params["learning_rate"], job.params["steps"]), (2e-4, 50))
+        tuning = self.state()["tuning"]
+        self.assertEqual([t["phase"] for t in tuning], ["sft", "rlvr"])
+        self.assertEqual(tuning[1]["choices"][0]["param"], "learning_rate")
+        self.assertTrue(tuning[1]["evidence"]["diverged"])
+        self.assertIn("tuned", [row["event"] for row in self.auto.view("run1")["journal"]])
+
+    def test_the_plans_bounds_hold_the_choice(self):
+        plan = plan_of(("sft", "rlvr"), on_fail="skip")
+        plan["bounds"] = {"learning_rate": {"min": 3e-4, "max": 5e-4}}
+        plan["phases"][0]["settings"] = {"learning_rate": 4e-4}
+        plan["phases"][1]["settings"] = {"learning_rate": 4e-4}
+        self.go(plan)
+        self.end("run1-0-1", "done", {"ok": False, "diverged": True})
+        self.assertEqual(self.services.queue().up_next[0].params["learning_rate"], 3e-4)
+
+    def test_a_bad_bound_is_refused(self):
+        plan = plan_of(("sft",))
+        plan["bounds"] = {"steps": {"min": 9, "max": 3}}
+        with self.assertRaises(ar.AutorunError):
+            self.auto.create(plan)
+
+
 class PretrainBuilderTests(unittest.TestCase):
     def test_the_api_builder_makes_the_job_the_start_route_makes_or_says_why_not(self):
         from studio_api.routers.pretraining import auto_run_pretrain

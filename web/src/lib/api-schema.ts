@@ -4141,6 +4141,13 @@ export interface components {
              */
             run_label: string;
         };
+        /** AutoRunBound */
+        AutoRunBound: {
+            /** Max */
+            max: number;
+            /** Min */
+            min: number;
+        };
         /** AutoRunBudget */
         AutoRunBudget: {
             /** Hours */
@@ -4277,6 +4284,13 @@ export interface components {
         };
         /** AutoRunPlanModel */
         AutoRunPlanModel: {
+            /**
+             * Bounds
+             * @default {}
+             */
+            bounds: {
+                [key: string]: components["schemas"]["AutoRunBound"];
+            };
             budget: components["schemas"]["AutoRunBudget"];
             /**
              * Id
@@ -4312,6 +4326,11 @@ export interface components {
              * @enum {string}
              */
             status: "draft" | "running" | "pausing" | "paused" | "waiting_user" | "stopped" | "done" | "failed";
+            /**
+             * Tuning
+             * @default []
+             */
+            tuning: components["schemas"]["AutoRunTuning"][];
             /** Updated */
             updated?: string | null;
         } & {
@@ -4353,6 +4372,44 @@ export interface components {
             plan: components["schemas"]["AutoRunPlanModel"];
             progress?: components["schemas"]["AutoRunJobProgress"] | null;
             state: components["schemas"]["AutoRunRunState"];
+        };
+        /**
+         * AutoRunTuning
+         * @description The parameters the controller chose for a phase and why. choices: what it changed from the plan; proposal: a bigger design, to
+         *     be taken by the person; evidence: what the last phase showed.
+         */
+        AutoRunTuning: {
+            /**
+             * Attempt
+             * @default 1
+             */
+            attempt: number;
+            /**
+             * Choices
+             * @default []
+             */
+            choices: {
+                [key: string]: unknown;
+            }[];
+            /** Evidence */
+            evidence?: {
+                [key: string]: unknown;
+            } | null;
+            /** Phase */
+            phase: string;
+            /** Proposal */
+            proposal?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Settings
+             * @default {}
+             */
+            settings: {
+                [key: string]: unknown;
+            };
+        } & {
+            [key: string]: unknown;
         };
         /** Block */
         Block: {

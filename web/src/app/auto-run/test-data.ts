@@ -8,6 +8,7 @@ export const plan = (over: Partial<Plan> = {}): Plan => ({
   name: "Auto Run",
   version: 1,
   budget: { hours: 12 },
+  bounds: {},
   phases: KINDS.map((kind) => ({ kind, enabled: kind !== "midtrain", settings: {}, on_pass: "continue", on_fail: "pause" })),
   ...over,
 });
@@ -29,6 +30,7 @@ export function run(
       status,
       current,
       reason,
+      tuning: [],
       phases: KINDS.map((kind) => ({ kind, status: kind === "midtrain" ? "skipped" : "pending", attempt: 1, error: "", ...phases[kind] }) as PhaseState),
     },
     journal: [],

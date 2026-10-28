@@ -2,6 +2,19 @@ import { describe, expect, test } from "vitest";
 import { PHASES, buildPlan, budgetText, checkText, controls, defaultVersion, errorText, keptRound, pickRun, progressLine, resultChecks, settingTexts, timelinePhases, when } from "./logic";
 import { plan, run, summary } from "./test-data";
 
+describe("buildPlan bounds", () => {
+  test("a pair of limits is sent, an empty pair is left to the defaults", () => {
+    const built = buildPlan(plan(), {}, "", { "bound.steps.min": "20", "bound.steps.max": "900" });
+    expect(built).toMatchObject({ plan: { bounds: { steps: { min: 20, max: 900 } } } });
+  });
+
+  test("half a pair, a smallest above the largest, or a non-positive value says what to fix", () => {
+    expect(buildPlan(plan(), {}, "", { "bound.beta.min": "0.1" })).toMatchObject({ error: expect.stringContaining("DPO beta") });
+    expect(buildPlan(plan(), {}, "", { "bound.steps.min": "9", "bound.steps.max": "3" })).toMatchObject({ error: expect.stringContaining("above the largest") });
+    expect(buildPlan(plan(), {}, "", { "bound.steps.min": "0", "bound.steps.max": "3" })).toMatchObject({ error: expect.stringContaining("above 0") });
+  });
+});
+
 describe("buildPlan", () => {
   test("keeps the plan as it is when nothing was typed, and takes the budget from its text", () => {
     const built = buildPlan(plan(), {}, "6");

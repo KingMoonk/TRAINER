@@ -49,6 +49,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import studio_autotune
 from studio_core import atomic_json, now as clock
 
 KINDS = ("data", "pretrain", "midtrain", "sft", "rlvr", "distill", "dpo")
@@ -73,6 +74,7 @@ def DEFAULT_PLAN(version):
     """The plan a new Auto Run starts from: every phase on except mid-training, continue on a pass, pause on a failure."""
     return {
         "id": "", "name": "Auto Run", "version": version, "budget": {"hours": DEFAULT_HOURS},
+        "bounds": studio_autotune.bounds_of({}),
         "phases": [{"kind": kind, "enabled": kind != "midtrain", "settings": {}, "on_pass": "continue", "on_fail": "pause"} for kind in KINDS],
     }
 
@@ -98,6 +100,7 @@ def validate(plan):
         hours = budget.get("hours")
         if hours is not None and (isinstance(hours, bool) or not isinstance(hours, (int, float)) or not hours > 0):
             problems.append("The budget hours must be more than 0, or left empty for no limit.")
+    problems += studio_autotune.validate_bounds(plan.get("bounds"))
     phases = plan.get("phases")
     if not isinstance(phases, list) or not phases:
         problems.append("The plan needs at least one phase.")
@@ -172,7 +175,7 @@ def new_state(plan):
     phases = [{"kind": p["kind"], "status": "pending" if p["enabled"] else "skipped", "job_id": None, "attempt": 1, "started": None,
                "ended": None, "checkpoint": None, "result": None, "error": ""} for p in plan["phases"]]
     return {"id": plan["id"], "status": "draft", "current": None, "reason": "", "started": None, "deadline": None, "phases": phases,
-            "events": []}
+            "outcomes": [], "tuning": [], "events": []}
 
 
 def _copy(state):
@@ -309,6 +312,26 @@ def finish(state, status, reason, now):
         raise AutorunError(f"A run cannot finish as {status}.")
     state = _copy(state)
     _set(state, status, reason, now, "finish")
+    return state
+
+
+# --------------------------------------------------------------------------- parameter control (#729)
+
+def note_outcome(state, outcome, now):
+    """Keep what a phase that ended showed (studio_autotune.outcome), for the controller's next decision."""
+    state = _copy(state)
+    state.setdefault("outcomes", []).append(outcome)
+    return state
+
+
+def note_tuning(state, phase, attempt, decision, now):
+    """Journal the parameters chosen for `phase` and the evidence they rest on: {phase, attempt, settings, choices, proposal, evidence}."""
+    state = _copy(state)
+    entry = {"phase": phase, "attempt": attempt, "settings": decision["settings"], "choices": decision["choices"],
+             "proposal": decision["proposal"], "evidence": decision["evidence"]}
+    state.setdefault("tuning", []).append(entry)
+    if decision["choices"] or decision["proposal"]:      # a phase that kept the plan's settings leaves no journal line
+        _event(state, "tuned", now, phase=phase, attempt=attempt, choices=decision["choices"], proposal=decision["proposal"])
     return state
 
 

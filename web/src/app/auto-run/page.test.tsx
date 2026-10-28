@@ -220,6 +220,48 @@ describe("Auto Run page: a running run", () => {
   });
 });
 
+describe("Auto Run page: the parameters the run chose", () => {
+  const tuned = (() => {
+    const base = run("running", "rlvr", { sft: { status: "failed", error: "Loss diverged." }, rlvr: { status: "queued", job_id: "run1-4-1" } });
+    return {
+      ...base,
+      state: {
+        ...base.state,
+        tuning: [
+          { phase: "rlvr", attempt: 1, settings: { learning_rate: 5e-5 }, evidence: null, proposal: { action: "grow", why: "Continue with a bigger design." },
+            choices: [{ param: "learning_rate", from: 0.0001, to: 5e-5, why: "The sft phase diverged, so the learning rate is halved from 0.0001." }] },
+        ],
+      },
+    } as RunView;
+  })();
+
+  test("lists each phase's chosen parameters with the reason, and a bigger-design suggestion", async () => {
+    server(tuned);
+    renderPage(<AutoRunPage />);
+    const chosen = await screen.findByTestId("tuning-rlvr");
+    expect(chosen).toHaveTextContent("learning rate: 0.0001 → 0.00005");
+    expect(chosen).toHaveTextContent("The sft phase diverged, so the learning rate is halved");
+    expect(chosen).toHaveTextContent("Suggestion: Continue with a bigger design.");
+    expect(screen.queryByTestId("tuning-sft")).toBeNull();
+  });
+
+  test("the limits are shown in the draft's plan and saved as edited", async () => {
+    const draft = run("draft", null);
+    draft.plan = { ...draft.plan, bounds: { learning_rate: { min: 1e-6, max: 0.01 }, steps: { min: 10, max: 100000 } } };
+    const { calls } = server(draft);
+    const user = userEvent.setup();
+    renderPage(<AutoRunPage />);
+    await screen.findByTestId("plan-editor");
+    await user.click(screen.getByText("Limits on automatic choices"));
+    expect(screen.getByLabelText("Learning rate, largest")).toHaveValue("0.01");
+    await user.clear(screen.getByLabelText("Learning rate, largest"));
+    await user.type(screen.getByLabelText("Learning rate, largest"), "0.001");
+    await user.click(screen.getByRole("button", { name: "Save the plan" }));
+    await waitFor(() => expect(posted(calls, "/auto-runs/run1/plan")).toHaveLength(1));
+    expect((posted(calls, "/auto-runs/run1/plan")[0].body as { plan: Plan }).plan.bounds).toMatchObject({ learning_rate: { min: 1e-6, max: 0.001 } });
+  });
+});
+
 describe("Auto Run page: a run that waits for the person", () => {
   test("a run paused as planned continues", async () => {
     const paused = run("paused", "pretrain", { data: { status: "passed" }, pretrain: { status: "passed" } }, { reason: "The pretrain phase passed; paused as planned." });

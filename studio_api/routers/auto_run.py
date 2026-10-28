@@ -35,11 +35,17 @@ class AutoRunBudget(BaseModel):
     hours: float | None = None  # wall-clock hours for the whole run; null: no limit
 
 
+class AutoRunBound(BaseModel):
+    min: float
+    max: float
+
+
 class AutoRunPlanModel(BaseModel):
     id: str = ""  # empty on a new run: the server makes one
     name: str
     version: int
     budget: AutoRunBudget
+    bounds: dict[str, AutoRunBound] = {}  # learning_rate | steps | beta: the limits the parameter controller stays within (over the defaults)
     phases: list[AutoRunPhasePlan]
 
 
@@ -68,6 +74,18 @@ class AutoRunPhaseState(BaseModel):
     error: str = ""
 
 
+class AutoRunTuning(BaseModel):
+    """The parameters the controller chose for a phase and why. choices: what it changed from the plan; proposal: a bigger design, to
+    be taken by the person; evidence: what the last phase showed."""
+    model_config = ConfigDict(extra="allow")
+    phase: str
+    attempt: int = 1
+    settings: dict = {}
+    choices: list[dict] = []
+    proposal: dict | None = None
+    evidence: dict | None = None
+
+
 class AutoRunRunState(BaseModel):
     model_config = ConfigDict(extra="allow")
     id: str
@@ -78,6 +96,7 @@ class AutoRunRunState(BaseModel):
     deadline: str | None = None  # null: no budget limit
     updated: str | None = None
     phases: list[AutoRunPhaseState]
+    tuning: list[AutoRunTuning] = []  # one entry per phase job built, oldest first
 
 
 class AutoRunJournalLine(BaseModel):
