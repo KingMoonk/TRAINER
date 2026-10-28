@@ -12,7 +12,7 @@ import RunViewPage from "./page";
 const PLAN = { hours: "any", start_hour: 22, end_hour: 7, memory: "most", idle_only: true, idle_after_s: 60, pause_on_battery: true, keep_awake: false, chat_follows_best: true };
 const job = (id: string, over: Record<string, unknown> = {}) => ({ id, kind: "pretrain", label: "v3 from scratch", note: "", params: {}, status: "running", eta_s: null, created_at: 0, error: "", ...over });
 const queue = (over: Record<string, unknown> = {}) => ({
-  job: job("j1"), step: 1200, total: 4000, phase: "training", lr: 0.0003, eta_s: 5400, paused: false, blocked: null, stopping: false, gate: { reason: null, supported: true }, up_next: [], plan: PLAN, ...over,
+  job: job("j1"), step: 1200, total: 4000, phase: "training", lr: 0.0003, eta_s: 5400, paused: false, blocked: null, stopping: false, gate: { reason: null, supported: true }, up_next: [], failed: [], plan: PLAN, ...over,
 });
 const node = (address: string, hostname: string, over: Record<string, unknown> = {}) => ({
   address, local: address === "local", hostname, version: "1", device: "mps", device_name: "", memory_bytes: 0, busy: false, dtypes: [], online: true, error: "", tailnet_name: "", ...over,
@@ -306,12 +306,47 @@ describe("Run view: a single job on this computer", () => {
   });
 });
 
+describe("Run view: a job that has ended on this computer", () => {
+  const ended = (status: string, over: Record<string, unknown> = {}) =>
+    mockApi({
+      "GET /queue": { body: queue({ job: null, step: 0, total: 0, phase: "", lr: null, eta_s: null, failed: [job("e1", { status, ...over })] }) },
+      "GET /cluster/nodes": { body: NODES },
+      "GET /pretraining/jobs/e1/curve": { body: { ...CURVE, total: 4000 } },
+    });
+
+  test("a completed run shows its loss curve and final state, with no controls", async () => {
+    const all = ended("done");
+    renderPage(<RunViewPage />, { route: "/runs/view?id=e1" });
+    expect(await screen.findByTestId("run-title")).toHaveTextContent("v3 from scratch");
+    expect(await screen.findByTestId("readout-train")).toHaveTextContent("L_train 3.20");
+    expect(screen.getByTestId("overfit")).toHaveAttribute("data-state", "stalled");
+    expect(screen.getByTestId("run-progress")).toHaveTextContent("Step 400/4,000");
+    expect(screen.getByTestId("run-status")).toHaveTextContent("done");
+    expect(screen.queryByRole("button", { name: /pause|stop|resume|cool/i })).not.toBeInTheDocument();
+    expect(calls(all, "GET", "/pretraining/jobs/e1/curve")).toHaveLength(1);
+  });
+
+  test("a failed run shows its error text", async () => {
+    ended("failed", { error: "No room left on the disk." });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=e1" });
+    expect(await screen.findByTestId("run-error")).toHaveTextContent("No room left on the disk.");
+    expect(screen.getByTestId("run-status")).toHaveTextContent("failed");
+    expect(screen.queryByRole("button", { name: /pause|stop|resume|cool/i })).not.toBeInTheDocument();
+  });
+});
+
 describe("Run view: ids that are not here", () => {
   test("an id that is neither a run nor a queued job says it is not on this computer", async () => {
     mockApi({ "GET /queue": { body: queue({ job: null }) }, "GET /cluster/nodes": { body: NODES } });
     renderPage(<RunViewPage />, { route: "/runs/view?id=nope" });
     expect(await screen.findByRole("heading", { name: "This run is not on this computer." })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Runs/ })).toHaveAttribute("href", expect.stringMatching(/^\/runs\/?$/));
+  });
+
+  test("an id no list knows still says it is not on this computer, beside a failed job of another id", async () => {
+    mockApi({ "GET /queue": { body: queue({ job: null, failed: [job("e1", { status: "failed" })] }) }, "GET /cluster/nodes": { body: NODES } });
+    renderPage(<RunViewPage />, { route: "/runs/view?id=nope" });
+    expect(await screen.findByRole("heading", { name: "This run is not on this computer." })).toBeInTheDocument();
   });
 
   test("no id asks to open a run from the Runs page", async () => {

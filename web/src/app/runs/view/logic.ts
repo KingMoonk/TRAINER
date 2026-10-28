@@ -5,7 +5,7 @@ import type { Queue } from "@/app/queue/logic";
 import { T, fill } from "./copy";
 
 /** The part of GET /pretraining/jobs/{id}/curve this page reads: series of [step, value]. */
-export type Curve = { steps: number[][]; smooth: number[][]; heldout: number[][] };
+export type Curve = { steps: number[][]; smooth: number[][]; heldout: number[][]; total?: number };
 type Pair = number[];
 
 /** The Run view of one run: the page reads `?id=`. */
@@ -14,6 +14,17 @@ export function runViewHref(id: string): string {
 }
 
 /** `pretrain · local · W = {BEAST} · queue job on BEAST`. */
+/** A job that ended (failed, stopped or done) and so only has its record left. */
+export function ended(status: string): boolean {
+  return status === "failed" || status === "stopped" || status === "done";
+}
+
+/** Where a run that ended got to: the last step its curve recorded, and the steps it was set for (0 when unknown). */
+export function finalProgress(curve: Curve | undefined): { step: number; total: number } {
+  const line = curve ? trainLine(curve) : [];
+  return { step: line.length ? line[line.length - 1][0] : 0, total: curve?.total ?? 0 };
+}
+
 export function soloShape(machine: string): string {
   return fill(T.shapeSolo, { machine });
 }
