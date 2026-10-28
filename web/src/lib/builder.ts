@@ -202,15 +202,7 @@ export function loadDraft(): Draft | null {
     if (!raw) return null;
     const found = JSON.parse(raw) as Partial<Draft>;
     if (!found.draft || typeof found.draft !== "object" || !("L" in found.draft)) return null;
-    const draft = { ...found.draft };
-    if (typeof draft.V === "number" && draft.V > 2) draft.V = 1;
-    if (found.anchor?.spec && typeof found.anchor.spec === "object") {
-      const specTok = (found.anchor.spec as Record<string, unknown>).tokenizer;
-      if (specTok && typeof specTok === "object" && "id" in specTok && (specTok.id === "word" || specTok.id === "bpe_custom")) {
-        (specTok as { id: string }).id = "bpe_fast";
-      }
-    }
-    return { base: typeof found.base === "number" ? found.base : null, draft, anchor: found.anchor ?? null };
+    return { base: typeof found.base === "number" ? found.base : null, draft: found.draft, anchor: found.anchor ?? null };
   } catch {
     return null;
   }
