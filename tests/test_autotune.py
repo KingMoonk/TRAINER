@@ -160,7 +160,7 @@ class ControllerPlanTests(unittest.TestCase):
     def test_the_default_plan_carries_the_default_bounds_and_is_valid(self):
         plan = ar.DEFAULT_PLAN(1)
         plan["id"] = "x"
-        self.assertEqual(plan["controller"], {"enabled": True, "bounds": tune.DEFAULT_BOUNDS, "max_cycles": 1})
+        self.assertEqual(plan["controller"], {"enabled": True, "bounds": tune.DEFAULT_BOUNDS, "max_cycles": 1, "grow": tune.DEFAULT_GROW})
         self.assertEqual(ar.validate(plan), [])
 
     def test_bad_bounds_are_plain_sentences(self):
@@ -265,3 +265,34 @@ class NextCycleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GrowConsentTests(unittest.TestCase):
+    def test_growing_is_off_by_default_and_the_limits_are_checked(self):
+        plan = plan_of(("sft",))
+        self.assertFalse(tune.grow_allowed(plan))
+        self.assertEqual(tune.grow_limits(plan), (256, 6))
+        for bad in ({"enabled": "yes"}, {"enabled": True, "max_width": 0, "max_layers": 2}, {"enabled": True, "max_width": 64, "max_layers": 2.5}):
+            plan["controller"]["grow"] = bad
+            self.assertTrue(ar.validate(plan), bad)
+        plan["controller"]["grow"] = {"enabled": True, "max_width": 64, "max_layers": 2}
+        self.assertEqual(ar.validate(plan), [])
+        self.assertTrue(tune.grow_allowed(plan))
+        del plan["controller"]["grow"]                       # (a plan from before growing)
+        self.assertEqual(ar.validate(plan), [])
+        self.assertFalse(tune.grow_allowed(plan))
+
+    def test_a_proposal_is_acted_on_only_in_a_later_cycle_with_consent_and_once(self):
+        plan = plan_of(("sft",))
+        plan["controller"]["grow"] = {"enabled": True, "max_width": 64, "max_layers": 2}
+        proposal = {"phase": "sft", "attempt": 1, "key": "design", "was": None, "value": None, "rule": "bigger_design", "why": "x", "evidence": {}, "applied": False, "clamped": False}
+        state = {"cycle": 1, "choices": [proposal], "status": "running", "current": None, "reason": ""}
+        self.assertIsNone(tune.pending_proposal(plan, state))
+        state["cycle"] = 2
+        self.assertEqual(tune.pending_proposal(plan, state), proposal)
+        plan["controller"]["grow"]["enabled"] = False
+        self.assertIsNone(tune.pending_proposal(plan, state))
+        plan["controller"]["grow"]["enabled"] = True
+        done = tune.add_growth(state, {"cycle": 2, "params_from": 10, "params_to": 40}, T0)
+        self.assertEqual((done["choices"][0]["applied"], done["choices"][0]["value"]), (True, 40))
+        self.assertIsNone(tune.pending_proposal(plan, done))

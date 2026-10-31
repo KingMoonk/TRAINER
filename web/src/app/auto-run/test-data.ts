@@ -38,6 +38,7 @@ export function run(
       cycle: 1,
       decisions: [],
       choices: [],
+      grown: [],
       attempts: [],
       phases: KINDS.map((kind) => ({ kind, status: OFF.includes(kind) ? "skipped" : "pending", attempt: 1, error: "", ...phases[kind] }) as PhaseState),
     },

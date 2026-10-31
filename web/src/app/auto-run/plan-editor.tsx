@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { T, fill } from "./copy";
-import { BOUND_KEYS, PHASES, boundTexts, buildPlan, budgetText, cyclesText, phaseTitle, settingTexts, textKey, type BoundTexts, type PhasePlan, type Plan } from "./logic";
+import { BOUND_KEYS, PHASES, boundTexts, buildPlan, budgetText, cyclesText, growTexts, phaseTitle, settingTexts, textKey, type BoundTexts, type PhasePlan, type Plan } from "./logic";
 
 const FIELD = "h-9 w-fit max-w-full rounded-md border border-input bg-background px-2 text-sm text-foreground";
 
@@ -23,6 +23,7 @@ export function PlanEditor({ initial, actions, pending }: { initial: Plan; actio
   const [budget, setBudget] = useState(() => budgetText(initial));
   const [bounds, setBounds] = useState<BoundTexts | null>(() => boundTexts(initial));
   const [cycles, setCycles] = useState(() => cyclesText(initial));
+  const [grow, setGrow] = useState(() => growTexts(initial));
   const [problem, setProblem] = useState<string | null>(null);
 
   const change = (kind: string, patch: Partial<PhasePlan>) => {
@@ -31,7 +32,7 @@ export function PlanEditor({ initial, actions, pending }: { initial: Plan; actio
   };
 
   function submit(action: EditorAction) {
-    const built = buildPlan(plan, texts, budget, bounds, cycles);
+    const built = buildPlan(plan, texts, budget, bounds, cycles, grow);
     if ("error" in built) setProblem(built.error);
     else {
       setProblem(null);
@@ -137,6 +138,34 @@ export function PlanEditor({ initial, actions, pending }: { initial: Plan; actio
                   <Input aria-label={T.cyclesLabel} inputMode="numeric" className="w-24" value={cycles} onChange={(e) => { setProblem(null); setCycles(e.target.value); }} />
                   <span className="text-xs text-muted-foreground">{T.cyclesHint}</span>
                 </label>
+                {grow && (
+                  <fieldset className="flex flex-col gap-2 text-sm" data-testid="plan-grow">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 flex-col gap-1">
+                        <legend className="p-0">{T.growLabel}</legend>
+                        <span className="text-xs text-muted-foreground">{T.growHint}</span>
+                      </div>
+                      <Switch
+                        aria-label={T.growLabel}
+                        checked={plan.controller.grow?.enabled ?? false}
+                        onCheckedChange={(enabled) => {
+                          setProblem(null);
+                          setPlan((p) => ({ ...p, controller: p.controller ? { ...p.controller, grow: { enabled, max_width: p.controller.grow?.max_width ?? 256, max_layers: p.controller.grow?.max_layers ?? 6 } } : p.controller }));
+                        }}
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      <label className="flex flex-col gap-1">
+                        {T.growWidth}
+                        <Input aria-label={T.growWidth} inputMode="numeric" className="w-24" value={grow.width} onChange={(e) => { setProblem(null); setGrow({ ...grow, width: e.target.value }); }} />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        {T.growLayers}
+                        <Input aria-label={T.growLayers} inputMode="numeric" className="w-24" value={grow.layers} onChange={(e) => { setProblem(null); setGrow({ ...grow, layers: e.target.value }); }} />
+                      </label>
+                    </div>
+                  </fieldset>
+                )}
                 <p className="text-xs text-muted-foreground">{T.boundsTitle}: {T.boundsHint}</p>
                 <div className="grid gap-3 sm:grid-cols-2">
                   {BOUND_KEYS.map(({ key, label }) => (

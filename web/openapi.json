@@ -324,6 +324,16 @@
             "title": "Enabled",
             "type": "boolean"
           },
+          "grow": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutoRunGrow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "max_cycles": {
             "default": 1,
             "title": "Max Cycles",
@@ -373,6 +383,87 @@
           "why"
         ],
         "title": "AutoRunCycleDecision",
+        "type": "object"
+      },
+      "AutoRunGrow": {
+        "description": "Whether the controller may act on its bigger-design proposal: in the next cycle's pretraining it makes a bigger version, warm\nstarted from the weights, no wider than `max_width` and no deeper than `max_layers`. Off unless the person turns it on.",
+        "properties": {
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "max_layers": {
+            "default": 6,
+            "title": "Max Layers",
+            "type": "integer"
+          },
+          "max_width": {
+            "default": 256,
+            "title": "Max Width",
+            "type": "integer"
+          }
+        },
+        "title": "AutoRunGrow",
+        "type": "object"
+      },
+      "AutoRunGrown": {
+        "description": "A bigger version the controller made for a later cycle (the plan's version became to_version).",
+        "properties": {
+          "cycle": {
+            "title": "Cycle",
+            "type": "integer"
+          },
+          "from_version": {
+            "title": "From Version",
+            "type": "integer"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "layers": {
+            "title": "Layers",
+            "type": "integer"
+          },
+          "params_from": {
+            "title": "Params From",
+            "type": "integer"
+          },
+          "params_to": {
+            "title": "Params To",
+            "type": "integer"
+          },
+          "steps": {
+            "title": "Steps",
+            "type": "integer"
+          },
+          "to_version": {
+            "title": "To Version",
+            "type": "integer"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          },
+          "width": {
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cycle",
+          "from_version",
+          "to_version",
+          "width",
+          "layers",
+          "params_from",
+          "params_to",
+          "steps",
+          "job_id",
+          "why"
+        ],
+        "title": "AutoRunGrown",
         "type": "object"
       },
       "AutoRunJobProgress": {
@@ -745,6 +836,14 @@
               "$ref": "#/components/schemas/AutoRunCycleDecision"
             },
             "title": "Decisions",
+            "type": "array"
+          },
+          "grown": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AutoRunGrown"
+            },
+            "title": "Grown",
             "type": "array"
           },
           "id": {

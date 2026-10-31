@@ -94,8 +94,8 @@ def _work(spec, rows):
     return rows * dims["n_ctx"] * dims["d_model"] * max(1, dims["n_layer"])  # what studio_backend.get_backend("auto") weighs
 
 
-def suggest_design(spec, vocab, rows, accumulation, pieces, hours, measured, gpu):
-    """The design and step count that fit `hours` on this computer: of the current design and the sizes in LADDER, the largest whose
+def suggest_design(spec, vocab, rows, accumulation, pieces, hours, measured, gpu, ladder=LADDER):
+    """The design and step count that fit `hours` on this computer: of the current design and the sizes in `ladder` (LADDER unless a caller limits it), the largest whose
     steps in that time (at most MAX_EPOCHS passes over `pieces`) still read the compute-optimal RULE word pieces per parameter; the
     smallest when none does. A step takes the measured time scaled by studio_compute.step_seconds, the page's own time model, so a
     wider design costs what it should and may move to the GPU under "auto". Returns {"width", "layers", "params", "steps", "hours",
@@ -111,7 +111,7 @@ def suggest_design(spec, vocab, rows, accumulation, pieces, hours, measured, gpu
     calibration = measured["seconds_per_step"] / _seconds(spec, rows, accumulation, now, measured_kind)  # the model's error on this computer
     per_step = rows * dims["n_ctx"] * accumulation
     found = []
-    for width, layers in sorted({*LADDER, here}):
+    for width, layers in sorted({*ladder, here}):
         candidate = spec if (width, layers) == here else resized_spec(spec, width, layers)
         if candidate is None:
             continue

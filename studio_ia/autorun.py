@@ -470,7 +470,8 @@ class Orchestrator:
                 job = self._build(run_id, kind, job_id)
             except (ValueError, RuntimeError, OSError) as exc:   # (the plan's reason, or the size of the text could not be worked out)
                 return self._block(run_id, kind, str(exc) or f"The {kind} phase could not be set up.", action)
-            self.services.enqueue(job)
+            if self.services.find_job(job.id) is None:         # (a grown design's job was queued by the services that made the version)
+                self.services.enqueue(job)
         self._put(run_id, ar.begin(plan, self.runs[run_id]["state"], action, self.now()))   # (a phase already queued is only re-recorded)
 
     def _tuned(self, run_id, version, kind, settings):
@@ -526,6 +527,62 @@ class Orchestrator:
         next(e for e in state["phases"] if e["kind"] == "rlhf").update(result=live)
         return state
 
+    def _grow(self, run_id, version, settings, job_id):
+        """The pretrain job of a bigger version, or None when nothing is to be grown. With the person's consent (plan controller grow) and a
+        bigger-design proposal from an earlier cycle: the largest design inside their width and layer limits that the time left can train
+        (sizing.suggest_design) is saved as a new version, warm started from this version's weights, and its pretrain job is queued under
+        the phase's own id (Services.continue_run). The plan then points at the new version, so the phases after it run on it. When no bigger
+        design fits, the reason goes to the journal and the phase runs as before. A design the weights cannot go into blocks the phase with
+        the sentence (ValueError)."""
+        from studio_ia import pretraining_plan as pre
+        from studio_ia import sizing
+        import studio_estimate
+        from studio_spec import validate_spec
+        run = self.runs[run_id]
+        plan, state = run["plan"], run["state"]
+        if tune.pending_proposal(plan, state) is None:
+            return None
+        cycle = state.get("cycle", 1)
+
+        def skip(why):
+            self._put(run_id, tune.growth_skipped(self.runs[run_id]["state"], cycle, why, self.now()))
+
+        rows = int(settings.get("rows") or 16)
+        hours = settings.get("hours") or ar.remaining_hours(state, self.now()) or ar.DEFAULT_HOURS
+        ids = list(settings.get("dataset_ids") or [s["id"] for s in self.services.text_sets() if not pre.held_out(s["id"])])
+        try:
+            spec = validate_spec(version.spec)
+            measured = self.services.cached_step_rate(spec, rows)
+            preview = self.services.pretrain_preview(ids, rows)
+            gpu = self.services.device_facts()
+        except (NotImplementedError, OSError, ValueError, RuntimeError, KeyError, TypeError):
+            measured = preview = gpu = None
+        if not measured or not preview or not preview.get("pieces"):
+            skip("Growing the design needs this computer's measured speed and the size of the text, and one of them is not known yet, so the pretraining runs on the same design.")
+            return None
+        width, layers = tune.grow_limits(plan)
+        ladder = [rung for rung in sizing.LADDER if rung[0] <= width and rung[1] <= layers]
+        vocab = preview.get("vocab") or 256
+        found = sizing.suggest_design(spec, vocab, rows, 1, preview["pieces"], hours, measured, gpu, ladder)
+        before = studio_estimate.estimate(spec, vocab)["total"]
+        if found is None or found["params"] <= before:
+            skip(f"No design bigger than this one fits inside your limits ({width} wide, {layers} layers) and the {hours:g} hours left, so the pretraining runs on the same design.")
+            return None
+        steps = found["steps"]
+        if tune.enabled(plan):
+            steps, _moved = tune.clamp(plan, "steps", steps)
+        made = self.services.continue_run(version.number, "grow", steps, ids, width=found["width"], layers=found["layers"], rows=rows,
+                                          job_id=job_id, tag={"auto_run": plan["id"], "auto_phase": "pretrain"})
+        record = {"cycle": cycle, "from_version": version.number, "to_version": made["version"], "width": found["width"], "layers": found["layers"],
+                  "params_from": before, "params_to": found["params"], "steps": steps, "job_id": job_id,
+                  "why": f"The design stopped learning early, so cycle {cycle} pretrains version {made['version']} ({found['width']} wide, {found['layers']} layers, "
+                         f"{found['params']:,} parameters instead of {before:,}) starting from version {version.number}'s weights."}
+        grown = dict(plan, version=made["version"])
+        ar.save_plan(self._folder(run_id), grown)
+        run["plan"] = grown
+        self._put(run_id, tune.add_growth(self.runs[run_id]["state"], record, self.now()))
+        return self.services.find_job(job_id)
+
     def _build(self, run_id, kind, job_id):
         run = self.runs[run_id]
         plan, state = run["plan"], run["state"]
@@ -537,6 +594,9 @@ class Orchestrator:
         settings = ar.phase_settings(plan, state, kind, self.now())
         settings = self._tuned(run_id, version, kind, settings)
         if kind == "pretrain":
+            grown = self._grow(run_id, version, settings, job_id)
+            if grown is not None:
+                return grown
             build = self.build_pretrain or getattr(self.services, "build_pretrain", None)   # the API app sets the services' one
             if build is None:
                 raise ValueError("This app cannot start a pretraining run from an Auto Run.")

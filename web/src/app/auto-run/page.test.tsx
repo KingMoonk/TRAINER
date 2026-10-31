@@ -439,6 +439,32 @@ describe("Auto Run page: the parameter controller", () => {
     expect((posted(calls, "/auto-runs/run1/plan")[0].body as { plan: Plan }).plan.controller!.bounds.steps).toEqual({ min: 10, max: 8000 });
   });
 
+  test("the person turns growing on and sets how big it may get; the plan carries both", async () => {
+    const { calls } = server(run("draft", null));
+    const user = userEvent.setup();
+    renderPage(<AutoRunPage />);
+    await screen.findByTestId("plan-grow");
+    expect(screen.getByRole("switch", { name: "Make a bigger design when it proposes one" })).not.toBeChecked();
+    await user.click(screen.getByRole("switch", { name: "Make a bigger design when it proposes one" }));
+    await user.clear(screen.getByLabelText("Widest design"));
+    await user.type(screen.getByLabelText("Widest design"), "128");
+    await user.click(screen.getByRole("button", { name: "Save the plan" }));
+    await waitFor(() => expect(posted(calls, "/auto-runs/run1/plan")).toHaveLength(1));
+    expect((posted(calls, "/auto-runs/run1/plan")[0].body as { plan: Plan }).plan.controller!.grow).toEqual({ enabled: true, max_width: 128, max_layers: 6 });
+  });
+
+  test("a bigger design the controller made is shown with its reason", async () => {
+    const view = run("running", "midtrain", { data: { status: "passed" } });
+    view.state.cycle = 2;
+    view.state.choices = [{ phase: "sft", attempt: 1, key: "design", was: 1000, value: 4000, rule: "bigger_design", why: "The model is too small.", evidence: {}, applied: true, clamped: false }];
+    view.state.grown = [{ cycle: 2, from_version: 1, to_version: 2, width: 64, layers: 2, params_from: 1000, params_to: 4000, steps: 500, job_id: "run1-0-2", why: "Cycle 2 pretrains version 2 from version 1's weights." }];
+    server(view);
+    renderPage(<AutoRunPage />);
+    const grown = await screen.findByTestId("auto-run-grown");
+    expect(within(grown).getByText("Cycle 2: version 2 (64 wide, 2 layers, 4,000 parameters) from version 1 (1,000 parameters)")).toBeVisible();
+    expect(within(grown).getByText(/pretrains version 2 from version 1/)).toBeVisible();
+  });
+
   test("limits that cannot be are not sent", async () => {
     const { calls } = server(run("draft", null));
     const user = userEvent.setup();

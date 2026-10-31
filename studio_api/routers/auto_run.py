@@ -48,12 +48,21 @@ class AutoRunBounds(BaseModel):
     kl: AutoRunBound  # the KL coefficient of round 2
 
 
+class AutoRunGrow(BaseModel):
+    """Whether the controller may act on its bigger-design proposal: in the next cycle's pretraining it makes a bigger version, warm
+    started from the weights, no wider than `max_width` and no deeper than `max_layers`. Off unless the person turns it on."""
+    enabled: bool = False
+    max_width: int = 256
+    max_layers: int = 6
+
+
 class AutoRunController(BaseModel):
     """The parameter controller (studio_autotune): between phases it picks the next phase's learning rate, steps, DPO beta and KL
     coefficient from what the last phases showed, inside `bounds`. enabled false: every phase runs with the plan's settings."""
     enabled: bool = True
     bounds: AutoRunBounds
     max_cycles: int = 1  # the most cycles of the plan the run may start (1 to 5): after the last phase it may begin another, never past this
+    grow: AutoRunGrow | None = None  # null: a proposed bigger design is never made
 
 
 class AutoRunPlanModel(BaseModel):
@@ -114,6 +123,20 @@ class AutoRunCycleDecision(BaseModel):
     phases: list[dict] = []  # for another: how the cycle's phases ended, before they were reset
 
 
+class AutoRunGrown(BaseModel):
+    """A bigger version the controller made for a later cycle (the plan's version became to_version)."""
+    cycle: int
+    from_version: int
+    to_version: int
+    width: int
+    layers: int
+    params_from: int
+    params_to: int
+    steps: int
+    job_id: str
+    why: str
+
+
 class AutoRunRunState(BaseModel):
     model_config = ConfigDict(extra="allow")
     id: str
@@ -127,6 +150,7 @@ class AutoRunRunState(BaseModel):
     choices: list[AutoRunChoiceRecord] = []  # what the parameter controller chose, oldest first, with the evidence
     cycle: int = 1  # the cycle of the plan the run is in
     decisions: list[AutoRunCycleDecision] = []  # another cycle or finish, one per ended cycle, oldest first
+    grown: list[AutoRunGrown] = []  # the bigger versions made from a proposal, oldest first
     attempts: list[dict] = []  # what each ended attempt showed (the controller's evidence)
 
 

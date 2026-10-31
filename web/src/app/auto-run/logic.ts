@@ -13,6 +13,7 @@ export type RunStatus = RunView["state"]["status"];
 export type Controller = components["schemas"]["AutoRunController"];
 export type Choice = components["schemas"]["AutoRunChoiceRecord"];
 export type CycleDecision = components["schemas"]["AutoRunCycleDecision"];
+export type Grown = components["schemas"]["AutoRunGrown"];
 
 /** The post-training round each phase runs (studio_ia/autorun.py ROUND). */
 export const ROUND: Record<string, number> = { sft: 1, rlvr: 2, distill: 3, dpo: 4 };
@@ -168,6 +169,18 @@ export function parseCycles(text: string): number | null {
   return text.trim() && Number.isInteger(value) && value >= 1 && value <= MAX_CYCLES ? value : null;
 }
 
+/** The most width and layers a grown design may have, as the text the editor shows. */
+export type GrowTexts = { width: string; layers: string };
+export function growTexts(plan: Plan): GrowTexts | null {
+  const grow = plan.controller?.grow;
+  return plan.controller ? { width: String(grow?.max_width ?? 256), layers: String(grow?.max_layers ?? 6) } : null;
+}
+
+function wholeFrom1(text: string): number | null {
+  const value = Number(text);
+  return text.trim() && Number.isInteger(value) && value >= 1 ? value : null;
+}
+
 export function budgetText(plan: Plan): string {
   return plan.budget.hours == null ? "" : String(plan.budget.hours);
 }
@@ -176,7 +189,7 @@ export function budgetText(plan: Plan): string {
  * The plan the editor's choices make, or the sentence that says what to fix. A setting left empty is dropped so the server uses its default;
  * one outside what the server accepts is refused here rather than silently ignored.
  */
-export function buildPlan(base: Plan, texts: Record<string, string>, budget: string, bounds?: BoundTexts | null, cycles?: string): { plan: Plan } | { error: string } {
+export function buildPlan(base: Plan, texts: Record<string, string>, budget: string, bounds?: BoundTexts | null, cycles?: string, grow?: GrowTexts | null): { plan: Plan } | { error: string } {
   if (!base.name.trim()) return { error: T.needName };
   if (!base.phases.some((p) => p.enabled)) return { error: T.atLeastOne };
   let hours: number | null = null;
@@ -208,6 +221,12 @@ export function buildPlan(base: Plan, texts: Record<string, string>, budget: str
     const max = parseCycles(cycles);
     if (max === null) return { error: fill(T.badCycles, { max: MAX_CYCLES }) };
     controller = { ...controller, max_cycles: max };
+  }
+  if (controller && grow) {
+    const width = wholeFrom1(grow.width);
+    const layers = wholeFrom1(grow.layers);
+    if (width === null || layers === null) return { error: T.badGrow };
+    controller = { ...controller, grow: { enabled: controller.grow?.enabled ?? false, max_width: width, max_layers: layers } };
   }
   return { plan: { ...base, name: base.name.trim(), budget: { hours }, phases, ...(controller ? { controller } : {}) } };
 }
@@ -241,6 +260,11 @@ export function choiceLabel(choice: Choice): string {
 /** What the controller decided after each cycle (another cycle or finish), oldest first, for the run page. */
 export function runDecisions(run: RunView): CycleDecision[] {
   return run.state.decisions ?? [];
+}
+
+/** The bigger versions the controller made from a proposal, oldest first, for the run page. */
+export function runGrown(run: RunView): Grown[] {
+  return run.state.grown ?? [];
 }
 
 /** The choices the controller made, oldest first, for the run page. */
