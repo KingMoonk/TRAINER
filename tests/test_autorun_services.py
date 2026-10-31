@@ -532,3 +532,70 @@ class RlhfPhaseTests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+FLAT_CARD = "The report card has not clearly improved for 3 rounds in a row: the version has stopped improving here."
+FLAT_CURVE = [(float(x), 2.0 + 3 * (x / 1e3) ** -1.5) for x in numpy.geomspace(1e3, 1e6, 14)]
+
+
+class GrowTests(Base):
+    """A bigger-design proposal in cycle 1 is acted on only with the person's consent, by the next cycle's pretraining."""
+
+    def setUp(self):
+        super().setUp()
+        from studio_spec import default_spec
+        self.services._versions[0].spec = default_spec()
+        self.services.loss_evidence = lambda version: {"points": FLAT_CURVE, "run": "r"}
+        self.services.adopt_loop = lambda loop_id: {"ok": True, "verdict": "ok", "checkpoint": ""}
+
+    def plan(self, grow, **limits):
+        plan = plan_of(("pretrain", "sft", "rlhf"), hours=100)
+        plan["controller"].update(max_cycles=2, grow={"enabled": grow, **{"max_width": 96, "max_layers": 3}, **limits})
+        return plan
+
+    def first_cycle(self, plan):
+        self.go(plan)
+        self.end("run1-0-1")
+        self.end("run1-1-1", result=GOOD)
+        self.end("run1-2-1", result={"ok": True, "kept": 2, "stop_reason": FLAT_CARD, "rounds": [{"round": 1, "status": "kept", "card_better": ["chat win rate"]}]})
+
+    def version(self, number):
+        return next(v for v in self.services.versions() if v.number == number)
+
+    def test_with_consent_the_next_cycles_pretrain_is_a_warm_started_bigger_version_and_the_rest_runs_on_it(self):
+        self.first_cycle(self.plan(True))
+        state = self.state()
+        self.assertEqual(state["cycle"], 2)
+        self.assertEqual([c["applied"] for c in state["choices"] if c["rule"] == "bigger_design"], [True])
+        [grown] = state["grown"]
+        self.assertEqual((grown["cycle"], grown["from_version"], grown["to_version"], grown["job_id"]), (2, 1, 2, "run1-0-2"))
+        self.assertGreater(grown["params_to"], grown["params_from"])
+        self.assertLessEqual((grown["width"], grown["layers"]), (96, 3))
+        new = self.version(2)
+        self.assertEqual((new.spec["dims"]["d_model"], new.spec["dims"]["n_layer"]), (grown["width"], grown["layers"]))
+        job = self.services.find_job("run1-0-2")
+        self.assertEqual((job.kind, job.params["continue_from"]["kind"], job.params["version"], job.params["auto_run"]), ("pretrain", "grow", 2, "run1"))
+        self.assertEqual(self.auto.view("run1")["plan"]["version"], 2)
+        self.assertEqual([e["event"] for e in self.auto.view("run1")["journal"] if e["event"] == "grown"], ["grown"])
+        self.services._versions[1].best_checkpoint = "ck-grown"          # ... and the phases after it run on the new version
+        self.end("run1-0-2")
+        sft = self.services.find_job("run1-1-2")
+        self.assertEqual((sft.params["version"], sft.params["checkpoint"]), (2, "ck-grown"))
+
+    def test_without_consent_nothing_is_created(self):
+        self.first_cycle(self.plan(False))
+        state = self.state()
+        self.assertEqual(state["cycle"], 2)
+        self.assertEqual(len(self.services.versions()), 1)
+        self.assertEqual(state.get("grown", []), [])
+        self.assertEqual([c["applied"] for c in state["choices"] if c["rule"] == "bigger_design"], [False])
+        self.assertEqual(self.services.find_job("run1-0-2").params["version"], 1)
+        self.assertEqual(self.auto.view("run1")["plan"]["version"], 1)
+
+    def test_no_bigger_design_inside_the_limits_runs_the_same_design_and_says_why(self):
+        self.first_cycle(self.plan(True, max_width=1, max_layers=1))
+        self.assertEqual(len(self.services.versions()), 1)
+        self.assertEqual(self.state().get("grown", []), [])
+        [line] = [e for e in self.auto.view("run1")["journal"] if e["event"] == "grow_skipped"]
+        self.assertIn("No design bigger", line["why"])
+        self.assertEqual(self.services.find_job("run1-0-2").params["version"], 1)

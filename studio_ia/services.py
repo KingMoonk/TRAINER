@@ -492,11 +492,12 @@ class Services:
         """The part of the device's memory the queue's plan lets a job take (studio_queue.MEMORY)."""
         return 1.
 
-    def continue_run(self, number, kind, steps, dataset_ids=(), width=None, layers=None, spec=None, rows=16, hold=.05):
+    def continue_run(self, number, kind, steps, dataset_ids=(), width=None, layers=None, spec=None, rows=16, hold=.05, job_id=None, tag=None):
         """Queue a pretrain job that continues version `number`'s newest run (studio_ia.continue_run): kind "same" adds `steps` steps on
         the same data, "new_data" adds them on `dataset_ids` (same weights, optimizer and step), "grow" trains a bigger design
         (`spec`, or this one at `width` and `layers`, saved as the next version) from these weights for `steps` steps. The job's label
-        says what it continues and from which step. Returns {"job_id", "label", "version", "kind", "from_step"}. Reads checkpoints: call it
+        says what it continues and from which step. `job_id` (default: a new one) names the job, and `tag` is merged into its params
+        (the Auto Run asks for its phase's own id this way). Returns {"job_id", "label", "version", "kind", "from_step"}. Reads checkpoints: call it
         off the Tk thread. ValueError with a sentence when the run cannot be continued that way."""
         raise NotImplementedError
 
@@ -1264,16 +1265,28 @@ class FakeServices(Services):
     def cached_step_rate(self, spec, rows):
         return self.measure_step_rate(spec, rows, 256)
 
-    def continue_run(self, number, kind, steps, dataset_ids=(), width=None, layers=None, spec=None, rows=16, hold=.05):
+    def continue_run(self, number, kind, steps, dataset_ids=(), width=None, layers=None, spec=None, rows=16, hold=.05, job_id=None, tag=None):
         if not any(v.number == number for v in self.versions()):
             raise ValueError(f"No version {number}.")
         label = {"same": f"Version {number} continued from step 100", "new_data": f"Version {number} continued from step 100 on new data",
                  "grow": f"Version {number + 1} grown from version {number} (step 100)"}[kind]
         made = self.__dict__.setdefault("continued", [])
-        job = Job(id=f"c{len(made) + 1}", kind="pretrain", label=label, params={"continue_from": {"kind": kind, "step": 100, "add": steps}})
+        target = number
+        old = next(v for v in self.versions() if v.number == number)
+        if kind == "grow" and old.spec:   # (a version without a design only gets the job)
+            from studio_ia import sizing
+            try:
+                design = spec or sizing.resized_spec(old.spec, width, layers)
+            except (KeyError, TypeError, ValueError):   # (a stub design the fake cannot resize: only the job is queued)
+                design = None
+            if design is not None:
+                target = self.save_version(design, f"grown from version {number} at step 100").number
+                label = f"Version {target} grown from version {number} (step 100)"
+        job = Job(id=job_id or f"c{len(made) + 1}", kind="pretrain", label=label,
+                  params={"continue_from": {"kind": kind, "step": 100, "add": steps}, "version": target, **(tag or {})})
         made.append(job)
         self.enqueue(job)
-        return {"job_id": job.id, "label": label, "version": number, "kind": kind, "from_step": 100}
+        return {"job_id": job.id, "label": label, "version": target, "kind": kind, "from_step": 100}
 
     def measure_step_rate(self, spec, rows, vocab, stop=None):
         return {"seconds_per_step": .25, "tokens_per_second": rows * 256 / .25, "device": "cpu", "device_name": "PyTorch / CPU", "note": "",
@@ -2200,7 +2213,7 @@ class WorkspaceServices(Services):
     def size_progress(self, job_id, percent):
         return self.runner.size_progress(job_id, percent)
 
-    def continue_run(self, number, kind, steps, dataset_ids=(), width=None, layers=None, spec=None, rows=16, hold=.05):
+    def continue_run(self, number, kind, steps, dataset_ids=(), width=None, layers=None, spec=None, rows=16, hold=.05, job_id=None, tag=None):
         from studio_ia import continue_run as cont
         from studio_ia import pretraining_plan as plan
         from studio_ia import sizing
@@ -2230,7 +2243,7 @@ class WorkspaceServices(Services):
             label, params = cont.grow_job(number, grown, run, warm, steps, list(dataset_ids), rows, hold, own, best)
         else:
             raise cont.ContinueError(f"Unknown way to continue: {kind}.")
-        job = Job(id=uuid.uuid4().hex[:8], kind="pretrain", label=label, params=params, created_at=time.time())
+        job = Job(id=job_id or uuid.uuid4().hex[:8], kind="pretrain", label=label, params={**params, **(tag or {})}, created_at=time.time())
         self.enqueue(job)
         return {"job_id": job.id, "label": label, "version": params["version"], "kind": kind, "from_step": run["step"]}
 

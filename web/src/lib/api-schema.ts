@@ -4325,6 +4325,7 @@ export interface components {
              * @default true
              */
             enabled: boolean;
+            grow?: components["schemas"]["AutoRunGrow"] | null;
             /**
              * Max Cycles
              * @default 1
@@ -4357,6 +4358,54 @@ export interface components {
             }[];
             /** Why */
             why: string;
+        };
+        /**
+         * AutoRunGrow
+         * @description Whether the controller may act on its bigger-design proposal: in the next cycle's pretraining it makes a bigger version, warm
+         *     started from the weights, no wider than `max_width` and no deeper than `max_layers`. Off unless the person turns it on.
+         */
+        AutoRunGrow: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Max Layers
+             * @default 6
+             */
+            max_layers: number;
+            /**
+             * Max Width
+             * @default 256
+             */
+            max_width: number;
+        };
+        /**
+         * AutoRunGrown
+         * @description A bigger version the controller made for a later cycle (the plan's version became to_version).
+         */
+        AutoRunGrown: {
+            /** Cycle */
+            cycle: number;
+            /** From Version */
+            from_version: number;
+            /** Job Id */
+            job_id: string;
+            /** Layers */
+            layers: number;
+            /** Params From */
+            params_from: number;
+            /** Params To */
+            params_to: number;
+            /** Steps */
+            steps: number;
+            /** To Version */
+            to_version: number;
+            /** Why */
+            why: string;
+            /** Width */
+            width: number;
         };
         /**
          * AutoRunJobProgress
@@ -4523,6 +4572,11 @@ export interface components {
              * @default []
              */
             decisions: components["schemas"]["AutoRunCycleDecision"][];
+            /**
+             * Grown
+             * @default []
+             */
+            grown: components["schemas"]["AutoRunGrown"][];
             /** Id */
             id: string;
             /** Phases */
