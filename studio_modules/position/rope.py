@@ -24,10 +24,16 @@ class RotaryPosition(Layer):
     def forward(self, x, ctx):
         return x
 
+    @staticmethod
+    def _wide(x):
+        """Angles and rotation need at least float32: bf16/fp16 round positions and cos/sin badly."""
+        return torch.float64 if x.dtype == torch.float64 else torch.float32
+
     def _angles(self, x, offset=0):
         depth = x.shape[-1]
-        positions = torch.arange(offset, offset + x.shape[-2], dtype=x.dtype, device=x.device)
-        inv = self.base ** (-2 * torch.arange(depth // 2, dtype=x.dtype, device=x.device) / depth)
+        wide = self._wide(x)
+        positions = torch.arange(offset, offset + x.shape[-2], dtype=wide, device=x.device)
+        inv = self.base ** (-2 * torch.arange(depth // 2, dtype=wide, device=x.device) / depth)
         angle = positions[:, None] * inv[None, :]
         return torch.cos(angle)[None, None], torch.sin(angle)[None, None]
 
@@ -35,8 +41,10 @@ class RotaryPosition(Layer):
         if x.shape[-1] % 2:
             raise ValueError("RoPE requires an even query/key head width.")
         cosine, sine = self._angles(x, offset)
-        even, odd = x[..., 0::2], x[..., 1::2]
-        return torch.stack((even * cosine - odd * sine, even * sine + odd * cosine), dim=-1).reshape(x.shape)
+        wide = x.to(self._wide(x))
+        even, odd = wide[..., 0::2], wide[..., 1::2]
+        turned = torch.stack((even * cosine - odd * sine, even * sine + odd * cosine), dim=-1).reshape(x.shape)
+        return turned.to(x.dtype)
 
     def rotate(self, q, k, offset=0):
         return self._turn(q, offset), self._turn(k, offset)
