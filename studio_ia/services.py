@@ -1275,11 +1275,13 @@ class FakeServices(Services):
         old = next(v for v in self.versions() if v.number == number)
         if kind == "grow" and old.spec:   # (a version without a design only gets the job)
             from studio_ia import sizing
-            design = spec or sizing.resized_spec(old.spec, width, layers)
-            if design is None:
-                raise ValueError("This design is built block by block, so it cannot be resized automatically.")
-            target = self.save_version(design, f"grown from version {number} at step 100").number
-            label = f"Version {target} grown from version {number} (step 100)"
+            try:
+                design = spec or sizing.resized_spec(old.spec, width, layers)
+            except (KeyError, TypeError, ValueError):   # (a stub design the fake cannot resize: only the job is queued)
+                design = None
+            if design is not None:
+                target = self.save_version(design, f"grown from version {number} at step 100").number
+                label = f"Version {target} grown from version {number} (step 100)"
         job = Job(id=job_id or f"c{len(made) + 1}", kind="pretrain", label=label,
                   params={"continue_from": {"kind": kind, "step": 100, "add": steps}, "version": target, **(tag or {})})
         made.append(job)
