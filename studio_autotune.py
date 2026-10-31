@@ -38,7 +38,7 @@ KEYS = ("learning_rate", "steps", "beta", "kl")
 DEFAULT_BOUNDS = {"learning_rate": {"min": 1e-6, "max": 1e-3}, "steps": {"min": 10, "max": 20000},
                   "beta": {"min": .02, "max": .5}, "kl": {"min": 0., "max": .2}}
 LABEL = {"learning_rate": "Learning rate", "steps": "Steps", "beta": "DPO beta", "kl": "KL pull-back", "design": "Design"}
-LR_START = {"sft": 1e-4, "rlvr": 1e-4, "distill": 1e-4}   # the rate each round starts at when the plan gives none (studio_rl: SFT_MAX_LR, practice_with_checks, learn_from_teacher)
+LR_START = {"sft": 1e-4, "rlvr": 1e-4, "distill": 1e-4}   # the rate each round starts at when the plan gives none (studio_rl: sft_learning_rate, practice_with_checks, learn_from_teacher)
 KL_START, BETA_START = .02, .1                            # studio_rl.KL_DEFAULT and studio_rlhf.DPO_DEFAULTS["beta"]
 LR_CUT = .5          # a diverged attempt's next learning rate is this share of its last
 LENGTHEN = 1.5       # a phase whose curve is still falling gets this many times its steps

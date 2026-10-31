@@ -1,4 +1,5 @@
 """Round 1 (answers from conversations): its own SFT recipe, the candidate it hands the gate, and the stoppable measurement."""
+import math
 import tempfile
 import threading
 import unittest
@@ -33,24 +34,37 @@ class SftRecipe(unittest.TestCase):
     def recipe(self, rows=CONVERSATIONS, base=None, **overrides):
         return studio_rl.sft_config(dict(self.data["config"], **(base or {})), rows, self.data["tokenizer"], **overrides)
 
-    def test_the_rate_is_a_tenth_of_the_pretraining_peak_and_never_above_1e_4(self):
-        self.assertEqual(self.recipe(base={"learning_rate": 3e-3})["learning_rate"], 1e-4)    # a high peak is capped
-        self.assertAlmostEqual(self.recipe(base={"learning_rate": 5e-5})["learning_rate"], 5e-6)   # a low one gives a tenth
-        self.assertEqual(self.recipe(base={"learning_rate": 1e-3})["learning_rate"], 1e-4)
+    def test_the_rate_falls_with_width_within_bounds_and_never_passes_the_pretraining_peak(self):
+        rate = lambda width, peak=1e-3: self.recipe(base={"width": width, "learning_rate": peak})["learning_rate"]
+        self.assertAlmostEqual(rate(128), 1e-3)
+        self.assertAlmostEqual(rate(256), 5e-4)
+        self.assertGreater(rate(64, peak=1e-2), rate(128, peak=1e-2))
+        self.assertEqual(rate(16, peak=1e-2), studio_rl.SFT_LR_CEILING)      # the narrowest models stop at the ceiling
+        self.assertEqual(rate(4096), studio_rl.SFT_LR_FLOOR)                 # wide ones stop at the floor (the old fixed rate)
+        self.assertEqual(rate(32, peak=5e-5), 5e-5)                          # a low pretraining peak still caps it
 
-    def test_steps_are_epochs_over_the_conversation_tokens_up_to_a_cap(self):
-        from studio_model import Tokenizer, encode_example
+    def test_steps_are_epochs_over_the_training_windows_up_to_a_cap(self):
+        from studio_model import Tokenizer
         tokenizer = Tokenizer.restore(self.data["tokenizer"])
-        tokens = sum(len(encode_example(r, tokenizer)[0]) for r in CONVERSATIONS)
+        base = dict(self.data["config"], validation=0)
+        windows = studio_rl.sft_windows({**base, "objective": "assistant"}, CONVERSATIONS, tokenizer)
+        self.assertEqual(windows, len(CONVERSATIONS))                        # one window per short answer
         cfg = self.recipe()
-        batch, context = self.data["config"]["batch_size"], self.data["config"]["context"]
-        self.assertEqual(cfg["steps"], -(-studio_rl.SFT_EPOCHS * tokens // (batch * context)))
+        self.assertEqual(cfg["validation"], .1)                              # a tenth of the windows is held out, not trained on
+        self.assertEqual(cfg["steps"], math.ceil(studio_rl.SFT_EPOCHS * windows * .9 / self.data["config"]["batch_size"]))
         self.assertEqual(cfg["warmup"], max(1, round(.03 * cfg["steps"])))
         self.assertEqual(cfg["eval_every"], max(1, cfg["steps"] // 10))
         self.assertEqual(cfg["sample_prompt"], studio_rl.SFT_SAMPLE_PROMPT)
         self.assertEqual(cfg["objective"], "assistant")
         self.assertEqual(self.recipe(CONVERSATIONS * 5000)["steps"], studio_rl.SFT_MAX_STEPS)   # a big set stops at the cap
         self.assertEqual(self.recipe([])["steps"], 1)
+
+    def test_short_and_long_answers_size_the_steps_by_window_not_by_token(self):
+        short = [{"user": "Hi", "assistant": "Yo"}] * 40
+        long = [{"user": "Hi", "assistant": "word " * 60}] * 40              # 300 bytes each: several windows of context 32
+        steps = lambda rows: self.recipe(rows)["steps"]
+        self.assertEqual(steps(short), math.ceil(studio_rl.SFT_EPOCHS * 40 * .9 / 4))   # one window each
+        self.assertGreater(steps(long), steps(short) * 5)                    # many windows each
 
     def test_conversations_are_held_out_of_training_for_the_evaluation(self):
         self.assertEqual(self.recipe()["validation"], .1)                  # the base held none back (validation 0)
@@ -92,8 +106,7 @@ class RoundOne(unittest.TestCase):
     def test_with_no_overrides_it_trains_with_the_sft_recipe_and_keeps_the_job_limits(self):
         _, _, fit, _, _ = self.run_it("recipe", params={"token_budget": 5000, "wall_seconds": 90})
         cfg = fit.call_args.args[0]
-        self.assertLessEqual(cfg["learning_rate"], 1e-4)
-        self.assertLessEqual(cfg["learning_rate"], .1 * TINY["learning_rate"])
+        self.assertEqual(cfg["learning_rate"], studio_rl.sft_learning_rate(TINY))
         self.assertLessEqual(cfg["steps"], studio_rl.SFT_MAX_STEPS)
         self.assertEqual(cfg["sample_prompt"], studio_rl.SFT_SAMPLE_PROMPT)
         self.assertEqual((fit.call_args.kwargs["token_budget"], fit.call_args.kwargs["wall_seconds"]), (5000, 90))
