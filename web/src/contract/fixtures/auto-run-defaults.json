@@ -23,6 +23,11 @@
         }
       },
       "enabled": true,
+      "grow": {
+        "enabled": false,
+        "max_layers": 6,
+        "max_width": 256
+      },
       "max_cycles": 1
     },
     "id": "",

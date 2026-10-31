@@ -32,6 +32,7 @@ import {
   roundText,
   runChoices,
   runDecisions,
+  runGrown,
   runLabel,
   timelinePhases,
   valueText,
@@ -135,6 +136,18 @@ function Choices({ run }: { run: RunView }) {
   return (
     <section className="flex flex-col gap-2" aria-label={T.controllerTitle} data-testid="auto-run-choices">
       <h2 className="text-sm font-medium">{T.controllerTitle}</h2>
+      {runGrown(run).length > 0 && (
+        <ul className="flex flex-col gap-2" data-testid="auto-run-grown" aria-label={T.growTitle}>
+          {runGrown(run).map((g) => (
+            <li key={g.cycle} className="rounded-lg border p-3 text-sm">
+              <p className="font-medium">
+                {fill(T.growMade, { cycle: g.cycle, to: g.to_version, width: g.width, layers: g.layers, value: valueText(g.params_to), from: g.from_version, was: valueText(g.params_from) })}
+              </p>
+              <p className="mt-1 text-muted-foreground">{g.why}</p>
+            </li>
+          ))}
+        </ul>
+      )}
       {run.plan.controller && !run.plan.controller.enabled ? (
         <p className="text-sm text-muted-foreground">{T.controllerOff}</p>
       ) : choices.length === 0 ? (
@@ -143,7 +156,11 @@ function Choices({ run }: { run: RunView }) {
         <ul className="flex flex-col gap-2">
           {choices.map((choice) => (
             <li key={`${choice.phase}-${choice.attempt}-${choice.key}`} className="rounded-lg border p-3 text-sm">
-              {choice.applied ? (
+              {choice.applied && choice.key === "design" ? (
+                <p className="font-medium">
+                  {choiceLabel(choice)}: {T.designMade}
+                </p>
+              ) : choice.applied ? (
                 <p className="font-medium">
                   {fill(T.chosenFrom, { label: choiceLabel(choice), phase: phaseTitle(choice.phase), n: choice.attempt, was: valueText(choice.was), value: valueText(choice.value) })}
                   {choice.clamped ? ` (${T.heldToLimit})` : ""}

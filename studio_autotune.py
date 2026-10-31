@@ -9,14 +9,19 @@ Rules (each needs real evidence, and does nothing without it):
 * still falling: when the pretrain run's fitted curve (studio_scaling.fit_curve over its validation points) still lowers the error by
   at least `studio_scaling.FLAT_PER_DOUBLING` per doubling of what it read, the mid-training phase gets `LENGTHEN` times its steps;
 * too small: when that curve went flat well before the run ended (`TOO_SMALL_SHARE`, the same test the pretraining plan uses), a bigger
-  design is PROPOSED, with studio_stages.TOO_SMALL's reason. It is shown, never applied: growing the design is the person's call;
+  design is PROPOSED, with studio_stages.TOO_SMALL's reason. It is applied only with the person's consent (`controller["grow"]["enabled"]`,
+  off by default): see "grow" below;
 * gate history: a round 4 attempt whose gate said no is tried again with a larger DPO beta, and a round 2 attempt whose gate said no with
   a larger KL coefficient, both pulling the model closer to the weights it started from (`PULL`).
 
 * next cycle (#901): when the last phase, the rlhf loop, stopped because the report card stopped improving (`cycle_decision`), the run
   starts another cycle of its enabled phases if the loop kept at least one round and fewer than `max_cycles` have run, and finishes
-  otherwise. Either way the decision and its evidence are kept in `state["decisions"]` and journalled ("cycle"). A bigger design is
-  still only proposed (rule bigger_design), never applied.
+  otherwise. Either way the decision and its evidence are kept in `state["decisions"]` and journalled ("cycle").
+* grow (#896): when the person allowed it (`controller["grow"] = {"enabled": true, "max_width", "max_layers"}`) and a bigger design was
+  proposed, the pretrain phase of the next cycle makes a bigger version instead of repeating the same one: the largest design of
+  studio_ia.sizing's ladder inside `max_width` and `max_layers` that the time left can still train (sizing.suggest_design), warm started from
+  the version's weights (studio_warmstart). The plan then points at the new version, so every later phase runs on it. The change is kept in
+  `state["grown"]`, the proposal's choice turns applied, and a "grown" line goes to the journal. Without consent nothing is created.
 
 Limits: `plan["controller"] = {"enabled": bool, "bounds": {key: {"min", "max"}}, "max_cycles": 1..MAX_CYCLES (default 1)}` for the keys in `KEYS`. No choice leaves its bounds (a value
 is clamped, and the choice says so); the person sees and edits them in the plan. Without a `controller` in the plan nothing is tuned.
@@ -52,8 +57,11 @@ SETTING = {"learning_rate": "learning_rate", "steps": "steps", "beta": "beta", "
 APPLIES = {"learning_rate": ("sft", "rlvr", "distill"), "steps": ("midtrain",), "beta": ("dpo",), "kl": ("rlvr",)}
 
 
+DEFAULT_GROW = {"enabled": False, "max_width": 256, "max_layers": 6}   # growing a design needs the person's yes; the largest it may reach
+
+
 def default_controller():
-    return {"enabled": True, "bounds": copy.deepcopy(DEFAULT_BOUNDS), "max_cycles": DEFAULT_CYCLES}
+    return {"enabled": True, "bounds": copy.deepcopy(DEFAULT_BOUNDS), "max_cycles": DEFAULT_CYCLES, "grow": dict(DEFAULT_GROW)}
 
 
 def validate(controller):
@@ -66,6 +74,14 @@ def validate(controller):
     cycles = controller.get("max_cycles", DEFAULT_CYCLES)
     if isinstance(cycles, bool) or not isinstance(cycles, int) or not 1 <= cycles <= MAX_CYCLES:
         problems.append(f"The most cycles must be a whole number from 1 to {MAX_CYCLES}.")
+    grow = controller.get("grow")
+    if grow is not None:
+        if not isinstance(grow, dict) or not isinstance(grow.get("enabled"), bool):
+            problems.append("Growing the design needs enabled set to true or false.")
+        else:
+            for key, label in (("max_width", "width"), ("max_layers", "layers")):
+                if isinstance(grow.get(key), bool) or not isinstance(grow.get(key), int) or grow[key] < 1:
+                    problems.append(f"The most {label} a grown design may have must be a whole number from 1.")
     bounds = controller.get("bounds")
     if not isinstance(bounds, dict):
         return problems + ["The controller needs its bounds as an object."]
@@ -286,7 +302,8 @@ def cycle_decision(plan, state):
         why = (f"The report card stopped improving after the loop kept {kept} round{'s' if kept != 1 else ''}"
                f"{' (better: ' + ', '.join(better) + ')' if better else ''}, and cycle {cycle} of {limit} is done, so cycle {cycle + 1} starts.")
         if evidence["bigger_design_proposed"]:
-            why += " The bigger design proposed earlier is still yours to apply."
+            why += (f" The bigger design proposed earlier is made for cycle {cycle + 1}'s pretraining." if grow_allowed(plan)
+                    else " The bigger design proposed earlier is still yours to apply.")
     return {"cycle": cycle, "decision": decision, "why": why, "evidence": evidence}
 
 
@@ -295,4 +312,44 @@ def add_decision(state, decision, now):
     state = copy.deepcopy(state)
     state["decisions"] = state.get("decisions", []) + [decision]
     ar._event(state, "cycle", now, cycle=decision["cycle"], decision=decision["decision"], why=decision["why"], evidence=decision["evidence"])
+    return state
+
+
+# --------------------------------------------------------------------------- a bigger design, with consent
+
+def grow_allowed(plan):
+    """Whether the person allowed the controller to grow the design (and the controller is on)."""
+    return enabled(plan) and bool((plan["controller"].get("grow") or {}).get("enabled"))
+
+
+def grow_limits(plan):
+    """(most width, most layers) a grown design may have."""
+    grow = plan["controller"].get("grow") or DEFAULT_GROW
+    return grow["max_width"], grow["max_layers"]
+
+
+def pending_proposal(plan, state):
+    """The bigger-design proposal to act on when this cycle's pretraining is built, or None: the person allowed it, it is a later cycle
+    (the evidence is from an earlier one) and nothing was grown yet."""
+    if not grow_allowed(plan) or state.get("cycle", 1) < 2 or state.get("grown"):
+        return None
+    return next((c for c in state.get("choices", []) if c["rule"] == "bigger_design" and not c["applied"]), None)
+
+
+def add_growth(state, record, now):
+    """State with `record` ({cycle, from_version, to_version, width, layers, params_from, params_to, steps, why}) in `state["grown"]`, the
+    proposal's choice applied (was and value are the parameter counts) and one "grown" journal event."""
+    state = copy.deepcopy(state)
+    state["grown"] = state.get("grown", []) + [record]
+    for choice in state.get("choices", []):
+        if choice["rule"] == "bigger_design" and not choice["applied"]:
+            choice.update(applied=True, was=record["params_from"], value=record["params_to"])
+    ar._event(state, "grown", now, **record)
+    return state
+
+
+def growth_skipped(state, cycle, why, now):
+    """State with a "grow_skipped" journal event: the person allowed growing but no bigger design could be made now."""
+    state = copy.deepcopy(state)
+    ar._event(state, "grow_skipped", now, cycle=cycle, why=why)
     return state

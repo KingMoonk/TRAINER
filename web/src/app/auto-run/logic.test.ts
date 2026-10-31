@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { PHASES, boundTexts, buildPlan, budgetText, checkText, controls, cyclesText, parseCycles, defaultVersion, errorText, keptRound, loopRounds, pickRun, progressLine, resultChecks, roundText, settingTexts, timelinePhases, valueText, when } from "./logic";
+import { PHASES, boundTexts, buildPlan, budgetText, checkText, controls, cyclesText, growTexts, parseCycles, defaultVersion, errorText, keptRound, loopRounds, pickRun, progressLine, resultChecks, roundText, settingTexts, timelinePhases, valueText, when } from "./logic";
 import { plan, run, summary } from "./test-data";
 
 describe("the cycle limit", () => {
@@ -15,6 +15,21 @@ describe("the cycle limit", () => {
       expect(buildPlan(plan(), {}, "", boundTexts(plan()), bad)).toEqual({ error: "The most cycles must be a whole number from 1 to 5." });
     }
     expect(parseCycles("5")).toBe(5);
+  });
+});
+
+describe("growing a design", () => {
+  test("the limits are read from the plan and written back; consent stays as it was", () => {
+    const base = plan({ controller: { ...plan().controller!, grow: { enabled: true, max_width: 96, max_layers: 3 } } });
+    expect(growTexts(base)).toEqual({ width: "96", layers: "3" });
+    expect(buildPlan(base, {}, "", boundTexts(base), "1", { width: "128", layers: "4" })).toMatchObject({ plan: { controller: { grow: { enabled: true, max_width: 128, max_layers: 4 } } } });
+    expect(buildPlan(plan(), {}, "", boundTexts(plan()), "1", growTexts(plan()))).toMatchObject({ plan: { controller: { grow: { enabled: false, max_width: 256, max_layers: 6 } } } });
+  });
+
+  test("a limit that is not a whole number from 1 is refused", () => {
+    for (const bad of [{ width: "0", layers: "2" }, { width: "64", layers: "2.5" }, { width: "", layers: "2" }]) {
+      expect(buildPlan(plan(), {}, "", boundTexts(plan()), "1", bad)).toEqual({ error: "The widest design and the most layers must be whole numbers from 1." });
+    }
   });
 });
 
