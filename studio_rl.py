@@ -27,7 +27,7 @@ import studio_rules
 from studio_backend import empty_cache
 from studio_core import atomic_json, now
 from studio_core import messages_of
-from studio_model import DEFAULT_CONFIG, AdamW, LocalModel, ScratchTransformer, Tokenizer, batch_arrays, encode_example, load_checkpoint, train
+from studio_model import DEFAULT_CONFIG, AdamW, LocalModel, ScratchTransformer, Tokenizer, batch_arrays, cut_windows, encode_example, load_checkpoint, train
 from studio_rlhf import _encode_pair, _save, is_cut, token_logps
 
 RUBRIC_WEIGHT = .3   # the teacher's rubric adds at most this much; a failed rule is always the minimum, 0
@@ -41,8 +41,19 @@ RESAMPLE_CAP = 3       # Round 2 draws at most this many times prompts_per_step 
 MEASURE_CONVERSATIONS = 200  # held-back conversations scored and answered per measurement (a fixed sample, so before/after compare)
 CUT_REWARD = -.5       # an answer that hit its token budget without stopping (DAPO-style overlong shaping)
 EOS_TOKENS = 96         # a greedy reply that has not stopped by this many tokens counts as not stopping
-SFT_MAX_LR = 1e-4       # round 1 (answers from conversations) never trains faster than this ...
-SFT_LR_SHARE = .1       # ... nor than this share of the peak rate the base was pretrained at
+# Round 1's learning rate falls with the model's width: SFT_LR_AT_REFERENCE at SFT_LR_REFERENCE_WIDTH, scaled by reference/width, kept in
+# [SFT_LR_FLOOR, SFT_LR_CEILING] and never above the peak the base was pretrained at. Evidence (CPU, 400 steps, byte tokens, 240 short
+# synthetic conversations, base pretrained at 1e-3; final held-out loss, lower is better):
+#   width 32:  3e-4 2.13 | 1e-3 1.37 | 3e-3 0.71 | 1e-2 0.50  (still improving at the top of the grid)
+#   width 128: 3e-4 0.46 | 1e-3 0.32 | 3e-3 0.34 | 1e-2 0.30
+#   width 256: 3e-4 0.38 | 1e-3 0.32 | 3e-3 0.45 | 1e-2 1.78  (1e-2 diverges)
+# The old cap of 1e-4 lost to every rate above it at every width. The numbers are conservative (the narrow end is not at its optimum, the
+# 1/width slope is the usual muP-style assumption, not fitted), from tiny toy runs: a GPU sweep at real sizes is tracked in
+# KingMoonk/TRAINER#943.
+SFT_LR_REFERENCE_WIDTH = 128
+SFT_LR_AT_REFERENCE = 1e-3
+SFT_LR_FLOOR = 1e-4
+SFT_LR_CEILING = 3e-3
 SFT_EPOCHS = 2          # passes over the conversations
 SFT_MAX_STEPS = 2000
 SFT_WARMUP = .03        # share of the steps spent warming up; the cosine floor is the schedule's own 10% of the peak
@@ -520,23 +531,46 @@ def _doc(row):
     return row if isinstance(row, str) else row.get("text") or f"{row.get('user', '')}\n{row.get('assistant', '')}"
 
 
+def sft_learning_rate(base):
+    """Round 1's learning rate for this base: 1e-3 x 128 / width, within [1e-4, 3e-3], and never above the pretraining peak."""
+    peak = float(base.get("learning_rate", DEFAULT_CONFIG["learning_rate"]))
+    width = int(base.get("width", DEFAULT_CONFIG["width"]))
+    scaled = SFT_LR_AT_REFERENCE * SFT_LR_REFERENCE_WIDTH / max(1, width)
+    return min(peak, max(SFT_LR_FLOOR, min(SFT_LR_CEILING, scaled)))
+
+
+class _WindowCounter:
+    """cut_windows' builder that only counts."""
+    def __init__(self):
+        self.count = 0
+
+    def add(self, segment, flags):
+        self.count += 1
+
+
+def sft_windows(cfg, conversations, tokenizer):
+    """How many training windows these conversations cut into under cfg's windowing, context and objective."""
+    counter = _WindowCounter()
+    cut_windows(conversations, tokenizer, cfg, counter)
+    return counter.count
+
+
 def sft_config(base, conversations, tokenizer_state=None, epochs=SFT_EPOCHS, **overrides):
     """Round 1's own recipe on top of the base's config: it learns the chat format, it does not pretrain again.
 
-    Learning rate min(1e-4, 0.1 x the pretraining peak); steps cover SFT_EPOCHS passes over the conversations' tokens (a batch is
-    batch_size x accumulation windows of `context` tokens), capped at SFT_MAX_STEPS; 3% warmup; evaluation ten times over the run, on
+    Learning rate from the model's width (`sft_learning_rate`); steps cover `epochs` passes over the training windows (one per assistant
+    answer under anchored windowing, so short answers are not counted as whole conversations; a step takes batch_size x accumulation
+    windows), capped at SFT_MAX_STEPS; 3% warmup; evaluation ten times over the run, on
     conversations held out of training (`validation`); a chat-shaped sample prompt. `overrides` (the job's steps, learning_rate and
     config) win over all of it."""
-    peak = float(base.get("learning_rate", DEFAULT_CONFIG["learning_rate"]))
     batch = int(base.get("batch_size", DEFAULT_CONFIG["batch_size"])) * int(base.get("accumulation", DEFAULT_CONFIG["accumulation"]))
-    context = int(base.get("context", DEFAULT_CONFIG["context"]))
-    tokens = 0
-    if conversations:
-        tokenizer = Tokenizer.restore(tokenizer_state)
-        tokens = sum(len(encode_example(row, tokenizer)[0]) for row in conversations)
-    steps = int(overrides.get("steps") or max(1, min(SFT_MAX_STEPS, math.ceil(epochs * tokens / (batch * context)))))
     validation = float(base.get("validation") or 0) or (DEFAULT_CONFIG["validation"] if len(conversations) >= 20 else 0.)
-    return {**base, "objective": "assistant", "learning_rate": min(SFT_MAX_LR, SFT_LR_SHARE * peak), "steps": steps,
+    windows = 0
+    if conversations:
+        windows = sft_windows({**DEFAULT_CONFIG, **base, "objective": "assistant"}, conversations, Tokenizer.restore(tokenizer_state))
+    trained = windows * (1 - validation)   # the held-out share is not trained on
+    steps = int(overrides.get("steps") or max(1, min(SFT_MAX_STEPS, math.ceil(epochs * trained / batch))))
+    return {**base, "objective": "assistant", "learning_rate": sft_learning_rate(base), "steps": steps,
             "warmup": max(1, round(SFT_WARMUP * steps)), "eval_every": max(1, steps // 10), "validation": validation,
             "sample_prompt": SFT_SAMPLE_PROMPT, **{k: v for k, v in overrides.items() if k != "steps"}}
 
