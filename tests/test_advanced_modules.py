@@ -60,6 +60,33 @@ class AdvancedModules(unittest.TestCase):
         np.testing.assert_allclose(to_np(back(rq)), to_np(q), atol=1e-12)
         np.testing.assert_allclose(to_np(back(rk)), to_np(k), atol=1e-12)
 
+    def test_rope_angles_and_rotation_run_in_float32_under_bf16(self):
+        position = get("position", "rope").build(get("position", "rope").parse(), Dims(16, 1, 32, 19), None)
+        probe = torch.zeros(1, 1, 300, 16, dtype=torch.bfloat16)
+        cosine, sine = position._angles(probe, 0)
+        self.assertEqual(cosine.dtype, torch.float32)
+        self.assertEqual(sine.dtype, torch.float32)
+        reference = position._angles(probe.float(), 0)
+        self.assertTrue(torch.equal(cosine, reference[0]))
+        q = torch.randn(1, 1, 1, 16, dtype=torch.bfloat16)
+        k = torch.randn(1, 1, 1, 16, dtype=torch.bfloat16)
+        self.assertEqual(position.rotate(q, k)[0].dtype, torch.bfloat16)
+        # q.k at a fixed offset of 5 is the same at every position (relative-position property)
+        length, offset = 300, 5
+        qv = q.expand(1, 1, length, 16).contiguous()
+        kv = k.expand(1, 1, length, 16).contiguous()
+        rq, rk = position.rotate(qv, kv)
+        dots = (rq[0, 0, offset:].float() * rk[0, 0, :-offset].float()).sum(-1)
+        self.assertLess(float(dots.std()), 1e-2 * float(dots.abs().mean()) + 1e-2)
+
+    def test_rope_float32_model_is_unchanged_by_widening(self):
+        position = get("position", "rope").build(get("position", "rope").parse(), Dims(16, 1, 32, 19), None)
+        x = torch.randn(1, 2, 9, 8)
+        cosine, sine = position._angles(x, 3)
+        pos = torch.arange(3, 12, dtype=torch.float32)
+        inv = 10000.0 ** (-2 * torch.arange(4, dtype=torch.float32) / 8)
+        self.assertTrue(torch.equal(cosine, torch.cos(pos[:, None] * inv[None, :])[None, None]))
+
     def test_alibi_slopes_bias_and_rows(self):
         self.assertEqual(len(slopes(3)), 3)
         self.assertEqual(slopes(4), [.25, .0625, .015625, .00390625])
