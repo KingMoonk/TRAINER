@@ -668,6 +668,23 @@ class Routes(unittest.TestCase):
         with mock.patch.object(distributed_routes, "_cluster", lambda services: cluster):
             self.assertEqual(add("laptop").json()["detail"], "The run is not running, so nothing can join it.")
 
+    def test_the_switch_for_inviting_machines_that_come_online_later_is_on_by_default_and_turned_off_on_the_run(self):
+        run_id = self.start(rounds=2000).json()["id"]
+        running = self.wait_state(run_id, "running")
+        self.assertTrue(running["auto_join"])
+        off = self.client.post(f"/distributed/runs/{run_id}/auto-join", json={"enabled": False})
+        self.assertEqual((off.status_code, off.json()["auto_join"]), (200, False), off.text)
+        self.assertIs(self.jobs()[run_id].params["auto_join"], False)
+        self.assertFalse(self.client.get(f"/distributed/runs/{run_id}").json()["auto_join"])
+        self.assertTrue(self.client.post(f"/distributed/runs/{run_id}/auto-join", json={"enabled": True}).json()["auto_join"])
+        self.client.post(f"/distributed/runs/{run_id}/stop")
+        self.wait_state(run_id, "stopped")
+        self.assertEqual(self.client.post(f"/distributed/runs/{run_id}/auto-join", json={"enabled": False}).status_code, 409)
+        self.assertEqual(self.client.post("/distributed/runs/none/auto-join", json={"enabled": False}).status_code, 404)
+        started = self.start(auto_join=False)
+        self.assertEqual((started.status_code, started.json()["auto_join"]), (201, False), started.text)
+        self.client.post(f"/distributed/runs/{started.json()['id']}/stop")
+
     def test_a_run_can_be_stopped_and_one_member_taken_out(self):
         run_id = self.start(rounds=2000).json()["id"]
         self.wait_state(run_id, "running")

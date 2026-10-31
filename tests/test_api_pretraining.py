@@ -46,7 +46,10 @@ class PretrainingRouterTests(ApiCase):
         self.assertEqual(rate["status"], "done", rate)
         self.assertEqual((rate["result"]["device"], rate["result"]["rows"]), ("cpu", 8))
         self.call("GET", "/pretraining/text_sets")
+        self.call("GET", "/pretraining/prepared", params={"dataset_ids": ["a"]})
+        self.job("POST", "/pretraining/prepare", json={"dataset_ids": ["a"]})
         self.call("POST", "/pretraining/plan", json={"dataset_ids": ["a"]})
+        self.call("POST", "/pretraining/pool", json={"dataset_ids": ["a"]})
         self.assertIsNone(self.call("GET", "/pretraining/hardware"))
         self.assertEqual(self.call("POST", "/pretraining/start", 202, json={"dataset_ids": ["a"]})["id"], self.services.queue().up_next[-1].id)
         self.assertAllRoutesHit()
@@ -706,3 +709,21 @@ class PlanScalingTests(ApiCase):
 
     def test_the_window_is_validated(self):
         self.call("POST", "/pretraining/plan", 422, json={"dataset_ids": ["a"], "window_hours": 0})
+
+    def test_prepared_status_reports_prepared_state(self):
+        self.services._fake_prepared = False
+        res = self.call("GET", "/pretraining/prepared", params={"dataset_ids": ["a"]})
+        self.assertFalse(res["prepared"])
+        self.services._fake_prepared = True
+        res = self.call("GET", "/pretraining/prepared", params={"dataset_ids": ["a"]})
+        self.assertTrue(res["prepared"])
+        self.assertEqual(res["tokens"], 12345)
+
+    def test_prepare_job_runs_preparation_and_updates_status(self):
+        self.services._fake_prepared = False
+        job = self.job("POST", "/pretraining/prepare", json={"dataset_ids": ["a"]})
+        self.assertEqual(job["status"], "done")
+        self.assertTrue(job["result"]["prepared"])
+        self.assertEqual(job["result"]["tokens"], 12345)
+        res = self.call("GET", "/pretraining/prepared", params={"dataset_ids": ["a"]})
+        self.assertTrue(res["prepared"])

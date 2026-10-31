@@ -391,14 +391,14 @@ class RlhfPhaseTests(Base):
         self.start.write_text("weights", encoding="utf-8")
         self.services._versions[0].best_checkpoint = str(self.start)
 
-    def run_the_job(self, job, table, rates, cards, **config):
+    def run_the_job(self, job, table, rates, cards, versus=None, **config):
         """What the worker does with the queued rlhf_loop job: run studio_loop on its params, keep its result in the job."""
         import studio_loop
         from tests import test_loop as t
         p = job.params
         summary = studio_loop.run_loop(self.loop_dir / p["loop_id"], p["checkpoint"], t.ROWS, t.FakeJudge(), {**t.CONFIG, **p["config"], **config},
                                        loop_id=p["loop_id"], version=p["version"], measure=t.scripted_measure(table), band=lambda ckpt, docs: None,
-                                       trainer=t.fake_trainer(), versus=t.win_rates(rates), card=t.scripted_card(cards) if cards else None,
+                                       trainer=t.fake_trainer(), versus=versus or t.win_rates(rates), card=t.scripted_card(cards) if cards else None,
                                        collector=lambda *a, **k: __import__("studio_loop").collect(*a, model=t.ScriptedModel(), **k))
         job.params["result"] = studio_loop.phase_result(summary)
         return summary
@@ -430,6 +430,30 @@ class RlhfPhaseTests(Base):
         self.assertEqual(phase["checkpoint"], phase["result"]["checkpoint"])
         self.assertEqual(phase["result"]["verdict"], "Adopted run1-rlhf.")
 
+    def test_a_round_that_lengthens_answers_is_rolled_back_inside_the_phase_however_the_judge_voted(self):
+        self.go(plan_of(("rlhf",)))
+        job = self.services.find_job("run1-0-1")
+        table = {0: {"bpc": 2.0, "pass_k": 5}, 1: {"bpc": 1.9, "pass_k": 5}}
+        longer = lambda c, cur, prompts, judge: {"win_rate": .95, "wins": 4, "ties": 0, "losses": 0, "n": 4, "examples": [{"a": "x" * 40, "b": "y" * 10}]}
+        self.run_the_job(job, table, {}, {}, versus=longer, max_rounds=1)
+        self.end(job.id)
+        rnd = self.phase("rlhf")["result"]["rounds"][0]
+        self.assertEqual(rnd["status"], "rolled_back")
+        self.assertIn("longer", rnd["reason"])
+        self.assertFalse(next(c for c in rnd["checks"] if c["name"] == "Replies did not grow longer")["ok"])
+        self.assertIsNone(self.phase("rlhf")["checkpoint"])
+
+    def test_a_round_that_worsens_bits_per_character_is_rolled_back_inside_the_phase_however_the_judge_voted(self):
+        self.go(plan_of(("rlhf",)))
+        job = self.services.find_job("run1-0-1")
+        table = {0: {"bpc": 2.0, "pass_k": 5}, 1: {"bpc": 2.4, "pass_k": 9}}   # solves more and the judge loves it, but the held-back text got worse
+        self.run_the_job(job, table, {1: .95}, {}, max_rounds=1)
+        self.end(job.id)
+        rnd = self.phase("rlhf")["result"]["rounds"][0]
+        self.assertEqual(rnd["status"], "rolled_back")
+        self.assertFalse(next(c for c in rnd["checks"] if c["name"] == "Held-back text: error did not rise")["ok"])
+        self.assertIsNone(self.phase("rlhf")["checkpoint"])
+
     def test_a_loop_whose_best_fails_the_full_check_fails_the_phase_and_keeps_no_checkpoint(self):
         self.go(plan_of(("rlhf",)))
         job = self.services.find_job("run1-0-1")
@@ -457,6 +481,44 @@ class RlhfPhaseTests(Base):
         bad = plan_of(("rlhf",), run="run2")
         bad["phases"][0]["settings"] = {"card_patience": 0}
         self.assertTrue(any("card_patience" in problem for problem in ar.validate(bad)))
+
+    def test_the_plan_can_name_a_judge_and_the_loop_job_runs_with_it(self):
+        import threading
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        import studio_loop
+        from tests import test_loop as t
+        plan = plan_of(("rlhf",))
+        plan["phases"][0]["settings"] = {"judge_model": "qwen-judge", "max_rounds": 1}
+        self.go(plan)
+        job = self.services.find_job("run1-0-1")
+        self.assertEqual(job.params["judge_model"], "qwen-judge")
+        self.assertEqual(job.params["config"], {"max_rounds": 1})            # the judge is the job's, not a loop setting
+        seen = []
+
+        class Teacher:
+            def __init__(self, url, model, **kw):
+                self.model = model
+
+            def judge_teacher(self):
+                return self
+
+        def collect(spec, judge, *a, **k):
+            seen.append(judge)
+            return {"pairs": [], "skipped": {}, "errors": 0}
+        params = {**job.params, "output_dir": str(self.loop_dir / "judged"), "rows": dict(t.ROWS)}
+        context = SimpleNamespace(root=self.tmp.name, run_dir=self.tmp.name, post_rows=lambda kind: [])
+        with patch("studio_rlhf.OllamaTeacher", Teacher), patch("studio_loop.collect", collect), \
+                patch("studio_rl.measure", lambda ckpt, docs, problems: {"bpc": 2.0, "pass_k": 3, "pass_n": 10}), \
+                patch("studio_eval.noise_band", lambda ckpt, docs: None):
+            studio_loop.run_job(SimpleNamespace(params=params), context, lambda e: None, threading.Event(), threading.Event())
+        self.assertEqual([j.model for j in seen], ["qwen-judge"])           # the loop's collect phase got the named judge
+
+    def test_a_judge_that_is_not_a_model_name_is_refused(self):
+        plan = plan_of(("rlhf",))
+        plan["phases"][0]["settings"] = {"judge_model": 7}
+        self.assertTrue(any("judge_model" in problem for problem in ar.validate(plan)))
 
     def test_the_run_view_shows_the_rounds_so_far_while_the_loop_runs(self):
         self.go(plan_of(("rlhf",)))

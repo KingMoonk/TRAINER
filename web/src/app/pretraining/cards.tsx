@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 import { T, fill } from "./copy";
-import { CHAT, END, HOLD, PALETTE, enoughView, rowChoices, perStepLine, readoutView, selectedLine, type Chat, type Plan, type Preview, type TextSet } from "./logic";
+import { CHAT, END, HOLD, PALETTE, enoughView, rowChoices, perStepLine, readoutView, selectedLine, type Chat, type Plan, type PreparedStatus, type Preview, type TextSet } from "./logic";
 import { optionBox } from "@/components/option-box";
 
 /** A row of choices (rows per step, held back, how long) as a labelled radio group. */
@@ -27,7 +28,25 @@ export function Choice<V extends string>({ label, hint, value, items, onChange }
 }
 
 /** Which sets of text the run reads. Tiles are keyed by set id, so a count that changes updates the tile in place. */
-export function SetsCard({ sets, loading, chosen, onToggle }: { sets: TextSet[] | undefined; loading: boolean; chosen: string[]; onToggle: (set: TextSet) => void }) {
+export function SetsCard({
+  sets,
+  loading,
+  chosen,
+  onToggle,
+  prepared,
+  preparing,
+  onPrepare,
+  progress,
+}: {
+  sets: TextSet[] | undefined;
+  loading: boolean;
+  chosen: string[];
+  onToggle: (set: TextSet) => void;
+  prepared?: PreparedStatus | null;
+  preparing?: boolean;
+  onPrepare?: () => void;
+  progress?: { note: string; fraction: number | null } | null;
+}) {
   return (
     <Card>
       <CardHeader>
@@ -70,6 +89,56 @@ export function SetsCard({ sets, loading, chosen, onToggle }: { sets: TextSet[] 
         <p className="text-sm text-muted-foreground" data-testid="selected-line">
           {loading ? "" : selectedLine(chosen.length)}
         </p>
+        {chosen.length > 0 && (
+          prepared?.prepared ? (
+            <div className="flex items-center gap-2 rounded-md border border-success/30 bg-success/10 px-3 py-2 text-sm text-success" data-testid="prepared-status">
+              <span className="font-medium">✓ {T.readyToTrain}</span>
+              <span className="text-muted-foreground">·</span>
+              <span className="text-muted-foreground">
+                {fill(T.shardedOnDisk, {
+                  windows: (prepared.windows ?? 0).toLocaleString("en-US"),
+                  tokens: (prepared.tokens ?? 0).toLocaleString("en-US"),
+                })}
+              </span>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2 rounded-md border border-border bg-muted/40 p-3 text-sm" data-testid="prepared-status">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex flex-col gap-0.5">
+                  <span className="font-medium">{T.shardsNotPrepared}</span>
+                  <span className="text-xs text-muted-foreground">{T.shardsNotPreparedDesc}</span>
+                </div>
+                {onPrepare && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={onPrepare}
+                    disabled={preparing}
+                    data-testid="prepare-button"
+                    className="shrink-0"
+                  >
+                    {preparing ? T.preparingData : T.prepareData}
+                  </Button>
+                )}
+              </div>
+              {preparing && (
+                <div className="flex flex-col gap-1.5 pt-1 text-xs text-muted-foreground" data-testid="preparing-progress">
+                  <div className="flex justify-between">
+                    <span>{progress?.note || T.preparingData}</span>
+                    {progress?.fraction != null && <span>{Math.round(progress.fraction * 100)}%</span>}
+                  </div>
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+                    <div
+                      className="h-full bg-highlight transition-all duration-300"
+                      style={{ width: `${Math.round((progress?.fraction ?? 0) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        )}
         <div className="flex flex-wrap gap-6 text-sm">
           <Link href="/your-data/?kind=text" className="text-highlight hover:underline">
             {T.browse}

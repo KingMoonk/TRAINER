@@ -202,7 +202,7 @@ describe("New run", () => {
     await user.click(await cta());
     await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/runs/view/?id=run-3"));
     expect(sent("POST", "/distributed/runs")?.body).toEqual({
-      version: null, dataset_ids: ["stories"], machines: ["beast"], rounds: 12, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: null, time_box: null, delta_dtype: "int8", delta_sparsity: 0, reviewed_only: false,
+      version: null, dataset_ids: ["stories"], machines: ["beast"], rounds: 12, inner_steps: 100, outer_lr: 0.7, outer_momentum: 0.9, overlap: null, time_box: null, delta_dtype: "int8", delta_sparsity: 0, reviewed_only: false, rows: 16, hold: 0.05, chat_share: 0, chat_datasets: [],
     });
   });
 

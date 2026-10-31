@@ -552,13 +552,13 @@ describe("piecesFor", () => {
   } as unknown as Parameters<typeof piecesFor>[1];
 
   test("while the lists are being read it says so and shows dashes", () => {
-    expect(piecesFor(1, undefined)).toEqual({ chips: [], note: BUILDER.pieces_reading, line: "– · – · – pieces" });
+    expect(piecesFor(1, undefined)).toEqual({ chips: [], note: BUILDER.pieces_reading, line: "– · – · – tokens" });
   });
 
   test("chips and the count line for a list, with thousands separators", () => {
     const view = piecesFor(1, lists);
     expect(view.chips).toEqual([{ label: "Hi", state: "pieces" }, { label: "there", state: "pieces" }]);
-    expect(view.line).toBe("8 · 1,234 · – pieces");
+    expect(view.line).toBe("8 · 1,234 · – tokens");
     expect(view.note).toBeNull();
   });
 

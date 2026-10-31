@@ -335,14 +335,16 @@ class Runner:
         self._emit("queue", {"job": job.id})
         return job
 
-    def fill(self, job_id, label, params):
+    def fill(self, job_id, label, params, note=""):
         """Give a job added while the size of its text was worked out (params[SIZING]) its label and params, so it may run. False when
-        it is no longer waiting for them: removed meanwhile. A pin set on it in the meantime is kept."""
+        it is no longer waiting for them: removed meanwhile. `note` says why the run is what it is (shown on its row). A pin set on it in the meantime is kept."""
         with self.lock:
             job = next((j for j in self._queued() if j.id == job_id and j.params.get(SIZING)), None)
             if job is not None:
                 pinned = {"pinned": job.params["pinned"]} if job.params.get("pinned") else {}
                 job.label, job.params = label, {**{k: v for k, v in params.items() if k != SIZING}, **pinned}
+                if note:
+                    job.note = note
                 self._save()
         if job is None:
             return False

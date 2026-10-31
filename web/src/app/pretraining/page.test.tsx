@@ -82,8 +82,10 @@ const SCALING = {
   hardware: HARDWARE,
 };
 
-function server({ known = true, sizing = SIZING as unknown, batchSize, scaling = null, refusal = "" }: { known?: boolean; sizing?: unknown; batchSize?: number; scaling?: unknown; refusal?: string } = {}) {
-  const state = { plans: [] as PlanBody[], lr: [] as unknown[], known, sizing, rates: [] as unknown[], starts: [] as unknown[], scaling };
+const NO_POOL = { pooled: false, machines: [], left_out: [], reason: "No other machine is on the Machines list." };
+
+function server({ known = true, sizing = SIZING as unknown, batchSize, scaling = null, refusal = "", pool = NO_POOL as unknown, prepared = false }: { known?: boolean; sizing?: unknown; batchSize?: number; scaling?: unknown; refusal?: string; pool?: unknown; prepared?: boolean } = {}) {
+  const state = { plans: [] as PlanBody[], lr: [] as unknown[], known, sizing, rates: [] as unknown[], starts: [] as unknown[], scaling, pools: [] as { solo: boolean }[], queued: [] as unknown[], prepared };
   mockApi({
     "GET /versions": {
       body: [
@@ -138,6 +140,23 @@ function server({ known = true, sizing = SIZING as unknown, batchSize, scaling =
         },
       };
     },
+    "POST /pretraining/pool": ({ body }) => {
+      state.pools.push(body as { solo: boolean });
+      return { body: (body as { solo: boolean }).solo ? { ...NO_POOL, reason: "You chose to train on this computer only." } : pool };
+    },
+    "POST /queue/jobs": ({ body }) => {
+      state.queued.push(body);
+      return { status: 201, body: { id: "j1", label: "Version 2 from scratch" } };
+    },
+    "GET /pretraining/prepared": () => ({
+      body: state.prepared
+        ? { prepared: true, tokens: 12345, windows: 100, val_tokens: 1200, val_windows: 10, folder: "tok-test" }
+        : { prepared: false, tokens: null, windows: null, val_tokens: null, val_windows: null, folder: null },
+    }),
+    "POST /pretraining/prepare": () => {
+      state.prepared = true;
+      return { status: 202, body: job("prep1", "pretrain_prepare", { prepared: true, tokens: 12345, windows: 100 }, "done") };
+    },
     "GET /pretraining/hardware": { body: HARDWARE },
     "GET /pretraining/preview": () => json(state.known ? preview : null), // mockApi turns a null body into {}, so a null answer is sent as a Response
     "POST /pretraining/preview": () => {
@@ -150,7 +169,7 @@ function server({ known = true, sizing = SIZING as unknown, batchSize, scaling =
     },
     "POST /pretraining/start": ({ body }) => {
       state.starts.push(body);
-      return { status: 202, body: { id: "q1", label: "Version 2, once the size of its text is known" } };
+      return { status: 202, body: { id: "q1", label: "Version 2, once the size of its text is known", ...(pool as { pooled?: boolean }).pooled ? { run_id: "q1", machines: ["BEAST"] } : {} } };
     },
     "GET /queue/jobs/*/outlook": { body: { outlook: "Starts after the run in progress" } },
     "POST /pretraining/lr_range_test": ({ body }) => {
@@ -360,6 +379,51 @@ describe("Pretraining page", () => {
     await user.click(await screen.findByRole("button", { name: "Add to the queue" }));
     expect(state.starts).toMatchObject([{ version: 2, dataset_ids: ["stories"], rows: 16, preview_rows: 6 }]);
     expect(await screen.findByTestId("queue-line")).toHaveTextContent("Queued. Starts after the run in progress."); // no job to wait for
+  });
+
+  const POOLED = {
+    pooled: true,
+    machines: [{ node: "BEAST", address: "beast" }],
+    left_out: [{ node: "old", address: "old", reason: "old did not answer within 2 seconds." }],
+    reason: "",
+  };
+
+  test("the card lists the machines before Start, and Start pools them and links the Run view", async () => {
+    const state = server({ pool: POOLED });
+    const user = userEvent.setup();
+    renderPage(<PretrainingPage />, { route: "/pretraining/" });
+    expect(await screen.findByTestId("pool-line")).toHaveTextContent("Trains on this computer and BEAST.");
+    expect(screen.getByTestId("pool-left-out")).toHaveTextContent("Left out: old did not answer within 2 seconds.");
+    expect(state.queued).toEqual([]);
+    await user.click(screen.getByRole("button", { name: "Add to the queue" }));
+    await waitFor(() => expect(state.starts).toMatchObject([{ version: 2, dataset_ids: ["stories"], solo: false }]));
+    expect(state.queued).toEqual([]); // not the solo job
+    expect(await screen.findByTestId("open-run")).toHaveAttribute("href", expect.stringMatching(/^\/runs\/view\/?\?id=q1$/));
+  });
+
+  test("with no eligible machine the card says why and Start queues the solo job", async () => {
+    const reason = "No other machine can join. old did not answer within 2 seconds.";
+    const state = server({ pool: { ...NO_POOL, reason, left_out: [{ node: "old", address: "old", reason: "old did not answer within 2 seconds." }] } });
+    const user = userEvent.setup();
+    renderPage(<PretrainingPage />, { route: "/pretraining/" });
+    expect(await screen.findByTestId("pool-line")).toHaveTextContent("Trains on this computer only.");
+    expect(screen.getByTestId("pool-why")).toHaveTextContent(reason);
+    await user.click(screen.getByRole("button", { name: "Add to the queue" }));
+    await waitFor(() => expect(state.queued).toHaveLength(1));
+    expect(state.starts).toEqual([]);
+    expect(screen.queryByTestId("open-run")).not.toBeInTheDocument();
+  });
+
+  test("the this-computer-only switch asks the server for a solo run", async () => {
+    const state = server({ pool: POOLED });
+    const user = userEvent.setup();
+    renderPage(<PretrainingPage />, { route: "/pretraining/" });
+    await screen.findByTestId("pool-line");
+    await user.click(screen.getByRole("switch", { name: "Train on this computer only" }));
+    await waitFor(() => expect(screen.getByTestId("pool-why")).toHaveTextContent("You chose to train on this computer only."));
+    expect(state.pools.at(-1)).toMatchObject({ solo: true });
+    await user.click(screen.getByRole("button", { name: "Add to the queue" }));
+    await waitFor(() => expect(state.queued).toHaveLength(1));
   });
 
   test("the advanced and download cards sit in closed disclosures with their children mounted", async () => {

@@ -106,7 +106,8 @@ def create_app(services, open=False, origins=(), hosts=(), fake_traffic=False, u
             continue  # router not written yet
         app.include_router(module.router)
     from studio_api.routers import pretraining
-    services.build_pretrain = lambda settings, version: pretraining.auto_run_pretrain(services, settings, version)  # the Auto Run's pretrain phase
+    services.build_pretrain = lambda settings, version: pretraining.auto_run_pretrain(
+        services, settings, version, peer_url=lambda: importlib.import_module("studio_api.routers.distributed").peer_address(app))  # the Auto Run's pretrain phase
     app.include_router(events.router)
     app.include_router(traffic.router)
     app.include_router(jobs.router)

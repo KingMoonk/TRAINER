@@ -1,6 +1,6 @@
 {
   "worktree": {
-    "symlinkDirectories": [".venv"]
+    "symlinkDirectories": [".venv", "web/node_modules"]
   },
   "hooks": {
     "SessionStart": [

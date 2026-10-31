@@ -162,6 +162,19 @@
         "title": "AskPeer",
         "type": "object"
       },
+      "AutoJoin": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "AutoJoin",
+        "type": "object"
+      },
       "AutoRunBound": {
         "properties": {
           "max": {
@@ -5252,6 +5265,29 @@
         "title": "LeaveRequest",
         "type": "object"
       },
+      "LeftOut": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node",
+          "address",
+          "reason"
+        ],
+        "title": "LeftOut",
+        "type": "object"
+      },
       "Leftover": {
         "properties": {
           "belongs_to": {
@@ -6317,6 +6353,17 @@
           "device_name": {
             "title": "Device Name",
             "type": "string"
+          },
+          "joined_round": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Joined Round"
           },
           "last_delta_bytes": {
             "anyOf": [
@@ -7660,6 +7707,11 @@
             "title": "Rows",
             "type": "integer"
           },
+          "solo": {
+            "default": false,
+            "title": "Solo",
+            "type": "boolean"
+          },
           "steps": {
             "anyOf": [
               {
@@ -7734,6 +7786,64 @@
           "min_gain"
         ],
         "title": "PlateauRule",
+        "type": "object"
+      },
+      "Pool": {
+        "description": "Which machines a start would train on. `pooled`: the run goes out as a distributed run on this computer plus `machines`;\notherwise it is a job on this computer alone and `reason` says why. `left_out` lists every listed machine that is not used.",
+        "properties": {
+          "left_out": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/LeftOut"
+            },
+            "title": "Left Out",
+            "type": "array"
+          },
+          "machines": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PoolMachine"
+            },
+            "title": "Machines",
+            "type": "array"
+          },
+          "pending": {
+            "default": false,
+            "title": "Pending",
+            "type": "boolean"
+          },
+          "pooled": {
+            "title": "Pooled",
+            "type": "boolean"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pooled"
+        ],
+        "title": "Pool",
+        "type": "object"
+      },
+      "PoolMachine": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "node": {
+            "title": "Node",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node",
+          "address"
+        ],
+        "title": "PoolMachine",
         "type": "object"
       },
       "PostTrainingJobOut": {
@@ -7970,6 +8080,192 @@
           "total"
         ],
         "title": "Prep",
+        "type": "object"
+      },
+      "PrepareJob": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "number"
+          },
+          "error": {
+            "default": "",
+            "title": "Error",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "fraction": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraction"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "progress": {
+            "default": "",
+            "title": "Progress",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreparedStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "created_at"
+        ],
+        "title": "PrepareJob",
+        "type": "object"
+      },
+      "PrepareRequest": {
+        "properties": {
+          "dataset_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Dataset Ids",
+            "type": "array"
+          },
+          "hold": {
+            "default": 0.05,
+            "title": "Hold",
+            "type": "number"
+          },
+          "rows": {
+            "default": 16,
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Rows",
+            "type": "integer"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "PrepareRequest",
+        "type": "object"
+      },
+      "PreparedStatus": {
+        "properties": {
+          "folder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder"
+          },
+          "prepared": {
+            "title": "Prepared",
+            "type": "boolean"
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens"
+          },
+          "val_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Val Tokens"
+          },
+          "val_windows": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Val Windows"
+          },
+          "windows": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Windows"
+          }
+        },
+        "required": [
+          "prepared"
+        ],
+        "title": "PreparedStatus",
         "type": "object"
       },
       "Preset": {
@@ -11073,6 +11369,11 @@
             "title": "Age S",
             "type": "number"
           },
+          "auto_join": {
+            "default": true,
+            "title": "Auto Join",
+            "type": "boolean"
+          },
           "best_round": {
             "anyOf": [
               {
@@ -13170,6 +13471,32 @@
             ],
             "title": "All Machines"
           },
+          "auto_join": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Join"
+          },
+          "chat_datasets": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Chat Datasets",
+            "type": "array"
+          },
+          "chat_share": {
+            "default": 0.0,
+            "maximum": 0.1,
+            "minimum": 0.0,
+            "title": "Chat Share",
+            "type": "number"
+          },
           "coordinator": {
             "anyOf": [
               {
@@ -13204,6 +13531,24 @@
             "maximum": 0.2,
             "minimum": 0.0,
             "title": "Delta Sparsity",
+            "type": "number"
+          },
+          "from_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Version"
+          },
+          "hold": {
+            "default": 0.05,
+            "exclusiveMaximum": 0.5,
+            "minimum": 0.0,
+            "title": "Hold",
             "type": "number"
           },
           "inner_steps": {
@@ -13375,6 +13720,13 @@
             "maximum": 100000.0,
             "minimum": 1.0,
             "title": "Rounds",
+            "type": "integer"
+          },
+          "rows": {
+            "default": 16,
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Rows",
             "type": "integer"
           },
           "stages": {
@@ -15308,6 +15660,30 @@
           "label": {
             "title": "Label",
             "type": "string"
+          },
+          "machines": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Machines",
+            "type": "array"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
           }
         },
         "required": [
@@ -20915,6 +21291,59 @@
         ]
       }
     },
+    "/distributed/runs/{run_id}/auto-join": {
+      "post": {
+        "description": "Turn on or off inviting machines that come online while the run goes. Off: only the machines chosen, or that ask to join, are\noffered a slot; a machine already invited stays. A run another computer coordinates is changed by asking that computer. 409 when the run is over.",
+        "operationId": "set_auto_join_distributed_runs__run_id__auto_join_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoJoin"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Auto Join",
+        "tags": [
+          "distributed"
+        ]
+      }
+    },
     "/distributed/runs/{run_id}/extend": {
       "post": {
         "description": "Make a run going on longer: `rounds` is the new total (more than it has), `inner_steps` the new H for the rounds still to come\n(the outer learning rate and momentum stay as they are). Every member takes the change from its next rounds without leaving, and\nthe learning rate carries on from where it is. 409 when the run is over or not going, 422 for numbers that change nothing or shorten\nthe run (Stop ends it sooner). A run another computer coordinates is extended by asking that computer.",
@@ -22472,6 +22901,175 @@
           }
         },
         "summary": "Pretrain Plan",
+        "tags": [
+          "pretraining"
+        ]
+      }
+    },
+    "/pretraining/pool": {
+      "post": {
+        "description": "The machines a start with these answers would train on, before it is pressed: the Pretraining page lists them beside Start.\nAsks every listed machine (a few seconds when one is slow); nothing is queued.",
+        "operationId": "pretrain_pool_pretraining_pool_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pool"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pretrain Pool",
+        "tags": [
+          "pretraining"
+        ]
+      }
+    },
+    "/pretraining/prepare": {
+      "post": {
+        "description": "Prepare tokenized binary shards on disk upfront before starting a training run.",
+        "operationId": "pretrain_prepare_pretraining_prepare_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrepareJob"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pretrain Prepare",
+        "tags": [
+          "pretraining"
+        ]
+      }
+    },
+    "/pretraining/prepared": {
+      "get": {
+        "description": "Check whether binary shards exist on disk for the chosen datasets and model version.",
+        "operationId": "pretrain_prepared_pretraining_prepared_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "dataset_ids",
+            "required": false,
+            "schema": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Dataset Ids",
+              "type": "array"
+            }
+          },
+          {
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hold",
+            "required": false,
+            "schema": {
+              "default": 0.05,
+              "title": "Hold",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "rows",
+            "required": false,
+            "schema": {
+              "default": 16,
+              "maximum": 256,
+              "minimum": 1,
+              "title": "Rows",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreparedStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pretrain Prepared",
         "tags": [
           "pretraining"
         ]

@@ -493,9 +493,9 @@
       "Wide"
     ],
     "words": [
-      "Letters",
-      "Small word list",
-      "Large word list"
+      "Bytes",
+      "BPE",
+      "GPT-2 BPE"
     ]
   },
   "request": {

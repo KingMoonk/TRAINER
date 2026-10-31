@@ -57,6 +57,8 @@ class Machine:
     stale_job: str = ""  # a member job of the coordinator from before a restart, on that machine's queue until release_stale takes it off
     invite_id: str = ""  # the id this computer chose for the member job it asks the machine to queue: asked again, the machine adds it once
     asked_round: int = 0  # the round its invitation was last asked again at (`reinvite`)
+    late: bool = False  # it came online after the run began and the owner invited it by itself (studio_remote.Cluster.offer)
+    epoch: int = 0  # lease epoch for this member
 
     @property
     def local(self):
@@ -392,7 +394,7 @@ def invite(job, client_for=PeerClient, only=None, wait=INVITE_WAIT):
                                                              + " cannot be told where to join. Set TRAINER_NODE_ADDRESS to it.")
             return
         body = {"kind": "diloco_member", "label": f"{job.label} (member)",
-                "params": {"coordinator_url": url, "run": job.id, "node": machine.node, "epoch": 0,
+                "params": {"coordinator_url": url, "run": job.id, "node": machine.node, "epoch": getattr(machine, "epoch", 0),
                            **({"member_options": p["member_options"]} if p.get("member_options") else {}),
                            **({"fit": p["member_fit"][machine.address]} if (p.get("member_fit") or {}).get(machine.address) else {}),
                            **({"ignore_plan": True} if p.get("ignore_plan") else {})}}
@@ -412,7 +414,9 @@ def invite(job, client_for=PeerClient, only=None, wait=INVITE_WAIT):
     todo = []
     with _LOCK:
         for m in run.machines:
-            if not m.local and not (m.peer_job and m.state == "invited") and (run.id, m.node) not in _ASKING:
+            if only is not None and m.address not in only:
+                continue
+            if not m.local and (only is not None or not (m.peer_job and m.state == "invited")) and (run.id, m.node) not in _ASKING:
                 _ASKING.add((run.id, m.node))
                 todo.append(m)
     threads = [threading.Thread(target=asking, args=(m,), name=f"invite {m.node}", daemon=True) for m in todo]
@@ -443,13 +447,15 @@ def take(machine, client, body):
 
 
 def reinvite(job, round_, client_for=PeerClient, among=None):
-    """Ask again, once per round, each machine whose invitation failed (`unreachable`), so a machine that was slow or away when the run
+    """Ask again, once per round, each machine whose invitation failed (`unreachable`) or which was unplaced, so a machine that was slow or away when the run
     started joins a later round instead of none. `round_` is the round the coordinator is at; `among` limits it to those addresses (the
     machines holding a slot of the run). Returns at once: the asks go on in the background."""
     run = RUNS.get(job.id)
     if run is None:
         return
-    again = [m for m in run.machines if not m.local and m.state == "unreachable" and m.asked_round < round_
+    again = [m for m in run.machines if not m.local
+             and (m.state in ("unreachable", "unplaced") or not m.peer_job)
+             and m.asked_round < round_
              and (among is None or m.address in among)]
     for machine in again:
         machine.asked_round = round_
@@ -486,12 +492,61 @@ def choose(job, node, address):
     return run
 
 
+def set_auto_join(job, enabled):
+    """Turn the run's switch for inviting machines that come online later on or off (`auto_join`: on when absent). Off, only the
+    machines it was started with or that asked to join (`choose`) are offered a slot."""
+    run = run_of(job)
+    with _LOCK:
+        job.params = {**job.params, "auto_join": bool(enabled)}
+        run.params = {**run.params, "auto_join": bool(enabled)}
+    persist()
+
+
+def late_check(job, node, own_version, coordinator=None):
+    """Whether the machine `node` (a NodeInfo) may be invited to the running run `job` now: (reason it may not, "" when it may; the batch,
+    accumulation and optimizer placement it trains with, or None when its memory is unknown). The checks are the start's: it answers on
+    this computer's app version, it is not busy with a job, the run's owner has not stopped it, and it holds its share of the design
+    (studio_fit.fit_members, from its own profile). A machine that reports no memory profile is kept, as at the start: it trains as
+    the design says."""
+    name = node.hostname or node.address
+    if node.version and own_version and node.version != own_version:
+        return f"{name} runs app version {node.version}; this computer runs {own_version}, so it cannot join.", None
+    if node.busy:
+        return f"{name} is busy with another job. It joins a later round if it is free by then.", None
+    if coordinator is not None and name in coordinator.banned:
+        return f"{name} was stopped by the run's owner.", None
+    config = job.params.get("config")
+    if not config or not node.profile:
+        return "", None
+    import studio_fit
+    row = studio_fit.fit_members(config, [{"name": name, "profile": studio_fit.Profile.from_dict(node.profile), "share": node.memory_share or 1.,
+                                           "speed": None}])["members"][0]
+    if not row["fits"]:
+        return row["refusal"], None
+    return "", {"batch_size": row["batch_size"], "accumulation": row["accumulation"], "offload_optimizer": row["offload"]}
+
+
+def note_unplaced(run, node, reason):
+    """Show `reason` on the run's row for the machine `node` (a NodeInfo) that could not be invited: a row is added when the run has none,
+    and a machine already asked or unreachable keeps its own account."""
+    with _LOCK:
+        machine = next((m for m in run.machines if m.address == node.address), None)
+        if machine is None:
+            run.machines.append(Machine(node=node.hostname or node.address, address=node.address, device=node.device, device_name=node.device_name,
+                                        state="unplaced", reason=reason))
+        elif machine.state == "unplaced" and not machine.peer_job and machine.reason != reason:
+            machine.reason = reason
+        else:
+            return  # nothing changed, so nothing to save
+    persist()
+
+
 def lapse(run, node, client_for=PeerClient):
     """A member's slot lapsed: take its member job off its machine's queue, and show the machine as unplaced until a slot opens for it."""
     release_member(run, node, client_for)
     machine = next((m for m in run.machines if m.node == node), None)
     if machine is not None and not machine.local:
-        machine.peer_job, machine.state = "", "unplaced"
+        machine.peer_job, machine.invite_id, machine.state = "", "", "unplaced"
         machine.reason = "Its lease lapsed, so the run let it go. It joins a later round if it is free by then."
 
 
@@ -656,7 +711,7 @@ def _member(node, machine, known, history, ended, snap=None, peer=None):
     local = machine is not None and machine.local
     row = {"node": node, "address": machine.address if machine else "", "local": local, "device": machine.device if machine else "",
            "device_name": machine.device_name if machine else "", "missed": 0, "sent": False, "blocking_job": None,
-           **member_stats(history, node), **live_fields(known)}
+           "joined_round": (known or {}).get("joined_round") if machine is not None and machine.late else None, **member_stats(history, node), **live_fields(known)}
     if machine is not None and machine.state == "unreachable":
         state, note = "unreachable", machine.reason
     elif known is not None:
@@ -729,7 +784,7 @@ def view(run, coordinator, job, peers=None):
             "owner": run.owner, "handoff": run.handoff, "saved_version": run.saved, "term": getattr(coordinator, "term", run.term), "round": (snap or {}).get("round", 0), "rounds": settings.get("rounds", 0),
             "inner_steps": settings.get("inner_steps", 0), "outer_lr": settings.get("outer_lr", 0.), "outer_momentum": settings.get("outer_momentum", 0.),
             "delta_dtype": settings.get("delta_dtype", ""), "members": member_rows(run, snap, ended or "", peers),
-            "history": round_rows((snap or {}).get("history", []), rules.get("best_round")), "health": run_health.summarize((snap or {}).get("history", [])), "can_stop": state in ACTIVE, "reviewed_only": bool(run.params.get("reviewed_only")),
+            "history": round_rows((snap or {}).get("history", []), rules.get("best_round")), "health": run_health.summarize((snap or {}).get("history", [])), "can_stop": state in ACTIVE, "reviewed_only": bool(run.params.get("reviewed_only")), "auto_join": bool(run.params.get("auto_join", True)),
             "lessons": sum(e["rows"] for e in lessons if e["status"] == "live"), "lessons_left_out": sum(e["rows"] for e in lessons if e["status"] != "live"),
             "paused": paused, "can_pause": state in ("waiting", "running") and not paused and coordinator is not None, "can_resume": paused,
             "can_restart": state in ENDED and not restart_blocker(run, getattr(coordinator, "term", run.term)),

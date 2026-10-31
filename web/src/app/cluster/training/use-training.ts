@@ -139,6 +139,17 @@ export function useHoldRun(verb: "pause" | "resume") {
   });
 }
 
+/** Turn on or off inviting the machines that come online while the run goes; the answer is the run, so the switch follows it at once. */
+export function useAutoJoin() {
+  const write = useRunWrite();
+  return useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      unwrap(api.POST("/distributed/runs/{run_id}/auto-join", { params: { path: { run_id: id } }, body: { enabled } })),
+    onSuccess: write,
+    onError: (error) => toast.error(T.couldNotAutoJoin.replace("{why}", problem(error))),
+  });
+}
+
 /** Start a new run from an ended one (a new id); `onRestarted` gets it so the page can show it. */
 export function useRestartRun(onRestarted: (run: Run) => void) {
   const write = useRunWrite();

@@ -25,7 +25,7 @@ import studio_model
 import studio_peer
 import studio_stages
 from studio_api.app import get_services
-from studio_api.routers.pretraining import _version
+from studio_api.routers.pretraining import CHAT_SHARE_MAX, _absolute, _version
 from studio_api.version import app_version
 from studio_ia import pretraining_plan as plan
 from studio_ia.services import Job
@@ -66,6 +66,7 @@ class StartRun(BaseModel):
     outer_momentum: float = Field(DEFAULTS.outer_momentum, ge=0, lt=1)
     min_members: int | None = Field(None, ge=1, le=64)  # the run waits in the queue until this many machines (this one included) are free at once
     max_members: int | None = Field(None, ge=1, le=64)  # the most machines it takes; machines that free up later join it up to this many
+    auto_join: bool | None = None  # a machine that comes online while the run goes, and fits it, is invited by itself while the run is under max_members (None, the default: yes); false: only the machines you chose or ask to join
     coordinator: str | None = None  # a machine from the Machines list to coordinate the run (it must be one of the machines invited and answer); "" (the default): this computer
     reviewed_only: bool = False  # train only on the examples marked Good (the validation text is cut from those too); 400 when the sets hold none
     overlap: bool | None = None  # every member (this one and the invited) overlaps its communication with its compute: it trains on while the exchange runs. None (the default): on when another machine takes part, off for a run on this computer alone; false turns it off
@@ -81,6 +82,11 @@ class StartRun(BaseModel):
     pivots: list[Literal["halve_lr", "next_dataset", "drop_lessons"]] | None = None  # what the run tries, in this order, when the loss plateaus: back to the best weights, then the change; with none left, or no plateau window, it ends. Needs plateau_checks
     stages: Stages | None = None  # next_dataset moves on to the workspace's unseen text sets, worst held-out loss first; needs next_dataset in pivots
     window_hours: float | None = Field(None, gt=0, le=24 * 365)  # the longest the run may take (default studio_fit.DEFAULT_WINDOW_HOURS): rounds the members cannot finish in it at their measured speed are cut
+    rows: int = Field(ROWS, ge=1, le=256)  # rows per step, split over the members (the Pretraining page's answer)
+    hold: float = Field(HOLD, ge=0.0, lt=0.5)  # share of the text held back for validation
+    from_version: int | None = None  # a catch-up: the version whose best weights the run starts from (same design and word list as `version`); None: from scratch
+    chat_share: float = Field(0.0, ge=0.0, le=CHAT_SHARE_MAX)  # conversations of chat_datasets mixed into the text as this share of its characters; 0: none
+    chat_datasets: list[str] = []  # the conversation sets that mix draws from; needed by chat_share
     leave_out: list[str] | None = None  # the machines (by the names RunSizing.flagged gives) the person confirmed to start without because they cannot hold their share; the start is a 409 when the machines that cannot hold it NOW differ from this list, and without it a machine that cannot is a 409 naming it
 
 
@@ -128,6 +134,7 @@ class Member(BaseModel):
     node: str  # the name it joins under
     address: str  # "local" for this computer
     local: bool
+    joined_round: int | None = None  # the (0-based) round it first trained in, for a machine that joined after the run began; null for the others
     device: str  # cuda | mps | cpu, as the machine reported when the run started; "" when unknown
     device_name: str
     state: Literal["invited", "joining", "training", "behind", "dropped", "left", "stopped", "unreachable", "waiting", "never_joined", "finished"]
@@ -316,6 +323,7 @@ class Run(BaseModel):
     history: list[Round]
     health: RunHealth | None = None  # null for an account from a computer on an older version
     reviewed_only: bool = False  # the run trains only on examples marked Good
+    auto_join: bool = True  # a machine that comes online while it goes, and fits, is invited by itself while the run has room (max_members)
     can_stop: bool
     paused: bool = False  # the owner paused it: no new round opens until it is resumed (a round in flight finishes)
     can_pause: bool = False
@@ -486,17 +494,20 @@ def _remote(services, run_id):
     return row if row is not None and row["origin"] != cluster.hostname else None
 
 
-def _address_for_peers(request):
+def peer_address(app, fallback=""):
     """How the other machines reach this one: TRAINER_NODE_ADDRESS, else https://<its tailnet name>, where `tailscale serve`
-    listens in both `make run` (the API at /) and `make dev` (the API under /api/, which studio_peer finds), else the address this
-    request came to (which only a machine on the same computer can use). Never the API's own port: it listens on loopback."""
+    listens in both `make run` (the API at /) and `make dev` (the API under /api/, which studio_peer finds), else `fallback` (the
+    address a request came to, which only a machine on the same computer can use; "" without a request). Never the API's own port:
+    it listens on loopback."""
     named = (os.environ.get("TRAINER_NODE_ADDRESS") or "").strip()
     if named:
         return named
-    tailnet = getattr(getattr(request.app.state, "hosts", None), "tailnet_name", "")
-    if tailnet:
-        return f"https://{tailnet}"
-    return str(request.base_url).rstrip("/")
+    tailnet = getattr(getattr(app.state, "hosts", None), "tailnet_name", "")
+    return f"https://{tailnet}" if tailnet else fallback
+
+
+def _address_for_peers(request):
+    return peer_address(request.app, str(request.base_url).rstrip("/"))
 
 
 def _replaced(services, job_id):
@@ -510,7 +521,7 @@ def _replaced(services, job_id):
     return waiting[index], index
 
 
-def _answering(peers, own):
+def _split_answering(peers, own):
     """(peers that join, machines left out with why) for "all machines": a machine joins when it answers and runs this app's version."""
     joining, left_out = [], []
     for peer in peers:
@@ -522,10 +533,40 @@ def _answering(peers, own):
                              "reason": f"{name} runs app version {peer.version}; this computer runs {own.version}."})
         else:
             joining.append(peer)
+    return joining, left_out
+
+
+def _answering(peers, own):
+    """_split_answering, but a 409 naming every reason when no machine joins."""
+    joining, left_out = _split_answering(peers, own)
     if not joining:
         raise HTTPException(409, " ".join(["No other machine can join, so there is nothing to train with.",
                                            *(row["reason"] for row in left_out)]))
     return joining, left_out
+
+
+def pool_peers(body, services, version, own):
+    """(peers to pool with, machines left out with why, why this computer cannot take part or "") for a run of `version` that
+    uses every listed machine that is ready: it answers on this app version, is not busy with a job, and holds its share of the run
+    (the same per-member sizing a start applies). A machine that did not report what it has free is kept: it trains as the design says."""
+    _, peers = _chosen_peers(StartRun(dataset_ids=["x"], all_machines=True), services, own)
+    joining, left_out = _split_answering(peers, own)
+    ready = []
+    for peer in joining:
+        if peer.busy:
+            name = peer.hostname or peer.address
+            left_out.append({"node": name, "address": peer.address, "reason": f"{name} is busy with another job."})
+        else:
+            ready.append(peer)
+    sizing = _sizing(body, services, version, ready, own) if ready else None
+    if sizing is None:
+        return ready, left_out, ""
+    refusals = {m.address: m.refusal for m in sizing.members if not m.fits}
+    if studio_cluster.LOCAL in refusals:
+        return [], left_out, refusals[studio_cluster.LOCAL]
+    left_out += [{"node": peer.hostname or peer.address, "address": peer.address, "reason": refusals[peer.address]}
+                 for peer in ready if peer.address in refusals]
+    return [peer for peer in ready if peer.address not in refusals], left_out, ""
 
 
 def _teaches(body):
@@ -633,7 +674,7 @@ def _sizing(body, services, version, peers, own):
     local = services.hardware_profile()
     if local is None:
         return None
-    config = plan.pretrain_config(version.spec, body.rounds * body.inner_steps, ROWS, HOLD)
+    config = plan.pretrain_config(version.spec, body.rounds * body.inner_steps, body.rows, body.hold)
     shape = _design_shape(config)
     members = [{"name": own.hostname, "address": studio_cluster.LOCAL, "profile": local, "share": services.memory_share(),
                 "speed": own.tokens_per_second_for(shape)}]
@@ -643,7 +684,7 @@ def _sizing(body, services, version, peers, own):
                             "share": peer.memory_share or 1., "speed": peer.tokens_per_second_for(shape)})
     window = body.window_hours or studio_fit.DEFAULT_WINDOW_HOURS
     first = studio_fit.fit_members(config, members, window_hours=window)
-    per_round = body.inner_steps * ROWS * config["context"]  # tokens one member trains in a round (a batch of ROWS rows, however it is split)
+    per_round = body.inner_steps * body.rows * config["context"]  # tokens one member trains in a round (a batch of body.rows rows, however it is split)
     counted = first["measured"]  # the members that fit and have a speed for this design: only they set the cut
     found = studio_fit.fit_members(config, members, token_budget=body.rounds * per_round * counted, window_hours=window) if counted else first
     rounds, budget = body.rounds, found["token_budget"]
@@ -699,6 +740,53 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     or 409 with the reason) this computer starts the run and hands the coordinator role to that machine once it holds a finished
     round (studio_failover, "handoff"); without it this computer coordinates throughout."""
     replaced, index = _replaced(services, body.replaces) if body.replaces else (None, None)
+    job = build_run(body, services, _address_for_peers(request), request.url.port or studio_cluster.DEFAULT_PORT, replaced)
+    runs.open_run(job)
+    if replaced is not None:
+        services.remove(replaced.id)
+    services.enqueue(job)
+    if index is not None:
+        services.move(job.id, index)
+    services.start_queue()
+    return Run.model_validate(_found(services, job.id))
+
+
+def _start_weights(body, services, version):
+    """(the checkpoint a catch-up run starts from, the version it comes from) for `body.from_version`, or (None, None) for a run from
+    scratch. 400 with a sentence when that version has no trained weights, another word list, or another design than `version`:
+    the run starts every member from the same weights, so only a checkpoint whose every tensor fits can be its start."""
+    if body.from_version is None:
+        return None, None
+    source = next((v for v in services.versions() if v.number == body.from_version), None)
+    if source is None or not source.best_checkpoint:
+        raise HTTPException(400, f"Version {body.from_version} has no trained weights to start from.")
+    if plan.word_list_changed(version, source):
+        raise HTTPException(400, f"Version {source.number} has another word list than version {version.number}, so its weights cannot be the start.")
+    if not plan.same_design(source.spec, version.spec):
+        raise HTTPException(400, f"Version {source.number} has another design than version {version.number}. A run across machines copies every weight, "
+                                 "so it can only continue a version of the same design.")
+    path = _absolute(services, source.best_checkpoint)
+    if not os.path.isfile(path):
+        raise HTTPException(409, f"The best weights of version {source.number} are not on this computer ({path}).")
+    return path, source
+
+
+def _chat_mix(body, services):
+    """The params of a chat mix: {"chat_share", "chat_datasets"}, empty without one. 400 when the share names no conversation set that exists."""
+    if body.chat_share <= 0:
+        return {}
+    known = {s["id"] for s in services.conversation_sets()}
+    sets = [d for d in dict.fromkeys(body.chat_datasets) if d in known]
+    if not sets:
+        raise HTTPException(400, "A chat share needs conversations to mix in. Add some in Your data, or turn the chat share off.")
+    return {"chat_share": body.chat_share, "chat_datasets": sets}
+
+
+def build_run(body, services, peer_url, api_port, replaced=None):
+    """The queued-run Job POST /distributed/runs adds for `body` (every check and the per-member sizing included; HTTPException with a
+    sentence when it cannot start), not yet recorded or enqueued: `peer_url` and `api_port` are how the other machines reach this one.
+    The Pretraining page and the Auto Run's pretrain phase start their pooled runs through it, so they size and place machines the
+    way the Training tab does. `replaced` is the waiting pretrain job the run takes the place of."""
     number = replaced.params.get("version") if replaced is not None else body.version
     dataset_ids = list(replaced.params.get("datasets") or []) if replaced is not None else body.dataset_ids
     version = services.current_version() if number is None else _version(services, number)
@@ -711,6 +799,8 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
         raise HTTPException(400, f"No text set {', '.join(unknown)}." if unknown else "Choose some text first.")
     if body.reviewed_only and not services.has_reviewed_text(dataset_ids):
         raise HTTPException(400, "No example in the chosen text is marked Good (and free to train on), so there is nothing to train on. Review some first, or turn off reviewed examples only.")
+    start, source = _start_weights(body, services, version)
+    chat = _chat_mix(body, services)
     shape = {k: getattr(body, k) for k in ("min_members", "max_members") if getattr(body, k) is not None}
     teaching, teaching_params = _teacher_options(body, services, dataset_ids)
     rules = _rule_options(body)
@@ -763,22 +853,19 @@ def start_run(body: StartRun, request: Request, services: Services) -> Run:
     member_options = {**({"overlap": True} if overlap else {}), **({"receiver_grants": True} if body.receiver_grants else {})}
     boxed = body.time_box if body.time_box is not None else len(machines) > 1  # machines differ in speed, and none should wait for another
     settings = replace(settings, time_box=boxed)
-    config = plan.pretrain_config(version.spec, rounds * body.inner_steps, ROWS, HOLD)
+    config = plan.pretrain_config(version.spec, rounds * body.inner_steps, body.rows, body.hold)
     label = runs.across_label(version.number, len(machines))
+    if source is not None:
+        label += f", continuing version {source.number}" if source.number != version.number else ", trained further"
+    if chat:
+        label += f", {body.chat_share:.0%} chat"
     job = Job(id=uuid.uuid4().hex[:8], created_at=time.time(), kind="pretrain_distributed", label=label, params={
-        "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "from_scratch", "version": version.number,
-        "heldout_fraction": HOLD, **{k: getattr(body, k) for k in ("inner_steps", "outer_lr", "outer_momentum")}, "rounds": rounds,
-        "delta_dtype": settings.delta_dtype, "delta_sparsity": settings.delta_sparsity, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **rules["settings"], **rules["params"], **({"reviewed_only": True} if body.reviewed_only else {}), **({"member_options": member_options} if member_options else {}), "machines": machines, "owner": own.hostname,
-        **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": _address_for_peers(request), "api_port": request.url.port or studio_cluster.DEFAULT_PORT,
+        "config": config, "datasets": list(dict.fromkeys(dataset_ids)), "mode": "catch_up" if start else "from_scratch", "version": version.number,
+        "heldout_fraction": body.hold, **{k: getattr(body, k) for k in ("inner_steps", "outer_lr", "outer_momentum")}, "rounds": rounds,
+        "delta_dtype": settings.delta_dtype, "delta_sparsity": settings.delta_sparsity, "time_box": settings.time_box, "settings": asdict(settings), **shape, **teaching_params, **rules["settings"], **rules["params"], **({"reviewed_only": True} if body.reviewed_only else {}), **({"restart_from": start} if start else {}), **chat, **({"member_options": member_options} if member_options else {}), "machines": machines, "owner": own.hostname, **({"auto_join": False} if body.auto_join is False else {}),
+        **({"coordinator": body.coordinator} if body.coordinator else {}), "peer_url": peer_url, "api_port": api_port,
         **({"left_out": left_out} if body.all_machines or left_out else {}), **({"member_fit": fit_of} if fit_of else {})}, note=_sizing_note(sizing))
-    runs.open_run(job)
-    if replaced is not None:
-        services.remove(replaced.id)
-    services.enqueue(job)
-    if index is not None:
-        services.move(job.id, index)
-    services.start_queue()
-    return Run.model_validate(_found(services, job.id))
+    return job
 
 
 @router.post("/runs/{run_id}/stop")
@@ -963,6 +1050,28 @@ def add_member(run_id: str, node: str, services: Services) -> Run:
         raise HTTPException(409, refused)
     runs.choose(job, node, address)
     cluster.offer(job)
+    return Run.model_validate(_read(run, job)[0])
+
+
+class AutoJoin(BaseModel):
+    enabled: bool
+
+
+@router.post("/runs/{run_id}/auto-join")
+def set_auto_join(run_id: str, body: AutoJoin, services: Services) -> Run:
+    """Turn on or off inviting machines that come online while the run goes. Off: only the machines chosen, or that ask to join, are
+    offered a slot; a machine already invited stays. A run another computer coordinates is changed by asking that computer. 409 when the run is over."""
+    remote = _remote(services, run_id)
+    if remote is not None:
+        return _forward(services, remote, f"distributed/runs/{run_id}/auto-join", {"enabled": body.enabled})
+    run, job = _find(services, run_id)
+    if job is None or job.status not in ("waiting", "held", "running") or _read(run, job)[0].get("state") in runs.ENDED:  # the run view ends before the job does
+        raise HTTPException(409, "The run is over, so nothing can join it.")
+    runs.set_auto_join(job, body.enabled)
+    runner = getattr(services, "runner", None)
+    if runner is not None:
+        with runner.lock:
+            runner._save()  # the switch survives a restart of the app
     return Run.model_validate(_read(run, job)[0])
 
 

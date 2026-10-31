@@ -7,6 +7,8 @@ export type TextSet = components["schemas"]["TextSet"];
 export type Preview = components["schemas"]["PreviewModel"];
 export type RangeResult = components["schemas"]["RangeResult"];
 export type StepRate = components["schemas"]["StepRate"];
+export type Pool = components["schemas"]["Pool"];
+export type PreparedStatus = components["schemas"]["PreparedStatus"];
 
 export const ROWS = ["8", "16", "32"] as const;
 export const DEFAULT_ROWS = "16";
@@ -62,6 +64,7 @@ export function planBody(c: {
     window_hours: HOURS[c.hours ?? DEFAULT_HOURS], // the longest the run may take: the server cuts a token budget that needs longer
     keep_my_settings: c.keepMine ?? false,
     chat_share: CHAT[c.chat ?? "Off"],
+    solo: false, // the Train card sets it from its "this computer only" switch
   };
 }
 export type PlanBody = ReturnType<typeof planBody>;
@@ -221,6 +224,14 @@ export function queueNote(plan: Plan): string {
     parent: plan.parent ? `version ${plan.parent}` : "its current version",
     version: plan.version ? `version ${plan.version}` : T.thisVersion,
   });
+}
+
+/** What the card says a start trains on: the machines pooled with this computer, or this computer alone and why. */
+export function poolLines(pool: Pool): { lead: string; why: string; leftOut: string[] } {
+  if (pool.pending) return { lead: T.poolPending, why: pool.reason, leftOut: [] };
+  const leftOut = pool.left_out.map((row) => fill(T.poolLeftOut, { reason: row.reason }));
+  if (pool.pooled) return { lead: fill(T.poolWith, { machines: pool.machines.map((m) => m.node).join(", ") }), why: "", leftOut };
+  return { lead: T.poolAlone, why: pool.reason, leftOut: [] }; // the reason already names every machine left out
 }
 
 const g = (value: number) => Number(value.toPrecision(2)).toString();

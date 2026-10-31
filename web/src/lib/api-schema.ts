@@ -2119,6 +2119,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/distributed/runs/{run_id}/auto-join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Auto Join
+         * @description Turn on or off inviting machines that come online while the run goes. Off: only the machines chosen, or that ask to join, are
+         *     offered a slot; a machine already invited stays. A run another computer coordinates is changed by asking that computer. 409 when the run is over.
+         */
+        post: operations["set_auto_join_distributed_runs__run_id__auto_join_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/distributed/runs/{run_id}/extend": {
         parameters: {
             query?: never;
@@ -2853,6 +2874,67 @@ export interface paths {
          *     (`estimating` otherwise); it never computes it.
          */
         post: operations["pretrain_plan_pretraining_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pretraining/pool": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pretrain Pool
+         * @description The machines a start with these answers would train on, before it is pressed: the Pretraining page lists them beside Start.
+         *     Asks every listed machine (a few seconds when one is slow); nothing is queued.
+         */
+        post: operations["pretrain_pool_pretraining_pool_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pretraining/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pretrain Prepare
+         * @description Prepare tokenized binary shards on disk upfront before starting a training run.
+         */
+        post: operations["pretrain_prepare_pretraining_prepare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pretraining/prepared": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Pretrain Prepared
+         * @description Check whether binary shards exist on disk for the chosen datasets and model version.
+         */
+        get: operations["pretrain_prepared_pretraining_prepared_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4161,6 +4243,11 @@ export interface components {
              * @default
              */
             run_label: string;
+        };
+        /** AutoJoin */
+        AutoJoin: {
+            /** Enabled */
+            enabled: boolean;
         };
         /** AutoRunBound */
         AutoRunBound: {
@@ -6264,6 +6351,15 @@ export interface components {
             /** Node */
             node: string;
         };
+        /** LeftOut */
+        LeftOut: {
+            /** Address */
+            address: string;
+            /** Node */
+            node: string;
+            /** Reason */
+            reason: string;
+        };
         /** Leftover */
         Leftover: {
             /**
@@ -6689,6 +6785,8 @@ export interface components {
             device: string;
             /** Device Name */
             device_name: string;
+            /** Joined Round */
+            joined_round?: number | null;
             /** Last Delta Bytes */
             last_delta_bytes: number | null;
             /** Last Delta Dtype */
@@ -7255,6 +7353,11 @@ export interface components {
              * @default 16
              */
             rows: number;
+            /**
+             * Solo
+             * @default false
+             */
+            solo: boolean;
             /** Steps */
             steps?: number | null;
             /** Version */
@@ -7281,6 +7384,42 @@ export interface components {
             window_seconds?: number | null;
             /** Window Steps */
             window_steps?: number | null;
+        };
+        /**
+         * Pool
+         * @description Which machines a start would train on. `pooled`: the run goes out as a distributed run on this computer plus `machines`;
+         *     otherwise it is a job on this computer alone and `reason` says why. `left_out` lists every listed machine that is not used.
+         */
+        Pool: {
+            /**
+             * Left Out
+             * @default []
+             */
+            left_out: components["schemas"]["LeftOut"][];
+            /**
+             * Machines
+             * @default []
+             */
+            machines: components["schemas"]["PoolMachine"][];
+            /**
+             * Pending
+             * @default false
+             */
+            pending: boolean;
+            /** Pooled */
+            pooled: boolean;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+        };
+        /** PoolMachine */
+        PoolMachine: {
+            /** Address */
+            address: string;
+            /** Node */
+            node: string;
         };
         /** PostTrainingJobOut */
         PostTrainingJobOut: {
@@ -7372,6 +7511,69 @@ export interface components {
             phase: "reading" | "teacher" | "tokenizer" | "tokenizing" | "cached" | "inviting";
             /** Total */
             total: number;
+        };
+        /** PrepareJob */
+        PrepareJob: {
+            /** Created At */
+            created_at: number;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Finished At */
+            finished_at?: number | null;
+            /** Fraction */
+            fraction?: number | null;
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Progress
+             * @default
+             */
+            progress: string;
+            result?: components["schemas"]["PreparedStatus"] | null;
+            /** Started At */
+            started_at?: number | null;
+            /** Status */
+            status: string;
+        };
+        /** PrepareRequest */
+        PrepareRequest: {
+            /**
+             * Dataset Ids
+             * @default []
+             */
+            dataset_ids: string[];
+            /**
+             * Hold
+             * @default 0.05
+             */
+            hold: number;
+            /**
+             * Rows
+             * @default 16
+             */
+            rows: number;
+            /** Version */
+            version?: number | null;
+        };
+        /** PreparedStatus */
+        PreparedStatus: {
+            /** Folder */
+            folder?: string | null;
+            /** Prepared */
+            prepared: boolean;
+            /** Tokens */
+            tokens?: number | null;
+            /** Val Tokens */
+            val_tokens?: number | null;
+            /** Val Windows */
+            val_windows?: number | null;
+            /** Windows */
+            windows?: number | null;
         };
         /** Preset */
         Preset: {
@@ -8600,6 +8802,11 @@ export interface components {
              * @default 0
              */
             age_s: number;
+            /**
+             * Auto Join
+             * @default true
+             */
+            auto_join: boolean;
             /** Best Round */
             best_round?: number | null;
             /** Best Val Loss */
@@ -9432,6 +9639,18 @@ export interface components {
         StartRun: {
             /** All Machines */
             all_machines?: boolean | null;
+            /** Auto Join */
+            auto_join?: boolean | null;
+            /**
+             * Chat Datasets
+             * @default []
+             */
+            chat_datasets: string[];
+            /**
+             * Chat Share
+             * @default 0
+             */
+            chat_share: number;
             /** Coordinator */
             coordinator?: string | null;
             /** Dataset Ids */
@@ -9447,6 +9666,13 @@ export interface components {
              * @default 0
              */
             delta_sparsity: number;
+            /** From Version */
+            from_version?: number | null;
+            /**
+             * Hold
+             * @default 0.05
+             */
+            hold: number;
             /**
              * Inner Steps
              * @default 100
@@ -9497,6 +9723,11 @@ export interface components {
              * @default 10
              */
             rounds: number;
+            /**
+             * Rows
+             * @default 16
+             */
+            rows: number;
             stages?: components["schemas"]["Stages"] | null;
             /** Target Win Rate */
             target_win_rate?: number | null;
@@ -10315,6 +10546,18 @@ export interface components {
             id: string;
             /** Label */
             label: string;
+            /**
+             * Machines
+             * @default []
+             */
+            machines: string[];
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /** Run Id */
+            run_id?: string | null;
         };
         /**
          * GateModel
@@ -13856,6 +14099,41 @@ export interface operations {
             };
         };
     };
+    set_auto_join_distributed_runs__run_id__auto_join_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoJoin"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     extend_run_distributed_runs__run_id__extend_post: {
         parameters: {
             query?: never;
@@ -14980,6 +15258,106 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PretrainPlan"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pretrain_pool_pretraining_pool_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pool"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pretrain_prepare_pretraining_prepare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrepareRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrepareJob"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pretrain_prepared_pretraining_prepared_get: {
+        parameters: {
+            query?: {
+                dataset_ids?: string[];
+                version?: number | null;
+                hold?: number;
+                rows?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreparedStatus"];
                 };
             };
             /** @description Validation Error */

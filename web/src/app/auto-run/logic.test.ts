@@ -153,12 +153,22 @@ describe("the RLHF loop's rounds", () => {
   });
 
   test("the phase takes the loop's own settings, and the editor keeps them", () => {
-    expect(PHASES.rlhf.settings.map((s) => s.key)).toEqual(["max_rounds", "card_patience", "patience"]);
+    expect(PHASES.rlhf.settings.map((s) => s.key)).toEqual(["max_rounds", "card_patience", "patience", "judge_model"]);
     const base = plan();
     base.phases.find((p) => p.kind === "rlhf")!.enabled = true;
     const built = buildPlan(base, { "rlhf.card_patience": "2" }, "");
     expect("plan" in built && built.plan.phases.find((p) => p.kind === "rlhf")!.settings).toEqual({ card_patience: 2 });
     expect(buildPlan(base, { "rlhf.card_patience": "0" }, "")).toMatchObject({ error: expect.stringContaining("Rounds without a better report card") });
+  });
+
+  test("the judge model is a text setting: saved trimmed, shown again, and left out when empty", () => {
+    const base = plan();
+    base.phases.find((p) => p.kind === "rlhf")!.enabled = true;
+    const settingsOf = (built: ReturnType<typeof buildPlan>) => ("plan" in built ? built.plan.phases.find((p) => p.kind === "rlhf")!.settings : null);
+    const built = buildPlan(base, { "rlhf.judge_model": "  llama3.1:8b " }, "");
+    expect(settingsOf(built)).toEqual({ judge_model: "llama3.1:8b" });
+    expect("plan" in built && settingTexts(built.plan)["rlhf.judge_model"]).toBe("llama3.1:8b");
+    expect(settingsOf(buildPlan(base, { "rlhf.judge_model": "   " }, ""))).toEqual({});
   });
 });
 

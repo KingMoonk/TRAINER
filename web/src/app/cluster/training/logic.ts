@@ -180,6 +180,10 @@ export function startBody(form: Form): StartRun | null {
     delta_dtype: form.deltaDtype,
     delta_sparsity: sparsityOf(form) ?? 0, // 0: send every entry
     reviewed_only: form.reviewedOnly,
+    rows: 16, // the Pretraining page's catch-up answers; this form keeps the server defaults
+    hold: 0.05,
+    chat_share: 0,
+    chat_datasets: [],
     ...teacher,
     ...rulesParams(form.rules),
   };
@@ -234,6 +238,11 @@ export function neverJoined(member: Member): boolean {
 /** Whether a member's row shows a problem (red): it is out of the run or late. A machine that never joined is no problem; it only says why. */
 export function isProblem(member: Member): boolean {
   return member.state === "unreachable" || member.state === "dropped" || member.state === "behind" || ((member.state === "left" || member.state === "stopped") && member.note !== "");
+}
+
+/** "Joined at round 4" for a machine that came online after the run began and was invited by itself (rounds count from 1 on the page), else "". */
+export function joinedText(member: Member): string {
+  return member.joined_round == null ? "" : fill(T.joinedAt, { round: member.joined_round + 1 });
 }
 
 /** Whether a member's row needs a reason shown under it. A waiting machine says what it waits for. */

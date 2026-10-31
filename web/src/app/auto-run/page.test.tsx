@@ -105,6 +105,20 @@ describe("Auto Run page: a new run", () => {
     expect(made.plan.phases.find((p) => p.kind === "midtrain")).toMatchObject({ enabled: true, settings: { steps: 60000 } });
   });
 
+  test("sends the RLHF judge model in the plan, and leaves it out when empty", async () => {
+    const running = run("running", "data", { data: { status: "running" } });
+    const { calls } = server(null, { start: running });
+    const user = userEvent.setup();
+    renderPage(<AutoRunPage />);
+    await screen.findByTestId("plan-editor");
+    await user.click(screen.getByRole("switch", { name: "Include RLHF loop · Keep what the report card confirms" }));
+    await user.type(screen.getByLabelText("Judge model, RLHF loop · Keep what the report card confirms"), "llama3.1:8b");
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    await screen.findByTestId("auto-run-view");
+    const made = posted(calls, "/auto-runs")[0].body as { plan: Plan };
+    expect(made.plan.phases.find((p) => p.kind === "rlhf")).toMatchObject({ enabled: true, settings: { judge_model: "llama3.1:8b" } });
+  });
+
   test("says what to fix instead of sending a setting the server would refuse", async () => {
     const { calls } = server(null);
     const user = userEvent.setup();

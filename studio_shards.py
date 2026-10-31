@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import shutil
+import time
 import uuid
 from pathlib import Path
 
@@ -35,6 +36,72 @@ def tokenizer_folder(root, split_hash, spec):
     """root/tok-<key>: everything cached for this data split under this tokenizer spec (id and config) - the fitted tokenizer and,
     in folders of their own, its windows. Another spec on the same data is another folder, so each format chosen keeps its own."""
     return Path(root) / f"tok-{key_for('tokenizer', split_hash, spec)}"
+
+
+def manifest_key(dataset_ids, revisions, hold, seed, context, windowing, objective, tokenizer_spec):
+    """Deterministic hash identifying a dataset and configuration combination for pre-sharded data."""
+    parts = [
+        "prepared",
+        sorted(dataset_ids),
+        sorted((k, revisions.get(k, 0)) for k in dataset_ids),
+        float(hold),
+        int(seed),
+        int(context),
+        str(windowing),
+        str(objective),
+        tokenizer_spec,
+    ]
+    return hashlib.sha256(json.dumps(parts, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:24]
+
+
+def get_prepared(shard_dir, key):
+    """Retrieve verified prepared shard metadata from prepared.json, or None if missing or unreadable."""
+    path = Path(shard_dir) / "prepared.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        entry = data.get(key)
+        if not entry or not isinstance(entry, dict):
+            return None
+        folder = Path(shard_dir) / entry["folder"]
+        loaded = load(folder, entry["shard_key"], entry["vocab_size"])
+        if loaded is None:
+            return None
+        return entry
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def _json_safe(obj):
+    if isinstance(obj, (np.integer, int)):
+        return int(obj)
+    if isinstance(obj, (np.floating, float)):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(x) for x in obj]
+    return obj
+
+
+def record_prepared(shard_dir, key, entry):
+    """Record prepared shard metadata atomically in prepared.json under shard_dir."""
+    from studio_core import atomic_json
+
+    shard_dir = Path(shard_dir)
+    shard_dir.mkdir(parents=True, exist_ok=True)
+    path = shard_dir / "prepared.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    data[key] = _json_safe(entry)
+    atomic_json(path, data)
 
 
 def load_tokenizer(folder):
@@ -174,6 +241,20 @@ def load(root, key, vocab_size):
         return None
 
 
+def _move(source, target, tries=40, pause=0.05):
+    """Rename a just-written folder. On Windows the rename is refused (PermissionError, WinError 5) while anything else holds a handle on
+    a file inside it: the virus scanner or the search indexer opening what was just written, or another run of this machine. Those
+    handles are short-lived, so retry for a few seconds; a real denial still raises after the last try."""
+    for attempt in range(tries):
+        try:
+            source.rename(target)
+            return
+        except PermissionError:
+            if attempt == tries - 1 or not source.exists() or target.exists():
+                raise
+            time.sleep(pause * min(attempt + 1, 10))
+
+
 def build(root, key, vocab_size, fill):
     """Run fill({split: ShardWriter}) into a scratch folder and move it to root/key. Returns load()'s result."""
     root = Path(root)
@@ -189,11 +270,11 @@ def build(root, key, vocab_size, fill):
         (scratch / "index.json").write_text(json.dumps({"format": FORMAT, "vocab_size": vocab_size, **entries}), encoding="utf-8")
         final = root / key
         try:
-            scratch.rename(final)
+            _move(scratch, final)
         except OSError:  # a folder is already there: another run just finished the same one, or it is unfinished or unreadable
             if load(root, key, vocab_size) is None:
                 shutil.rmtree(final, ignore_errors=True)
-                scratch.rename(final)
+                _move(scratch, final)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     found = load(root, key, vocab_size)
@@ -375,7 +456,7 @@ class _SegmentWriter:
         (self.scratch / "index.json").write_text(json.dumps({"format": FORMAT, "dtype": np.dtype(self.dtype).name, "examples": self.count,
                                                               "tokens": self.tokens, "aux": self.aux}), encoding="utf-8")
         try:
-            self.scratch.rename(self.folder / self.name)
+            _move(self.scratch, self.folder / self.name)
         finally:
             shutil.rmtree(self.scratch, ignore_errors=True)
 

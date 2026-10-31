@@ -65,7 +65,7 @@ T = {
     "preset_speed_measured_one": "Measured on this computer: only the {device} could be timed ({speed:,.0f} tokens/s); one step takes {step}.",
     "preset_slow": "Very slow: the {steps:,} steps of a catch-up take {total}.",
     "recipe_change": "training recipe: {recipe}",
-    "compute_supports": "Your text supports about {supported} parameters at {rule} word pieces each; this design has {params}",
+    "compute_supports": "Your text supports about {supported} parameters at {rule} tokens each; this design has {params}",
     "compute_under": ", far more than your text can train: a smaller design or more text would do better.",
     "compute_repeats": ", so your text would be repeated to train it fully.",
     "compute_reread": ", so training it fully reads your text about {times} times. Up to about {most} times works nearly as well as fresh text.",
@@ -73,7 +73,7 @@ T = {
     "compute_roomy": ", so your text could train a bigger one.",
     "compute_steps": "Suggested length: about {steps:,} steps of {rows} rows ({passes} over your text).",
     "compute_time": " At this computer's speed that is {time}.",
-    "compute_repeat": "Reaching {rule} word pieces per parameter would mean reading your text {times} times. Past about {most} times, repeating it adds little.",
+    "compute_repeat": "Reaching {rule} tokens per parameter would mean reading your text {times} times. Past about {most} times, repeating it adds little.",
     "compute_counting": "Counting your text…",
     "compute_none": "Add some text in Your data to see how much this design needs.",
     "lr_result": "Suggested learning rate: {rate}. The error fell fastest near {steepest}, and the suggestion is a tenth of that. This design uses {current}.",
@@ -153,7 +153,7 @@ T = {
     # where the parameters go (#83)
     # guided experiments (#83)
     "exp_heads": "Do more look-back heads help?",
-    "exp_words": "Letters vs words",
+    "exp_words": "Bytes vs BPE",
     "exp_depth": "Is depth or width better?",
     "exp_try_heads": "Try it",
     "exp_try_words": "Try it",
@@ -177,7 +177,7 @@ def say(x, y, more, less):
 FF = (2, 4, 8)  # thinking-room width as a multiple of d_model: narrow / normal / wide
 TOKENIZERS = ("byte", "bpe_fast", "bpe_gpt2")  # the small word list is the fast learned one
 VS = (256, 8192, 50257)  # word-list sizes behind letters / small / large (the cap; less on little data)
-WORDS = ("Letters", "Small word list", "Large word list")
+WORDS = ("Bytes", "BPE", "GPT-2 BPE")
 WIDTHS = ("Narrow", "Normal", "Wide")
 HEADS = (1, 4, 8, 12)  # 12 rarely divides the width, so picking it can round the width (width_for)
 PART_SLOTS = ("embedding", "position", "head")  # the model-wide parts the tower shows; every block has BLOCK_SLOTS
@@ -191,9 +191,9 @@ EXPECT = dict(
     heads_width="{heads} heads need a width that splits evenly into them, so each word's width goes from {d} to {w}: {way}.",
     wider="More thinking room: more to learn in every block, so bigger and slower.",
     narrower="Less thinking room: smaller and faster, with less capacity in every block.",
-    letters="Letters: the word table becomes tiny, but the model has to learn spelling, and your text turns into about 5 times as many pieces, so each step covers less text.",
-    small="Small word list: built from your own data. A much smaller table; text splits into somewhat more pieces.",
-    large="Large word list: GPT-2’s list. A big table, short sequences.",
+    letters="Bytes: the word table becomes tiny (256 bytes), but the model has to learn spelling, and your text turns into more pieces, so each step covers less text.",
+    small="BPE: Byte-Pair Encoding learned from your own data with frontier pre-tokenization. Compact, custom vocabulary.",
+    large="GPT-2 BPE: OpenAI’s 50,257-token byte-level BPE vocabulary. Big table, short sequences.",
 )
 WARM = dict(  # kind -> (chip, colour); the sentence itself is studio_warmstart.NOTES[kind]
     same=("weights carry over exactly", "live"), heads=("weights carry over, not exactly", "attention"),
@@ -335,7 +335,7 @@ def read_spec(spec):
     training settings (TRAINING_SETTINGS)."""
     spec = validate_spec(spec)
     f, block = _facts(spec), spec["block"]
-    word = {"letters": 0, "small word list": 1, "large word list": 2}.get(f["words"], 1)
+    word = {"byte": 0, "character": 0, "bpe_fast": 1, "bpe_gpt2": 2}.get(spec["tokenizer"]["id"], 1)
     parts = {slot: spec[slot]["id"] for slot in PART_SLOTS} | {slot: block[slot]["id"] for slot in BLOCK_SLOTS}
     own = {(o["index"], slot): o[slot]["id"] for o in spec["blocks"] for slot in BLOCK_SLOTS if slot in o}
     run = spec["train"].get("run") or {}

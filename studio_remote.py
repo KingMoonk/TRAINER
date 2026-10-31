@@ -823,8 +823,18 @@ class Cluster:
             elif job.status == "running" and coordinator is not None:
                 run = studio_distributed.run_of(job)
                 nodes = coordinator.snapshot()["nodes"]
-                for address in self.gangs.held(run_id):
+                for address in list(self.gangs.held(run_id)):
                     machine = next((m for m in run.machines if m.address == address), None)
+                    if machine is not None and machine.peer_job:
+                        import studio_facts
+                        failed = next((f for f in studio_facts.member_failures(self, machine.node) if f["id"] == machine.peer_job), None)
+                        if failed is not None:
+                            coordinator.lose(machine.node)
+                            studio_distributed.lapse(run, machine.node, self.client_for)
+                            chosen = {m.get("address") for m in (job.params.get("machines") if job else ()) or []}
+                            self.gangs.drop(run_id, address, ban=address not in chosen)
+                            self.runner._emit("cluster", {"job": run_id, "state": "member_lapsed", "node": address, "detail": machine.node})
+                            continue
                     known = nodes.get(machine.node) if machine is not None else None
                     reported = ((known or {}).get("progress") or {}).get("reported_ago")
                     if address == studio_cluster.LOCAL or (known is not None and known["state"] in ("training", "behind", "joining")
@@ -846,17 +856,53 @@ class Cluster:
 
     def offer(self, job):
         """Offer the open slots of a running distributed run to the machines that are free now, and invite them. Returns the addresses
-        that got a slot."""
+        that got a slot. A machine that comes online after the run began is offered one while the run has room (`max_members`) and its
+        `auto_join` switch is on (the default); with it off only the machines the person chose, or asked to join, are offered. A machine
+        that cannot join (another app version, busy, too little memory) gets no slot, and the run's row for it says why. The ones that
+        fit are sized like the first members (studio_fit.fit_members) and join at the round after their invitation."""
         import studio_distributed
         import studio_diloco
         try:
             settings = studio_diloco.Settings.from_params(job.params)
         except ValueError:
             return []
+        held = self.gangs.held(job.id)
+        if not held or len(held) >= settings.max_members:
+            return []
         chosen = {m.get("address") for m in job.params.get("machines") or []}
-        nodes = [n for n in self.nodes() if n.address == studio_cluster.LOCAL or n.address in chosen]
-        added = self.gangs.fill(job.id, nodes, self.health, settings.max_members)
+        auto = job.params.get("auto_join", True)
+        candidates = [n for n in self.nodes() if n.address == studio_cluster.LOCAL or n.address in chosen or auto]
+        run, coordinator = studio_distributed.run_of(job), studio_diloco.COORDINATORS.get(job.id)
+        version, fits, eligible = self.own().version, {}, []
+        for n in candidates:
+            if n.address == studio_cluster.LOCAL or n.address in held:
+                continue
+            if not n.online or self.health.state(n.address) != sched.UP:
+                continue
+            reason, fit = studio_distributed.late_check(job, n, version, coordinator)
+            if reason:
+                studio_distributed.note_unplaced(run, n, reason)
+            else:
+                eligible.append(n)
+                if fit is not None:
+                    fits[n.address] = fit
+        added = self.gangs.fill(job.id, eligible, self.health, settings.max_members)
         if added:
+            with self.runner.lock:
+                member_fit = {**(job.params.get("member_fit") or {}), **{a: fits[a] for a in added if a in fits}}
+                job.params = {**job.params, "member_fit": member_fit} if member_fit else job.params
+            with studio_distributed._LOCK:
+                for addr in added:
+                    machine = next((m for m in run.machines if m.address == addr), None)
+                    if machine is None:
+                        node_name = next((n.hostname or n.address for n in eligible if n.address == addr), addr)
+                        machine = studio_distributed.Machine(node=node_name, address=addr, state="unplaced", reason=studio_distributed.UNPLACED)
+                        run.machines.append(machine)
+                    machine.late = True
+                    slot = self.gangs.held(job.id).get(addr)
+                    if slot:
+                        machine.epoch = slot.epoch
+                    machine.invite_id = ""
             studio_distributed.invite(job, self.client_for, only=added)
             self.runner._emit("cluster", {"job": job.id, "state": "member_added", "node": ",".join(added), "detail": ""})
         return added

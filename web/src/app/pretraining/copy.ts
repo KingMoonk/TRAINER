@@ -86,6 +86,14 @@ export const T = {
     "Runs after the current job on this computer, or right away if nothing is running. Chat keeps {parent} until {version} beats it on held-back text.",
   collection: "Recommended collection",
   added: "Added to the queue: {label}",
+  soloSwitch: "Train on this computer only",
+  soloHint: "Off: the machines on your Machines list that are ready train this run together with this computer.",
+  poolWith: "Trains on this computer and {machines}.",
+  poolAlone: "Trains on this computer only.",
+  poolPending: "Waiting to see which machines can join.",
+  poolLeftOut: "Left out: {reason}",
+  openRun: "Open the run",
+  startedPooled: "Started across machines: {label}",
   sizeFirst: "The size of the text is still being worked out. You can add the run now: it waits in the queue until the size is known.",
   continueFrom: "Continue from version {n}",
   continueFromEarlier: "Continue from an earlier version",
@@ -122,6 +130,13 @@ export const T = {
   scalingKept: "Keeping your settings.",
   scalingScale: "Scale it to fit",
   scalingRefused: "This run cannot start here:",
+  readyToTrain: "Ready to train",
+  shardedOnDisk: "{windows} windows ({tokens} tokens) sharded on disk",
+  shardsNotPrepared: "Shards not prepared",
+  shardsNotPreparedDesc: "Prepare tokenized binary shards ahead of time so your run launches instantly without reading delays.",
+  prepareData: "Prepare data",
+  preparingData: "Preparing data…",
+  dataPreparedToast: "Data prepared and ready to train.",
 } as const;
 
 export function fill(text: string, values: Record<string, string | number>): string {

@@ -114,7 +114,7 @@ describe("Training tab: the start form", () => {
     await user.click(screen.getByRole("button", { name: "Start run" }));
     await waitFor(() => expect(state.started).toHaveLength(1));
     expect(state.started[0]).toEqual({
-      version: 2, dataset_ids: ["stories", "notes"], machines: ["gpu-box"], rounds: 4, inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, min_members: 2, max_members: 3, overlap: false, time_box: null, delta_dtype: "int8", delta_sparsity: 0, reviewed_only: true,
+      version: 2, dataset_ids: ["stories", "notes"], machines: ["gpu-box"], rounds: 4, inner_steps: 1500, outer_lr: 0.7, outer_momentum: 0.9, min_members: 2, max_members: 3, overlap: false, time_box: null, delta_dtype: "int8", delta_sparsity: 0, reviewed_only: true, rows: 16, hold: 0.05, chat_share: 0, chat_datasets: [],
     });
     expect(await screen.findByTestId("run-r1")).toHaveTextContent("Version 2 across machines");
     expect(screen.getByTestId("run-state-r1")).toHaveTextContent("Waiting for its turn");
