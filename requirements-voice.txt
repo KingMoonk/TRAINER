@@ -1,4 +1,4 @@
 # Optional, local voice engines for Eval: CPU inference on Windows, macOS and Linux.
 # Piper provides selectable neural TTS voices; sherpa-onnx provides offline speech recognition.
 piper-tts==1.8.0
-sherpa-onnx==2.0.0
+sherpa-onnx==2.0.1
